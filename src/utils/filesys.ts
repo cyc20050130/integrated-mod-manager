@@ -42,7 +42,7 @@ import {
 } from "./vars";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { join } from "./utils";
+import { join, sanitizeFileName } from "./utils";
 import { main, updateConfig } from "./init";
 import { addToast } from "@/_Toaster/ToastProvider";
 import MiniSearch from "minisearch";
@@ -1418,12 +1418,53 @@ export async function refreshModList() {
 	}
 }
 export async function createModDownloadDir(cat: string, dir: string) {
+	const target = await createModDownloadTarget(cat, dir);
+	return target?.path;
+}
+function hashSegment(input: string) {
+	let hash = 0;
+	for (let i = 0; i < input.length; i++) {
+		hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+	}
+	return hash.toString(36).slice(0, 6) || "imm";
+}
+function shortenPathSegment(input: string, maxLength: number, fallback = "untitled") {
+	const safeMax = Math.max(16, maxLength);
+	let value = sanitizeFileName(input, { replacement: "_", defaultName: fallback, maxLength: safeMax });
+	if (value.length <= safeMax) return value;
+	const suffix = "_" + hashSegment(input);
+	const head = Math.max(8, safeMax - suffix.length);
+	value = `${value.slice(0, head)}${suffix}`;
+	return sanitizeFileName(value, { replacement: "_", defaultName: fallback, maxLength: safeMax });
+}
+function sanitizeCategorySegments(category: string) {
+	const parts = String(category || "")
+		.split(/[\\/]+/)
+		.map((part) => shortenPathSegment(part, 40, UNCATEGORIZED))
+		.filter((part) => part && part !== ".");
+	return parts.length ? parts : [UNCATEGORIZED];
+}
+export async function createModDownloadTarget(cat: string, dir: string) {
 	try {
 		if (!cat || !dir) return;
-		const path = join(src, managedSRC, cat, dir);
-		if (await exists(path)) return path;
+		const categorySegments = sanitizeCategorySegments(cat);
+		const categoryRoot = join(src, managedSRC, ...categorySegments);
+		const remainingBudget = Math.max(24, Math.min(72, 160 - categoryRoot.length - 1));
+		const safeDir = shortenPathSegment(dir, remainingBudget, "untitled");
+		const relPath = join(...categorySegments, safeDir);
+		const path = join(src, managedSRC, relPath);
+		if (await exists(path))
+			return {
+				path,
+				relPath,
+				dirName: safeDir,
+			};
 		await mkdir(path, { recursive: true });
-		return path;
+		return {
+			path,
+			relPath,
+			dirName: safeDir,
+		};
 	} catch (err) {
 		error("[IMM] Error creating mod download directory:", err);
 		throw err;
@@ -1463,7 +1504,9 @@ export async function validateModDownload(path: string, skip = false) {
 		}
 		if (!skip) {
 			const list = store.get(MOD_LIST);
-			const relPath = path.split(managedSRC + "\\")[1];
+			const normalizedPath = String(path || "").replaceAll("/", "\\");
+			const marker = managedSRC + "\\";
+			const relPath = normalizedPath.includes(marker) ? normalizedPath.split(marker).slice(1).join(marker) : "";
 			info("[IMM] Validating mod download for path:", relPath);
 			const ele = list.find((mod) => mod.path === relPath);
 			if (ele) {

@@ -1,4 +1,13 @@
-﻿# Changelog
+# Changelog
+
+## 3.1.5 - 2026-04-04
+
+### Fixed
+- Moved runtime config storage to a dedicated LocalAppData data directory so updater installs no longer overwrite live config files.
+- Changed startup migration from missing-file copy to incremental config merging, preserving newer source links, download queue state, presets, and categories.
+- Hardened download directory creation by sanitizing category and mod path segments, truncating long segments, and persisting the actual created path for follow-up extract and validate steps.
+- Fixed mixed slash normalization in shared path joining and made downloaded mod validation tolerate normalized runtime paths.
+- Improved failed-download rename recovery so retried tasks prefer the best matching linked local mod name even when multiple entries share the same online source.
 
 ## 3.1.4 - 2026-04-04
 

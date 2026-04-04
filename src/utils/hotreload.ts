@@ -3,7 +3,7 @@ import { GAME_ID_MAP } from "./consts";
 import { exists, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 
 export function join(...parts: string[]) {
-	let result = parts.join("\\").replace("/", "\\").replaceAll("\\\\", "\\");
+	let result = parts.join("\\").replaceAll("/", "\\").replaceAll("\\\\", "\\");
 	result = result.endsWith("\\") ? result.slice(0, -1) : result;
 	result = result.startsWith("\\") ? result.slice(1) : result;
 	return result;

@@ -10,7 +10,7 @@ import { CATEGORIES, DATA, DOWNLOAD_LIST, GAME, LEFT_SIDEBAR_OPEN, MOD_LIST, SET
 import { deriveNameFromFileName, formatBytes, sanitizeFileName } from "@/utils/utils";
 import {
 	cleanCancelledDownload,
-	createModDownloadDir,
+	createModDownloadTarget,
 	refreshModList,
 	saveConfigs,
 	validateModDownload,
@@ -63,6 +63,56 @@ function createRuntimeKey(item: DownloadItem, safeName: string) {
 }
 function toSafeName(name: string) {
 	return sanitizeFileName(name, { replacement: "_", defaultName: "untitled", maxLength: 120 });
+}
+function splitModPath(path: string, fallbackCategory: string) {
+	const [linkedCategory = fallbackCategory, ...rest] = String(path || "").split("\\");
+	if (!rest.length) {
+		return { category: fallbackCategory, name: String(path || "").trim() };
+	}
+	return {
+		category: linkedCategory || fallbackCategory,
+		name: rest.join("\\").trim(),
+	};
+}
+function toComparableName(value: string) {
+	return String(value || "").replaceAll("DISABLED_", "").trim().toLowerCase();
+}
+function findBestLinkedEntry(item: DownloadItem, data: Record<string, any>, fallbackCategory: string) {
+	if (!item.source) return null;
+	const preferredPath = String(item.path || "").trim();
+	const preferredName = toComparableName(item.displayName || item.name);
+	const candidates = Object.entries(data)
+		.filter(([, value]) => String(value?.source || "").trim() === item.source)
+		.map(([path, value]) => {
+			const parsed = splitModPath(path, fallbackCategory);
+			return {
+				path,
+				category: parsed.category,
+				name: parsed.name,
+				updatedAt: Number(value?.updatedAt || 0),
+				viewedAt: Number(value?.viewedAt || 0),
+			};
+		})
+		.filter((entry) => entry.name);
+	if (!candidates.length) return null;
+
+	candidates.sort((left, right) => {
+		const leftScore =
+			(preferredPath && left.path === preferredPath ? 1000 : 0) +
+			(preferredName && toComparableName(left.name) === preferredName ? 100 : 0);
+		const rightScore =
+			(preferredPath && right.path === preferredPath ? 1000 : 0) +
+			(preferredName && toComparableName(right.name) === preferredName ? 100 : 0);
+		return (
+			rightScore - leftScore ||
+			right.updatedAt - left.updatedAt ||
+			right.viewedAt - left.viewedAt ||
+			left.name.localeCompare(right.name)
+		);
+	});
+
+	const [best] = candidates;
+	return best ? { displayName: best.name, category: best.category } : null;
 }
 
 function isPermanentPathError(message: string) {
@@ -151,22 +201,10 @@ function Downloads() {
 
 			let displayName = (item.displayName || item.name || "").trim();
 			if (!item.addon) {
-				let count = 0;
-				let existingName = "";
-				let existingCategory = category;
-				for (const key in data) {
-					if (data[key].source === item.source) {
-						count++;
-						const [linkedCategory = category, ...rest] = key.split("\\");
-						if (rest.length > 0) {
-							existingCategory = linkedCategory || category;
-							existingName = rest.join("\\");
-						}
-					}
-				}
-				if (count === 1 && existingName) {
-					displayName = existingName;
-					category = existingCategory;
+				const linkedEntry = findBestLinkedEntry(item, data, category);
+				if (linkedEntry) {
+					displayName = linkedEntry.displayName;
+					category = linkedEntry.category;
 				}
 			}
 			if (!displayName) {
@@ -268,15 +306,16 @@ function Downloads() {
 			const key = item.key || createRuntimeKey(item, runtimeName);
 			let createdDlPath: string | null = null;
 			try {
-				const dlPath = await createModDownloadDir(item.category, runtimeName);
-				if (!dlPath) throw new Error("Failed to create download directory");
+				const target = await createModDownloadTarget(item.category, runtimeName);
+				if (!target?.path) throw new Error("Failed to create download directory");
+				const dlPath = target.path;
 				createdDlPath = dlPath;
 				const runtimeItem: DownloadItem = {
 					...item,
 					key,
-					name: runtimeName,
-					safeName: runtimeName,
-					path: `${item.category}\\${runtimeName}`,
+					name: target.dirName || runtimeName,
+					safeName: target.dirName || runtimeName,
+					path: target.relPath || `${item.category}\\${runtimeName}`,
 					dlPath,
 					updatedAt: item.updated * 1000,
 				};
