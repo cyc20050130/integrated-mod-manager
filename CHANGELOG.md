@@ -1,6 +1,6 @@
 ﻿# Changelog
 
-## Unreleased
+## 3.1.4 - 2026-04-04
 
 ### Added
 - Added a full-game link integrity scanner (WW/ZZ/GI/SR/EF) that reports `matched`, `unlinked`, `orphans`, and `suggestedMappings` without mutating config data.
