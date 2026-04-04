@@ -1,5 +1,5 @@
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
-import { Check, Clock, DownloadIcon, FileQuestionIcon, FolderArchiveIcon, Loader2, X } from "lucide-react";
+import { Check, Clock, DownloadIcon, FileQuestionIcon, FolderArchiveIcon, Loader2, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
@@ -62,7 +62,8 @@ function isPermanentPathError(message: string) {
 	const text = String(message || "").toLowerCase();
 	return (
 		text.includes("the system cannot find the path specified") ||
-		text.includes("系统找不到指定路径") ||
+		text.includes("cannot find the path specified") ||
+		text.includes("error 3") ||
 		text.includes("path not found") ||
 		text.includes("no such file or directory") ||
 		text.includes("os error 3")
@@ -515,6 +516,27 @@ function Downloads() {
 		setDownloads((prev) => ({ ...prev, completed: [], failed: [] }));
 	};
 
+	const retryFailedDownloads = useCallback(() => {
+		setDownloads((prev) => {
+			if (!prev.failed.length) return prev;
+			const now = Date.now();
+			const retried = prev.failed.map((item) => {
+				const { lastError: _lastError, ...rest } = item;
+				return {
+					...rest,
+					status: "pending" as const,
+					requeueRounds: 0,
+					lastTriedAt: now,
+				};
+			});
+			return {
+				...prev,
+				queue: [...prev.queue, ...retried],
+				failed: [],
+			};
+		});
+	}, [setDownloads]);
+
 	const cancelExtract = (key: string) => {
 		void invoke("cancel_extract", { key }).then(() => {
 			setDownloads((prev) => ({
@@ -653,15 +675,27 @@ function Downloads() {
 				<div className="h-116 flex flex-col items-center w-full gap-4 p-0">
 					<div className="flex justify-between w-full">
 						<div className="text-accent text-lg">{`${textData._LeftSideBar._components._Downloads.Queue} (${downloadList.length})`}</div>
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={clearCompleted}
-							style={{ backgroundColor: "#0000" }}
-							disabled={!downloadList.some((item) => item.status === "completed" || item.status === "failed")}
-						>
-							{textData._LeftSideBar._components._Downloads.Clear}
-						</Button>
+						<div className="flex items-center gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={retryFailedDownloads}
+								style={{ backgroundColor: "#0000" }}
+								disabled={!downloads.failed.length}
+							>
+								<RotateCcw className="w-3.5 h-3.5 mr-1" />
+								{textData._Main._components._Updater.Retry} ({downloads.failed.length})
+							</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={clearCompleted}
+								style={{ backgroundColor: "#0000" }}
+								disabled={!downloadList.some((item) => item.status === "completed" || item.status === "failed")}
+							>
+								{textData._LeftSideBar._components._Downloads.Clear}
+							</Button>
+						</div>
 					</div>
 					<div className="data-wuwa:gap-0 data-wuwa:border flex flex-col w-full h-full gap-2 overflow-y-auto text-gray-300 border-0 rounded-sm">
 						{downloadList.length > 0 ? (
