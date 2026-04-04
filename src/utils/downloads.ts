@@ -73,6 +73,8 @@ function normalizeItem(item: any): DownloadItem | null {
 		createdAt: Number.isFinite(item.createdAt) ? Number(item.createdAt) : Date.now(),
 	};
 
+	if (item.displayName) normalized.displayName = String(item.displayName);
+	if (item.safeName) normalized.safeName = String(item.safeName);
 	if (item.key) normalized.key = String(item.key);
 	if (item.path) normalized.path = String(item.path);
 	if (item.dlPath) normalized.dlPath = String(item.dlPath);
@@ -91,7 +93,7 @@ function normalizeItemArray(value: unknown): DownloadItem[] {
 
 	const seen = new Set<string>();
 	return normalized.filter((item) => {
-		const key = item.key || `${item.name}::${item.file}::${item.fname}`;
+		const key = item.key || `${item.name}::${item.displayName || ""}::${item.file}::${item.fname}`;
 		if (seen.has(key)) return false;
 		seen.add(key);
 		return true;

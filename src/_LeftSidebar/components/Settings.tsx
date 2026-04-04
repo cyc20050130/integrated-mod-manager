@@ -14,13 +14,27 @@ import { join, setHotreload } from "@/utils/hotreload";
 import { getCwd, setPrePostLaunch, setWindowType } from "@/utils/init";
 import TEXT from "@/textData.json";
 import { exportConfig, keySort } from "@/utils/utils";
-import { INIT_DONE, PRESETS, SAVED_LANG, SETTINGS, SOURCE, store, TARGET, TEXT_DATA, XXMI_MODE } from "@/utils/vars";
+import {
+	INIT_DONE,
+	LINK_AUDIT_REPORT,
+	LINK_AUDIT_RUNNING,
+	PRESETS,
+	PREVIEW_BACKFILL_STATE,
+	SAVED_LANG,
+	SETTINGS,
+	SOURCE,
+	store,
+	TARGET,
+	TEXT_DATA,
+	XXMI_MODE,
+} from "@/utils/vars";
 import { DownloadSettings } from "@/utils/types";
 import { DEFAULT_DOWNLOAD_SETTINGS } from "@/utils/downloads";
 import { Separator } from "@radix-ui/react-separator";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { useAtom, useAtomValue } from "jotai";
+import { exportLinkAuditReport, runLinkIntegrityScan, runPreviewBackfill } from "@/utils/linkIntegrity";
 import {
 	AppWindowIcon,
 	CheckIcon,
@@ -58,6 +72,9 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	const [_, setSource] = useAtom(SOURCE);
 	const [target, setTarget] = useAtom(TARGET);
 	const [settings, setSettings] = useAtom(SETTINGS);
+	const linkAuditReport = useAtomValue(LINK_AUDIT_REPORT);
+	const linkAuditRunning = useAtomValue(LINK_AUDIT_RUNNING);
+	const previewBackfillState = useAtomValue(PREVIEW_BACKFILL_STATE);
 	const [alertOpen, setAlertOpen] = useState(false);
 	const [globalPage, setGlobalPage] = useState(true);
 	const [langAlertData, setLangAlertData] = useState({ prev: "en", new: "en" } as {
@@ -107,6 +124,19 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 		} catch (error) {
 			addToast({ type: "error", message: textData._Toasts.ErrorImporting });
 		}
+	};
+	const triggerLinkScan = async () => {
+		const report = await runLinkIntegrityScan();
+		if (!report) return;
+		void runPreviewBackfill(report);
+		addToast({
+			type: "success",
+			message: `Link scan done: ${report.summary.matched} matched, ${report.summary.unlinked} unlinked, ${report.summary.orphans} orphans`,
+		});
+	};
+	const exportScanReport = async () => {
+		const ok = await exportLinkAuditReport(linkAuditReport);
+		if (ok) addToast({ type: "success", message: "Link scan report exported" });
 	};
 	
 	return (
@@ -586,6 +616,49 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 														{textData._LeftSideBar._components._Settings._ImportExport.Export}
 													</Button>
 												</div>
+											</div>
+											<div className="flex flex-col w-full gap-2">
+												<div className="flex items-center gap-1">Link Integrity (Review Only)</div>
+												<div className="flex justify-start w-full gap-2 pr-2">
+													<Button onClick={triggerLinkScan} className="h-9 w-1/2 text-sm" disabled={linkAuditRunning}>
+														{linkAuditRunning ? "Scanning..." : "Scan All Games"}
+													</Button>
+													<Button
+														onClick={exportScanReport}
+														className="h-9 w-1/2 text-sm"
+														disabled={!linkAuditReport || linkAuditRunning}
+													>
+														Export JSON
+													</Button>
+												</div>
+												<div className="text-[11px] text-muted-foreground">
+													{linkAuditReport
+														? `matched ${linkAuditReport.summary.matched} | unlinked ${linkAuditReport.summary.unlinked} | orphans ${linkAuditReport.summary.orphans} | suggestions ${linkAuditReport.summary.suggestedMappings}`
+														: "No scan report yet"}
+												</div>
+												<div className="text-[11px] text-muted-foreground">
+													{previewBackfillState.running
+														? `preview backfill running: ${previewBackfillState.completed}/${previewBackfillState.queued} done, ${previewBackfillState.failed} failed, cooldown skips ${previewBackfillState.skippedCooldown}`
+														: `preview backfill last run: ${
+																previewBackfillState.lastRunAt
+																	? new Date(previewBackfillState.lastRunAt).toLocaleString()
+																	: "never"
+															}`}
+												</div>
+												{linkAuditReport && linkAuditReport.games.some((g) => g.suggestedMappings.length > 0) && (
+													<div className="max-h-28 overflow-y-auto border rounded-md px-2 py-1 text-xs">
+														{linkAuditReport.games.map((g) => (
+															<div key={g.game} className="mb-2">
+																<div className="text-accent">{g.game} suggestions ({g.suggestedMappings.length})</div>
+																{g.suggestedMappings.slice(0, 6).map((s) => (
+																	<div key={`${g.game}_${s.localPath}_${s.candidateDataPath}`} className="text-muted-foreground">
+																		{`${s.localPath} <= ${s.candidateDataPath} (${Math.round(s.confidence * 100)}%)`}
+																	</div>
+																))}
+															</div>
+														))}
+													</div>
+												)}
 											</div>
 											<div className="flex flex-col w-full gap-2">
 												<div className="flex items-center gap-1">Download Queue (Advanced)</div>

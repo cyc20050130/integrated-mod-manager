@@ -5,10 +5,12 @@ import {
 	DownloadItem,
 	Games,
 	InstalledItem,
+	LinkAuditReport,
 	Language,
 	Mod,
 	ModDataObj,
 	OnlineData,
+	PreviewBackfillState,
 	Preset,
 	Settings,
 } from "./types";
@@ -164,6 +166,16 @@ export const DEFAULTS = {
 	ONLINE_SORT: "",
 	ONLINE_PATH: "home&type=Mod",
 	ONLINE_SELECTED: "",
+	LINK_AUDIT_REPORT: null as LinkAuditReport | null,
+	LINK_AUDIT_RUNNING: false,
+	PREVIEW_BACKFILL_STATE: {
+		running: false,
+		queued: 0,
+		completed: 0,
+		failed: 0,
+		skippedCooldown: 0,
+		lastRunAt: 0,
+	} as PreviewBackfillState,
 };
 export const SORT_OPTIONS = Object.fromEntries(
 	[

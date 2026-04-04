@@ -1,5 +1,16 @@
 ﻿# Changelog
 
+## Unreleased
+
+### Added
+- Added a full-game link integrity scanner (WW/ZZ/GI/SR/EF) that reports `matched`, `unlinked`, `orphans`, and `suggestedMappings` without mutating config data.
+- Added a Settings entry to run scan on demand and export a JSON review report.
+- Added startup preview backfill for linked mods missing local `preview.*`, with cooldown and low-priority throttling.
+
+### Fixed
+- Fixed retry/download path failures caused by invalid Windows filename segments (`os error 123`) by separating `displayName` (UI) from `safeName` (filesystem) and recomputing runtime keys on retry.
+- Fixed failed retry tasks carrying stale path/key state by forcing clean runtime recomputation before redownload.
+
 ## 3.1.1 - 2026-04-04
 
 ### Fixed

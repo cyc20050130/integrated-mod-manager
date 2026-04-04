@@ -50,25 +50,36 @@ export function sanitizeFileName(input: string, options: any = {}): string {
 		return defaultName;
 	}
 
-	let sanitized = input.replace(illegalCharacters, replacement);
+	let sanitized = input
+		.normalize("NFC")
+		.replace(illegalCharacters, replacement)
+		.replace(/\s+/g, " ")
+		.trim();
 
-	const baseName = sanitized.split(".")[0];
-	if (reservedWindowsNames.test(baseName)) {
-		sanitized = replacement + sanitized;
+	// Windows forbids trailing spaces and trailing dots on path segments.
+	sanitized = sanitized.replace(/[. ]+$/g, "").replace(/^[. ]+/g, "");
+	sanitized = sanitized.replace(new RegExp(`${replacement}{2,}`, "g"), replacement);
+
+	const baseName = sanitized.split(".")[0].trim();
+	if (!baseName || reservedWindowsNames.test(baseName)) {
+		sanitized = `${replacement}${sanitized || defaultName}`;
 	}
 
-	sanitized = sanitized.trim().replace(/^[.]+|[.]+$/g, "");
-
 	if (sanitized.length > maxLength) {
-		sanitized = sanitized.substring(0, maxLength);
-
-		sanitized = sanitized.trim().replace(/^[.]+|[.]+$/g, "");
+		sanitized = sanitized.substring(0, maxLength).replace(/[. ]+$/g, "").trim();
 	}
 
 	if (sanitized.length === 0) {
 		return defaultName;
 	}
 	return sanitized;
+}
+
+export function deriveNameFromFileName(fileName: string) {
+	if (!fileName) return "";
+	const lastSegment = fileName.split(/[\\/]/).pop() || fileName;
+	const withoutExt = lastSegment.replace(/\.[^.]+$/, "");
+	return withoutExt.trim();
 }
 export function formatSize(size: number): string {
 	return size < 100

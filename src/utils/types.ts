@@ -108,6 +108,8 @@ export interface DownloadItem {
 	file: string;
 	updated: number;
 	name: string;
+	displayName?: string;
+	safeName?: string;
 	fname: string;
 	key?: string;
 	path?: string;
@@ -247,4 +249,65 @@ export interface ChangeInfo {
 	map: Record<string, DirEntry>;
 	title: string;
 	skip: boolean;
+}
+
+export interface LinkAuditModEntry {
+	path: string;
+	category: string;
+	name: string;
+	hasDataRecord: boolean;
+	source?: string;
+}
+
+export interface LinkAuditOrphanEntry {
+	path: string;
+	category: string;
+	name: string;
+	source: string;
+}
+
+export interface LinkAuditSuggestion {
+	game: Games;
+	localPath: string;
+	candidateDataPath: string;
+	source: string;
+	confidence: number;
+	reason: string;
+}
+
+export interface LinkAuditGameReport {
+	game: Games;
+	configPath: string;
+	sourceDir: string;
+	modRoot: string;
+	scannedAt: string;
+	matched: LinkAuditModEntry[];
+	unlinked: LinkAuditModEntry[];
+	orphans: LinkAuditOrphanEntry[];
+	suggestedMappings: LinkAuditSuggestion[];
+	warnings: string[];
+}
+
+export interface LinkAuditSummary {
+	matched: number;
+	unlinked: number;
+	orphans: number;
+	suggestedMappings: number;
+}
+
+export interface LinkAuditReport {
+	generatedAt: string;
+	scope: Games[];
+	games: LinkAuditGameReport[];
+	summary: LinkAuditSummary;
+}
+
+export interface PreviewBackfillState {
+	running: boolean;
+	queued: number;
+	completed: number;
+	failed: number;
+	skippedCooldown: number;
+	lastRunAt: number;
+	lastError?: string;
 }

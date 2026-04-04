@@ -9,11 +9,13 @@ import {
 	DownloadList,
 	Games,
 	InstalledItem,
+	LinkAuditReport,
 	Language,
 	Mod,
 	ModDataObj,
 	OnlineData,
 	Preset,
+	PreviewBackfillState,
 	ProgressData,
 	Settings,
 } from "./types";
@@ -131,6 +133,9 @@ export function openConflict(index=-1) {
 	});
 }
 const FILE_TO_DL = atom("");
+const LINK_AUDIT_REPORT = atom<LinkAuditReport | null>(DEFAULTS.LINK_AUDIT_REPORT);
+const LINK_AUDIT_RUNNING = atom<boolean>(DEFAULTS.LINK_AUDIT_RUNNING);
+const PREVIEW_BACKFILL_STATE = atom<PreviewBackfillState>(DEFAULTS.PREVIEW_BACKFILL_STATE);
 export function resetAtoms() {
 	const atoms = {
 		INIT_DONE,
@@ -160,6 +165,9 @@ export function resetAtoms() {
 		ONLINE_SORT,
 		ONLINE_SELECTED,
 		XXMI_MODE,
+		LINK_AUDIT_REPORT,
+		LINK_AUDIT_RUNNING,
+		PREVIEW_BACKFILL_STATE,
 	};
 	store.set(FILE_TO_DL, "");
 	Object.keys(atoms).forEach((atom) =>
@@ -170,6 +178,9 @@ const ERR = atom("");
 export {
 	CONFLICTS,
 	FILE_TO_DL,
+	LINK_AUDIT_REPORT,
+	LINK_AUDIT_RUNNING,
+	PREVIEW_BACKFILL_STATE,
 	ERR,
 	XXMI_DIR,
 	XXMI_MODE,

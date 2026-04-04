@@ -136,6 +136,7 @@ function RightOnline({ open }: { open: boolean }) {
 					file: file._sDownloadUrl,
 					updated: file._tsDateAdded,
 					name: item._sName + (altPopoverOpen ? ` - ${file._sFile}` : ""),
+					displayName: item._sName,
 					fname: file._sFile,
 					requeueRounds: 0,
 					createdAt: Date.now(),

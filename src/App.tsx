@@ -28,6 +28,7 @@ import RightOnline from "./_RightSidebar/RightOnline";
 import { main } from "./utils/init";
 import ToastProvider from "./_Toaster/ToastProvider";
 import Progress from "./_Progress/Progress";
+import { startIntegrityMaintenanceOnLaunch } from "./utils/linkIntegrity";
 // import { Button } from "./components/ui/button";
 
 initializeThemes();
@@ -58,6 +59,10 @@ function App() {
 			throw new Error(err);
 		}
 	}, [err]);
+	useEffect(() => {
+		if (!initDone) return;
+		void startIntegrityMaintenanceOnLaunch();
+	}, [initDone]);
 	useEffect(() => {
 		if (previousOnline !== online) {
 			setShowModeSwitch(true);

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { CATEGORIES, DATA, DOWNLOAD_LIST, GAME, LEFT_SIDEBAR_OPEN, MOD_LIST, SETTINGS, TEXT_DATA } from "@/utils/vars";
-import { formatBytes, sanitizeFileName } from "@/utils/utils";
+import { deriveNameFromFileName, formatBytes, sanitizeFileName } from "@/utils/utils";
 import {
 	cleanCancelledDownload,
 	createModDownloadDir,
@@ -56,6 +56,13 @@ function sameDownload(a: DownloadItem, b: DownloadItem) {
 
 function getDownloadKey(item: DownloadItem) {
 	return item.key || `${item.name}_${item.file}_${item.fname}_${item.updated}`;
+}
+function createRuntimeKey(item: DownloadItem, safeName: string) {
+	const safeFile = toSafeName(deriveNameFromFileName(item.fname) || "file");
+	return `${safeName}_${safeFile}_${item.updated}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+}
+function toSafeName(name: string) {
+	return sanitizeFileName(name, { replacement: "_", defaultName: "untitled", maxLength: 120 });
 }
 
 function isPermanentPathError(message: string) {
@@ -142,30 +149,43 @@ function Downloads() {
 			if (category === "Other/Misc") category = "Other";
 			else if (!categories.find((cat) => cat._sName === category)) category = UNCATEGORIZED;
 
-			let name = sanitizeFileName(item.name);
+			let displayName = (item.displayName || item.name || "").trim();
 			if (!item.addon) {
 				let count = 0;
-				let existingName = name;
+				let existingName = "";
 				let existingCategory = category;
 				for (const key in data) {
 					if (data[key].source === item.source) {
 						count++;
-						existingName = key.split("\\")[1];
-						existingCategory = key.split("\\")[0];
+						const [linkedCategory = category, ...rest] = key.split("\\");
+						if (rest.length > 0) {
+							existingCategory = linkedCategory || category;
+							existingName = rest.join("\\");
+						}
 					}
 				}
-				if (count === 1) {
-					name = existingName;
+				if (count === 1 && existingName) {
+					displayName = existingName;
 					category = existingCategory;
 				}
 			}
+			if (!displayName) {
+				displayName = deriveNameFromFileName(item.fname) || item.name || "untitled";
+			}
+			let safeName = toSafeName(item.safeName || displayName);
+			if (!safeName) {
+				safeName = toSafeName(item.name || displayName || deriveNameFromFileName(item.fname));
+			}
+			const key = createRuntimeKey(item, safeName);
 
 			return {
 				...item,
-				name,
+				name: safeName,
+				displayName,
+				safeName,
 				category,
 				status: "downloading",
-				key: getDownloadKey({ ...item, name }),
+				key,
 				requeueRounds: item.requeueRounds || 0,
 				createdAt: item.createdAt || Date.now(),
 				lastTriedAt: Date.now(),
@@ -210,11 +230,24 @@ function Downloads() {
 				const rounds = (next.requeueRounds || 0) + 1;
 				if (shouldRequeue && rounds <= dlSettings.maxRequeueRounds) {
 					const retryAt = Date.now() + REQUEUE_COOLDOWN_MS;
+					const {
+						key: _oldKey,
+						path: _oldPath,
+						dlPath: _oldDlPath,
+						safeName: _oldSafeName,
+						...retryBase
+					} = next;
+					const retryItem: DownloadItem = {
+						...retryBase,
+						status: "pending",
+						requeueRounds: rounds,
+						lastTriedAt: retryAt,
+					};
 					return {
 						...prev,
 						downloading: fromDownloading,
 						extracting: fromExtracting,
-						queue: [...prev.queue, { ...next, status: "pending", requeueRounds: rounds, lastTriedAt: retryAt }],
+						queue: [...prev.queue, retryItem],
 					};
 				}
 
@@ -231,16 +264,19 @@ function Downloads() {
 
 	const startDownload = useCallback(
 		async (item: DownloadItem) => {
-			const key = item.key || getDownloadKey(item);
+			const runtimeName = toSafeName(item.safeName || item.name || item.displayName || deriveNameFromFileName(item.fname));
+			const key = item.key || createRuntimeKey(item, runtimeName);
 			let createdDlPath: string | null = null;
 			try {
-				const dlPath = await createModDownloadDir(item.category, item.name);
+				const dlPath = await createModDownloadDir(item.category, runtimeName);
 				if (!dlPath) throw new Error("Failed to create download directory");
 				createdDlPath = dlPath;
 				const runtimeItem: DownloadItem = {
 					...item,
 					key,
-					path: `${item.category}\\${item.name}`,
+					name: runtimeName,
+					safeName: runtimeName,
+					path: `${item.category}\\${runtimeName}`,
 					dlPath,
 					updatedAt: item.updated * 1000,
 				};
@@ -273,7 +309,7 @@ function Downloads() {
 				};
 
 				await invoke("download_and_unzip", {
-					fileName: item.name,
+					fileName: runtimeName,
 					downloadUrl: item.file,
 					savePath: dlPath,
 					key,
@@ -286,7 +322,7 @@ function Downloads() {
 						fileName: "preview",
 						downloadUrl: item.preview,
 						savePath: dlPath,
-						key: "link_preview_" + item.name,
+						key: "link_preview_" + key,
 						emit: false,
 						downloadOptions: {
 							...downloadOptions,
@@ -521,12 +557,20 @@ function Downloads() {
 			if (!prev.failed.length) return prev;
 			const now = Date.now();
 			const retried = prev.failed.map((item) => {
-				const { lastError: _lastError, ...rest } = item;
+				const {
+					lastError: _lastError,
+					key: _oldKey,
+					path: _oldPath,
+					dlPath: _oldDlPath,
+					safeName: _oldSafeName,
+					...rest
+				} = item;
 				return {
 					...rest,
 					status: "pending" as const,
 					requeueRounds: 0,
 					lastTriedAt: now,
+					displayName: item.displayName || item.name,
 				};
 			});
 			return {
@@ -715,7 +759,7 @@ function Downloads() {
 									const itemProgress = item.key ? progressRef.current[item.key] || EMPTY_PROGRESS : EMPTY_PROGRESS;
 									return (
 										<div
-											key={(item.key || item.name.replaceAll("DISABLED_", "")) + index}
+											key={(item.key || (item.displayName || item.name).replaceAll("DISABLED_", "")) + index}
 											className="hover:bg-background/20 zzz-fg-text data-gi:border-1 data-gi:rounded-sm min-h-16 data-wuwa:border-b button-like flex items-center justify-between w-full px-4"
 											style={{ backgroundColor: index % 2 == 0 ? "#1b1b1b50" : "#31313150" }}
 										>
@@ -726,7 +770,7 @@ function Downloads() {
 														className="focus:border-0 border-border/0 max-w-142 text-ellipsis w-full h-8 overflow-hidden text-white rounded-none cursor-default pointer-events-none"
 														style={{ backgroundColor: "#fff0" }}
 													>
-														{item.name.replaceAll("DISABLED_", "")}
+														{(item.displayName || item.name).replaceAll("DISABLED_", "")}
 													</Label>
 													<div className="flex gap-1 text-xs text-gray-400 capitalize">
 														{`${item.status + (item.status === "extracting" ? ` ${item.fname}` : "")}`}
