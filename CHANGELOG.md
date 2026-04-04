@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.6 - 2026-04-04
+
+### Fixed
+- Removed the one-day delay that incorrectly hid freshly published IMM updates, so stable releases appear immediately in the updater.
+- Replaced string-based version comparisons with numeric semantic version comparison in updater and config migration paths.
+
 ## 3.1.5 - 2026-04-04
 
 ### Fixed

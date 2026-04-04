@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { BANANA_LINK, DISCORD_LINK, VERSION } from "@/utils/consts";
-import { getTimeDifference, isOlderThanOneDay } from "@/utils/utils";
+import { getTimeDifference } from "@/utils/utils";
 import { IMM_UPDATE, SETTINGS, TEXT_DATA, UPDATER_OPEN } from "@/utils/vars";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAtom, useAtomValue } from "jotai";
@@ -146,7 +146,7 @@ function Updater() {
 									(prev) =>
 										prev && {
 											...prev,
-											status: checked || isOlderThanOneDay(prev.date || "") ? "available" : "ignored",
+											status: "available",
 										}
 								);
 							}}

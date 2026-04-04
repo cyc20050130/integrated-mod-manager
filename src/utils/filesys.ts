@@ -42,7 +42,7 @@ import {
 } from "./vars";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { join, sanitizeFileName } from "./utils";
+import { compareVersions, join, sanitizeFileName } from "./utils";
 import { main, updateConfig } from "./init";
 import { addToast } from "@/_Toaster/ToastProvider";
 import MiniSearch from "minisearch";
@@ -129,7 +129,7 @@ store.sub(CATEGORIES, () => {
 export async function setConfig(config: any) {
 	info("[IMM] Setting config...");
 	if (!config) return;
-	if (config.version && config.version < "2.1.0") {
+	if (config.version && compareVersions(config.version, "2.1.0") < 0) {
 		info("[IMM] Old config version, migrating...");
 		await updateConfig(config);
 		addToast({ type: "success", message: textData._Toasts.SuccessPort });

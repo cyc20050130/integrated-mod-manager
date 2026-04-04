@@ -1,11 +1,11 @@
 {
-    "version":  "3.1.5",
-    "notes":  "{\"major\":[],\"minor\":[],\"patch\":[\"Moved runtime config storage to a dedicated LocalAppData data directory so updater installs no longer overwrite live config files.\",\"Changed startup migration from missing-file copy to incremental config merging, preserving newer source links, download queue state, presets, and categories.\",\"Hardened download directory creation by sanitizing category and mod path segments, truncating long segments, and persisting the actual created path for extraction and validation.\",\"Fixed mixed slash normalization in shared path joining and improved downloaded mod validation path handling.\",\"Improved failed-download rename recovery so retried tasks prefer the best matching linked local mod name even when multiple entries share the same online source.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.1.5 fixes updater migration and recurring path-not-found download failures.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.5\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-    "pub_date":  "2026-04-04T14:14:01Z",
-    "platforms":  {
-                      "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHJ6VWVMOEF6TEpRRitFL1Y1bEwvUWdlaHBZZnpRT1JPd3BxczNVdTlPTGI1am9FNEY2Z1lPaUZNSklweWJ3WmV0dmk1Mklwck9hWDRlT3dQY1l0U0FZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzExODE1CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjEuNV94NjQtc2V0dXAuZXhlCmUycVE2RXNac3I2TlBxRWp4djQzVDVMZ2tiTkFZNk9qSVMveitPSlJRVnZyYXhaUHl5SVRGL1Z0b3hrejNUczIrN3BRRG5lRFBKTURoMjk1SHB1d0RBPT0K",
-                                             "url":  "https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._3.1.5_x64-setup.exe"
-                                         }
-                  }
+  "version": "3.1.6",
+  "notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Removed the one-day delay that incorrectly hid freshly published IMM updates, so stable releases appear immediately in the updater.\",\"Replaced string-based version comparisons with numeric semantic version comparison in updater and config migration paths.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.1.6 fixes the updater so 3.1.4 and 3.1.5 clients can detect fresh releases immediately.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.6\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+  "pub_date": "2026-04-02T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGlBSE9kRkRMOWZMTUI3MlNLQ3Y1ZWpxbjNoKzArWTBJeGZCNUQ4L1JYVXU1d3RUZDFmOVVrcmpmczB4RzNCWEJweFVQQmxuYWV4K3loT3RRQ281MUFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzE1MzUxCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjEuNl94NjQtc2V0dXAuZXhlCnkxeGxWeitvQkIyOWFnQ0p0MUM1NUlUQ2lLMGwvdW9mQzcySGVKUVhJb2w2Q0ZEN3gzaDc5REVzK2ZKSkRyTlMybVFabEJNTGVRckJRaU0yUUhpOUNBPT0K",
+      "url": "https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._3.1.6_x64-setup.exe"
+    }
+  }
 }

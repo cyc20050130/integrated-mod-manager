@@ -235,6 +235,16 @@ export function isOlderThanOneDay(dateStr: string) {
 	const updateAgeMs = Date.now() - (dateStr ? new Date(dateStr).getTime() : 0);
 	return Number.isFinite(updateAgeMs) && updateAgeMs > 86_400_000;
 }
+export function compareVersions(a = "", b = "") {
+	const left = a.split(".").map((part) => Number.parseInt(part, 10) || 0);
+	const right = b.split(".").map((part) => Number.parseInt(part, 10) || 0);
+	const length = Math.max(left.length, right.length);
+	for (let i = 0; i < length; i++) {
+		const diff = (left[i] || 0) - (right[i] || 0);
+		if (diff !== 0) return diff;
+	}
+	return 0;
+}
 let initialCheck = true;
 
 // Load cached data from localStorage and clean up old entries (> 30 minutes)

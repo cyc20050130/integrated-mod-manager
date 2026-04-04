@@ -42,7 +42,7 @@ import { join, setHotreload, stopWindowMonitoring } from "./hotreload";
 import { registerGlobalHotkeys } from "./hotkeyUtils";
 import TEXT from "@/textData.json";
 import { unregisterAll } from "@tauri-apps/plugin-global-shortcut";
-import { isOlderThanOneDay, safeLoadJson, setImageServer } from "./utils";
+import { compareVersions, safeLoadJson, setImageServer } from "./utils";
 import { addToast } from "@/_Toaster/ToastProvider";
 import { Category, Games, Preset, Settings } from "./types";
 import { toResumableDownloadList, withNormalizedDownloadSettings } from "./downloads";
@@ -193,7 +193,7 @@ invoke<string>("get_image_server_url").then((url) => {
 export async function updateConfig(oconfig = null as any) {
 	if (!oconfig) oconfig = JSON.parse(await readTextFile("config.json"));
 	info("[IMM] Updating config from:", oconfig);
-	if (oconfig.version >= "2.1.0") return oconfig;
+	if (compareVersions(oconfig.version || "0.0.0", "2.1.0") >= 0) return oconfig;
 	let config = {
 		version: VERSION,
 		updatedAt: new Date().toISOString(),
@@ -533,7 +533,7 @@ export async function main(useGame = "" as Games) {
 	}
 	await maintainBackups();
 	config = safeLoadJson(defConfig, JSON.parse(await readTextFile("config.json")));
-	if (config.version < "2.2.0") {
+	if (compareVersions(config.version || "0.0.0", "2.2.0") < 0) {
 		config.chkModUpdates = true;
 		config.bgType = 1;
 	}
@@ -565,7 +565,7 @@ export async function main(useGame = "" as Games) {
 		sessionStorage.removeItem("imm-deep-link-game");
 	}
 	if (config.game) apiClient.setGame(config.game);
-	if (config.version < "2.1.0") {
+	if (compareVersions(config.version || "0.0.0", "2.1.0") < 0) {
 		config = await updateConfig();
 	}
 	info("[IMM] Saving config...");
@@ -608,7 +608,7 @@ export async function main(useGame = "" as Games) {
 		const notice = parsedBody.notice || {};
 		const lastConfig = config.notice || 0;
 		let noticeOpen = false;
-		if (notice.id > 0 && notice.ver > VERSION) {
+		if (notice.id > 0 && compareVersions(notice.ver || "0.0.0", VERSION) > 0) {
 			store.set(NOTICE, (prev: any) => ({ ...prev, ...notice }));
 			if (notice.id !== lastConfig || notice.ignoreable == 0) {
 				noticeOpen = true;
@@ -616,15 +616,14 @@ export async function main(useGame = "" as Games) {
 			}
 		}
 
-		const show = config.preReleases || isOlderThanOneDay(update.date || "");
 		store.set(IMM_UPDATE, {
 			version: update.version,
 			date: update.date || "",
 			body: JSON.stringify(parsedBody) || "{}",
-			status: show ? "available" : "ignored",
+			status: "available",
 			raw: update,
 		});
-		if (!noticeOpen && update.version > config.ignore && show) {
+		if (!noticeOpen && compareVersions(update.version || "0.0.0", config.ignore || VERSION) > 0) {
 			store.set(UPDATER_OPEN, true);
 		}
 		store.set(SETTINGS, (prev) => ({
