@@ -1,0 +1,25 @@
+{
+	"version": "2.0.3",
+	"dir": "",
+	"settings": {
+		"hotKeys": {
+		},
+		"appDir":"",
+		"launch":0,
+		"hotReload": 1,
+		"toggle": 2,
+		"open": 0,
+		"opacity": 1,
+		"type": 0,
+		"bgType": 2,
+		"listType": 0,
+		"onlineType":"Mod",
+		"nsfw":1,
+		"ignore":"2.0.1",
+		"clientDate":"",
+		"lang":""
+		
+	},
+	"data": {},
+	"presets": []
+}

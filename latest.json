@@ -1,0 +1,11 @@
+{
+    "version":  "3.1.1",
+    "notes":  "{\"major\":[\"Stabilized resumed downloads to prevent endless redownload loops on local path or extraction failures.\"],\"minor\":[\"Non-network failures (extract/filesystem/path-not-found) now fail immediately instead of requeueing.\",\"Updater endpoint moved to cyc20050130/integrated-mod-manager.\"],\"patch\":[\"Downloader now recreates missing target directories before writing/finalizing files.\",\"Improved filesystem error messages for temporary and finalized archive paths.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"Bugfix update available. Please update IMM.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.1\",\"id\":0},\"cn\":{\"major\":[\"Stabilized resumed downloads to prevent endless redownload loops on local path or extraction failures.\"],\"minor\":[\"Non-network failures (extract/filesystem/path-not-found) now fail immediately instead of requeueing.\",\"Updater endpoint moved to cyc20050130/integrated-mod-manager.\"],\"patch\":[\"Downloader now recreates missing target directories before writing/finalizing files.\",\"Improved filesystem error messages for temporary and finalized archive paths.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"Bugfix update available. Please update IMM.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.1\",\"id\":0}},\"ru\":{},\"jp\":{},\"kr\":{}}",
+    "pub_date":  "2026-04-04T10:18:41Z",
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMW5DRGpVOW5DTGVlZnNBNjN2d1phanhaczBOS2JabjY5VWxBaU9aVnF2RWVRWEM2bEZHcjJKUmVwNDVKQUhiM2R1UTdackY0U0RiMXNSLzNhT1VnQWtRWnlhVnBLM0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1Mjk3Nzc5CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjEuMV94NjQtc2V0dXAuZXhlClN6dVU3a2VLc3pyYVE3VThUQjhwZlF6ak5FQUc1Q2Nuc3RSaEhYR2xGeEFRR2xHY0VTNmRZOTFiVXg4b3o4aWxScTJ6NTA2MlFsaStsV3E2VEJhd0N3PT0K",
+                                             "url":  "https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._3.1.1_x64-setup.exe"
+                                         }
+                  }
+}

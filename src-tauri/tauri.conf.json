@@ -1,0 +1,83 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "Integrated Mod Manager (IMM)",
+	"version": "3.1.1",
+	"identifier": "jp.bhatt.wwmm",
+	"build": {
+		"beforeDevCommand": "npm run dev",
+		"devUrl": "http://localhost:1420",
+		"beforeBuildCommand": "npm run build",
+		"frontendDist": "../dist"
+	},
+	"app": {
+		"trayIcon": {
+			"iconPath": "icons/imm.ico",
+			"iconAsTemplate": false
+		},
+		"windows": [
+			{
+				"title": "Integrated Mod Manager",
+				"resizable": true,
+				"fullscreen": false,
+				"decorations": false,
+				"transparent": true,
+				"minWidth": 1080,
+				"minHeight": 720,
+				"dragDropEnabled": false
+			}
+		],
+		"security": {
+			"csp": null,
+			"assetProtocol": {
+				"enable": true,
+				"scope": [
+					"**"
+				]
+			},
+			"capabilities": [
+				"default"
+			]
+		},
+		"withGlobalTauri": false
+	},
+	"bundle": {
+		"createUpdaterArtifacts": true,
+		"active": true,
+		"targets": "nsis",
+		"icon": [
+			"icons/128x128.png",
+			"icons/icon.icns",
+			"icons/imm.ico"
+		],
+		"windows": {
+			"nsis": {
+				"installerIcon": "icons/imm.ico"
+			}
+		},
+		"resources": [
+			"ext/*"
+		]
+	},
+	"plugins": {
+		"updater": {
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJEQzJEOTUzRTMyMDlDNzUKUldSMW5DRGpVOW5DTGFDQWxxcEtFR05RdnhlYlgwdkptY3hpRXVsSzE0M1NFc010Qk5BNXJyeXEK",
+			"endpoints": [
+				"https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/latest.json"
+			],
+			"windows": {
+				"installMode": "passive"
+			}
+		},
+		"deep-link": {
+			"desktop": {
+				"schemes": [
+					"imm",
+					"wwmm"
+				]
+			}
+		},
+		"fs": {
+			"requireLiteralLeadingDot": false
+		}
+	}
+}

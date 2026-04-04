@@ -1,0 +1,16 @@
+# Ignore artifacts:
+dist
+build
+coverage
+.vscode
+.idea
+
+# Ignore dependencies:
+node_modules
+
+# Ignore Tauri
+src-tauri/target
+
+# Ignore generated files
+*.log
+*.lock
