@@ -66,6 +66,7 @@ struct DownloadOptions {
     progress_bytes_threshold: Option<u64>,
     backoff_base_ms: Option<u64>,
     max_concurrent_extracts: Option<usize>,
+    wait_for_primary_idle: Option<bool>,
 }
 
 impl Default for DownloadOptions {
@@ -78,6 +79,7 @@ impl Default for DownloadOptions {
             progress_bytes_threshold: Some(PROGRESS_UPDATE_THRESHOLD),
             backoff_base_ms: Some(DEFAULT_BACKOFF_BASE_MS),
             max_concurrent_extracts: Some(DEFAULT_MAX_CONCURRENT_EXTRACTS),
+            wait_for_primary_idle: Some(true),
         }
     }
 }
@@ -483,19 +485,19 @@ async fn download_and_unzip(
     }
 
     clear_cancelled_download(&key);
+    let options = download_options.unwrap_or_default();
     let _preview_slot = if !emit {
         Some(acquire_preview_slot().await)
     } else {
         None
     };
-    if !emit {
+    if !emit && options.wait_for_primary_idle.unwrap_or(true) {
         wait_for_primary_downloads_to_idle(Duration::from_secs(
             PREVIEW_IDLE_WAIT_TIMEOUT_SECS,
         ))
         .await;
     }
 
-    let options = download_options.unwrap_or_default();
     let current_sid = SESSION_ID.load(Ordering::SeqCst);
 
     let connect_timeout = Duration::from_secs(

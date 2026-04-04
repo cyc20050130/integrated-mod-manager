@@ -1,11 +1,11 @@
 {
-  "version": "3.1.6",
-  "notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Removed the one-day delay that incorrectly hid freshly published IMM updates, so stable releases appear immediately in the updater.\",\"Replaced string-based version comparisons with numeric semantic version comparison in updater and config migration paths.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.1.6 fixes the updater so 3.1.4 and 3.1.5 clients can detect fresh releases immediately.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.6\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+  "version": "3.1.7",
+  "notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Stopped source-linked redownloads from overriding a correct online mod title with an older linked local name unless the path or normalized name clearly matches.\",\"Made post-install preview downloads skip the global idle wait and refresh local cards as soon as the preview file lands.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.1.7 fixes redownload title corruption and speeds up installed preview refresh.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.7\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
   "pub_date": "2026-04-02T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGlBSE9kRkRMOWZMTUI3MlNLQ3Y1ZWpxbjNoKzArWTBJeGZCNUQ4L1JYVXU1d3RUZDFmOVVrcmpmczB4RzNCWEJweFVQQmxuYWV4K3loT3RRQ281MUFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzE1MzUxCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjEuNl94NjQtc2V0dXAuZXhlCnkxeGxWeitvQkIyOWFnQ0p0MUM1NUlUQ2lLMGwvdW9mQzcySGVKUVhJb2w2Q0ZEN3gzaDc5REVzK2ZKSkRyTlMybVFabEJNTGVRckJRaU0yUUhpOUNBPT0K",
-      "url": "https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._3.1.6_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHRzTFN6TkJzaEFZcnpVQ05XL1NqMGpHWjdxMXZSV3ZCRS9OUlJ1UzJWdHVCSG9PUUVjVWdWQ0FVbjltS1dKS3Jpa2hHY09WK04yeC9wU2FkVlZ1NHdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzE3MjE1CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjEuN194NjQtc2V0dXAuZXhlCmNtcGhuZHptSTVYTjlhVHZHWE8yQ0s3bC9nd2MwOVhTRUpJaGRvMUd4a2k0c3JETjZPRFhUajNNMURVeno1VUlobE8wVDlKeElXcm05ejhIZnFUSEJRPT0K",
+      "url": "https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._3.1.7_x64-setup.exe"
     }
   }
 }

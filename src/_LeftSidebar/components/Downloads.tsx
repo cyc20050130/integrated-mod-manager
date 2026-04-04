@@ -6,7 +6,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { CATEGORIES, DATA, DOWNLOAD_LIST, GAME, LEFT_SIDEBAR_OPEN, MOD_LIST, SETTINGS, TEXT_DATA } from "@/utils/vars";
+import { CATEGORIES, DATA, DOWNLOAD_LIST, GAME, LAST_UPDATED, LEFT_SIDEBAR_OPEN, MOD_LIST, SETTINGS, TEXT_DATA } from "@/utils/vars";
 import { deriveNameFromFileName, formatBytes, sanitizeFileName } from "@/utils/utils";
 import {
 	cleanCancelledDownload,
@@ -112,7 +112,15 @@ function findBestLinkedEntry(item: DownloadItem, data: Record<string, any>, fall
 	});
 
 	const [best] = candidates;
-	return best ? { displayName: best.name, category: best.category } : null;
+	return best
+		? {
+				displayName: best.name,
+				category: best.category,
+				path: best.path,
+				exactPathMatch: Boolean(preferredPath && best.path === preferredPath),
+				exactNameMatch: Boolean(preferredName && toComparableName(best.name) === preferredName),
+			}
+		: null;
 }
 
 function isPermanentPathError(message: string) {
@@ -147,6 +155,7 @@ function Downloads() {
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const leftSidebarOpen = useAtomValue(LEFT_SIDEBAR_OPEN);
 	const modList = useSetAtom(MOD_LIST);
+	const setLastUpdated = useSetAtom(LAST_UPDATED);
 	const game = useAtomValue(GAME);
 	const downloadRef = useRef<HTMLDivElement>(null);
 	const downloadRef2 = useRef<HTMLDivElement>(null);
@@ -203,8 +212,10 @@ function Downloads() {
 			if (!item.addon) {
 				const linkedEntry = findBestLinkedEntry(item, data, category);
 				if (linkedEntry) {
-					displayName = linkedEntry.displayName;
 					category = linkedEntry.category;
+					if (!displayName || linkedEntry.exactPathMatch || linkedEntry.exactNameMatch) {
+						displayName = linkedEntry.displayName;
+					}
 				}
 			}
 			if (!displayName) {
@@ -366,8 +377,13 @@ function Downloads() {
 						downloadOptions: {
 							...downloadOptions,
 							requestRetries: 1,
+							waitForPrimaryIdle: false,
 						},
-					}).catch(() => {});
+					})
+						.then(() => {
+							setLastUpdated(Date.now());
+						})
+						.catch(() => {});
 				}
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -377,7 +393,7 @@ function Downloads() {
 				startedKeysRef.current.delete(key);
 			}
 		},
-		[dlSettings, handleDownloadFailure, scheduleSave, setData, setDownloads]
+		[dlSettings, handleDownloadFailure, scheduleSave, setData, setDownloads, setLastUpdated]
 	);
 
 	useEffect(() => {

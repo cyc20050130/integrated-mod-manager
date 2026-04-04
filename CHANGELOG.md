@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.7 - 2026-04-04
+
+### Fixed
+- Stopped source-linked redownloads from overriding a correct online mod title with an older linked local name unless the path or normalized name clearly matches.
+- Made post-install preview downloads skip the global idle wait and refresh local cards as soon as the preview file lands.
+
 ## 3.1.6 - 2026-04-04
 
 ### Fixed
