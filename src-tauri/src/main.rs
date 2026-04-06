@@ -22,7 +22,63 @@ const RUNTIME_DATA_DIR_NAME: &str = "Integrated Mod Manager (IMM) Data";
 #[cfg(all(not(dev), target_os = "windows"))]
 const LEGACY_RUNTIME_DIR_NAME: &str = "Integrated Mod Manager (IMM)";
 #[cfg(all(not(dev), target_os = "windows"))]
+fn path_priority(path: &Path, preferred_sources: &[PathBuf], backup_roots: &[PathBuf]) -> usize {
+    if let Some(index) = preferred_sources.iter().position(|source| path.starts_with(source)) {
+        return index;
+    }
+    preferred_sources.len()
+        + backup_roots
+            .iter()
+            .position(|source| path.starts_with(source))
+            .unwrap_or(backup_roots.len())
+}
 
+#[cfg(all(not(dev), target_os = "windows"))]
+fn collect_backup_paths(file_name: &str, backup_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let exact_matches = [
+        format!("AUTO_{file_name}.bak"),
+        format!("AUTO_{file_name}.bak.bak"),
+    ];
+
+    for backup_root in backup_roots {
+        let entries = match fs::read_dir(backup_root) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) if file_type.is_file() => file_type,
+                _ => continue,
+            };
+            let name = entry.file_name().to_string_lossy().to_string();
+            let matches_exact = exact_matches.iter().any(|candidate| candidate == &name);
+            let matches_manual =
+                name.ends_with(&format!("_{file_name}.bak")) || name.ends_with(&format!("_{file_name}.bak.bak"));
+            if file_type.is_file() && (matches_exact || matches_manual) {
+                candidates.push(entry.path());
+            }
+        }
+    }
+
+    candidates.sort_by(|left, right| modified_secs(right).cmp(&modified_secs(left)));
+    candidates
+}
+
+#[cfg(all(not(dev), target_os = "windows"))]
+fn collect_config_paths(file_name: &str, preferred_sources: &[PathBuf], backup_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for source in preferred_sources {
+        let path = source.join(file_name);
+        if path.exists() {
+            candidates.push(path);
+        }
+    }
+    candidates.extend(collect_backup_paths(file_name, backup_roots));
+    candidates
+}
+
+#[cfg(all(not(dev), target_os = "windows"))]
 fn modified_secs(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|meta| meta.modified())
@@ -352,17 +408,21 @@ fn merge_game_config(dst: &mut Value, src: &Value) {
 }
 
 #[cfg(all(not(dev), target_os = "windows"))]
-fn merge_config_file(path: &Path, sources: &[PathBuf], global_file: bool) {
-    let dst_modified = modified_secs(path);
-    let mut candidates = sources
-        .iter()
-        .filter_map(|source_dir| {
-            let source_path = source_dir.join(path.file_name()?);
-            let source_modified = modified_secs(&source_path);
-            if path.exists() && source_modified <= dst_modified {
-                return None;
+fn merge_config_file(path: &Path, preferred_sources: &[PathBuf], backup_roots: &[PathBuf], global_file: bool) {
+    let file_name = match path.file_name().and_then(|name| name.to_str()) {
+        Some(file_name) => file_name,
+        None => return,
+    };
+    let mut candidates = collect_config_paths(file_name, preferred_sources, backup_roots)
+        .into_iter()
+        .filter_map(|source_path| {
+            let is_backup = backup_roots.iter().any(|root| source_path.starts_with(root));
+            let mut value = read_json(&source_path)?;
+            if is_backup && !global_file {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.remove("downloads");
+                }
             }
-            let value = read_json(&source_path)?;
             let score = if global_file {
                 usize::from(is_non_empty_string(value.get("game").unwrap_or(&Value::Null))) * 100
                     + usize::from(is_non_empty_string(value.get("lang").unwrap_or(&Value::Null))) * 10
@@ -373,23 +433,27 @@ fn merge_config_file(path: &Path, sources: &[PathBuf], global_file: bool) {
                     .map(|entries| entries.len())
                     .unwrap_or(0)
                     * 10_000
-                    + value
-                        .get("downloads")
-                        .and_then(Value::as_object)
-                        .map(|downloads| {
-                            ["queue", "downloading", "extracting", "completed", "failed"]
-                                .iter()
-                                .map(|key| {
-                                    downloads
-                                        .get(*key)
-                                        .and_then(Value::as_array)
-                                        .map(|items| items.len())
-                                        .unwrap_or(0)
-                                })
-                                .sum::<usize>()
-                        })
-                        .unwrap_or(0)
-                        * 100
+                    + if is_backup {
+                        0
+                    } else {
+                        value
+                            .get("downloads")
+                            .and_then(Value::as_object)
+                            .map(|downloads| {
+                                ["queue", "downloading", "extracting", "completed", "failed"]
+                                    .iter()
+                                    .map(|key| {
+                                        downloads
+                                            .get(*key)
+                                            .and_then(Value::as_array)
+                                            .map(|items| items.len())
+                                            .unwrap_or(0)
+                                    })
+                                    .sum::<usize>()
+                            })
+                            .unwrap_or(0)
+                            * 100
+                    }
                     + value
                         .get("presets")
                         .and_then(Value::as_array)
@@ -402,14 +466,24 @@ fn merge_config_file(path: &Path, sources: &[PathBuf], global_file: bool) {
                         .map(|items| items.len())
                         .unwrap_or(0)
             };
-            Some((value, score, source_modified))
+            Some((
+                value,
+                score,
+                modified_secs(&source_path),
+                path_priority(&source_path, preferred_sources, backup_roots),
+            ))
         })
         .collect::<Vec<_>>();
 
     let mut merged = read_json(path).or_else(|| {
         candidates
             .iter()
-            .max_by(|left, right| left.1.cmp(&right.1).then_with(|| left.2.cmp(&right.2)))
+            .min_by(|left, right| {
+                left.3
+                    .cmp(&right.3)
+                    .then_with(|| right.1.cmp(&left.1))
+                    .then_with(|| right.2.cmp(&left.2))
+            })
             .map(|candidate| candidate.0.clone())
     });
 
@@ -417,8 +491,13 @@ fn merge_config_file(path: &Path, sources: &[PathBuf], global_file: bool) {
         return;
     };
 
-    candidates.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.2.cmp(&left.2)));
-    for (value, _, _) in candidates {
+    candidates.sort_by(|left, right| {
+        left.3
+            .cmp(&right.3)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| right.2.cmp(&left.2))
+    });
+    for (value, _, _, _) in candidates {
         if global_file {
             merge_fill_missing(&mut merged_value, &value);
         } else {
@@ -468,9 +547,14 @@ fn migrate_legacy_runtime_files(sources: &[PathBuf], data_dir: &Path) {
         "configEF.json",
     ];
 
+    let mut backup_roots = vec![data_dir.join("backups")];
+    for source in sources {
+        backup_roots.push(source.join("backups"));
+    }
+
     for file in runtime_files {
         let dst = data_dir.join(file);
-        merge_config_file(&dst, sources, file == "config.json");
+        merge_config_file(&dst, sources, &backup_roots, file == "config.json");
     }
 
     for source in sources {
@@ -491,7 +575,7 @@ fn resolve_runtime_dir(exe_dir: &Path) -> PathBuf {
     }
     let legacy_runtime_dir = local_app_data.join(LEGACY_RUNTIME_DIR_NAME);
     let mut sources = Vec::new();
-    for candidate in [exe_dir.to_path_buf(), legacy_runtime_dir] {
+    for candidate in [legacy_runtime_dir, exe_dir.to_path_buf()] {
         if candidate != data_dir && candidate.exists() && !sources.iter().any(|existing| existing == &candidate) {
             sources.push(candidate);
         }

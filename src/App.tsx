@@ -19,7 +19,7 @@ import Checklist from "./_Checklist/Checklist";
 import { initializeThemes } from "./utils/theme";
 import Changes from "./_Changes/Changes";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { refreshModList, saveConfigs } from "./utils/filesys";
+import { flushRuntimeState, refreshModList, saveConfigs } from "./utils/filesys";
 import { SidebarProvider } from "./components/ui/sidebar";
 import LeftSidebar from "./_LeftSidebar/Left";
 import Main from "./_Main/Main";
@@ -59,6 +59,13 @@ function App() {
 			throw new Error(err);
 		}
 	}, [err]);
+	useEffect(() => {
+		const handleBeforeUnload = () => {
+			void flushRuntimeState("window-beforeunload");
+		};
+		window.addEventListener("beforeunload", handleBeforeUnload);
+		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+	}, []);
 	useEffect(() => {
 		if (!initDone) return;
 		void startIntegrityMaintenanceOnLaunch();

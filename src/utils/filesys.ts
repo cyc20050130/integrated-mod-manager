@@ -42,11 +42,23 @@ import {
 } from "./vars";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { compareVersions, join, sanitizeFileName } from "./utils";
+import { compareVersions, join, sanitizeFileName, sanitizeGlobalSettings } from "./utils";
 import { main, updateConfig } from "./init";
 import { addToast } from "@/_Toaster/ToastProvider";
 import MiniSearch from "minisearch";
-import { ChangeInfo, DirEntry, GameConfig, GlobalSettings, Mod, ModDataObj, ModHotKeys, Settings } from "./types";
+import {
+	Category,
+	ChangeInfo,
+	DirEntry,
+	DownloadList,
+	GameConfig,
+	GlobalSettings,
+	Mod,
+	ModDataObj,
+	ModHotKeys,
+	Preset,
+	Settings,
+} from "./types";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { error, info, warn } from "@/lib/logger";
 import { addToExtracts } from "@/_LeftSidebar/components/Downloads";
@@ -149,43 +161,70 @@ export async function setConfig(config: any) {
 	addToast({ type: "success", message: textData._Toasts.ConfigLoaded });
 	main();
 }
-export function getConfig(settings: Settings) {
-	const config: GlobalSettings = settings.global;
-	config["updatedAt"] = new Date().toISOString();
-	config["version"] = VERSION;
-	config["XXMI"] = store.get(XXMI_DIR) || "";
+
+type RuntimeStateSnapshot = {
+	settings?: Settings;
+	data?: ModDataObj;
+	downloads?: DownloadList;
+	presets?: Preset[];
+	categories?: Category[];
+	source?: string;
+	target?: string;
+	xxmiMode?: 0 | 1;
+	xxmiDir?: string;
+};
+
+function getConfigPayload(snapshot: RuntimeStateSnapshot = {}) {
+	const settings = snapshot.settings || store.get(SETTINGS);
+	const config: GlobalSettings = {
+		...sanitizeGlobalSettings(settings.global),
+		updatedAt: new Date().toISOString(),
+		version: VERSION,
+		XXMI: snapshot.xxmiDir ?? store.get(XXMI_DIR) ?? "",
+	};
 	const normalizedSettings = withNormalizedDownloadSettings(settings.game);
-	const downloads = normalizeDownloadList(store.get(DOWNLOAD_LIST));
-	const xxmiMode = store.get(XXMI_MODE) || 0;
+	const downloads = normalizeDownloadList(snapshot.downloads ?? store.get(DOWNLOAD_LIST));
+	const xxmiMode = snapshot.xxmiMode ?? store.get(XXMI_MODE) ?? 0;
+	const resolvedSource = snapshot.source ?? store.get(SOURCE) ?? "";
+	const resolvedTarget = snapshot.target ?? store.get(TARGET) ?? "";
 	const gameConfig: GameConfig = {
 		version: VERSION,
 		custom: xxmiMode,
-		sourceDir: xxmiMode ? store.get(SOURCE) || "" : "",
-		targetDir: xxmiMode ? store.get(TARGET) || "" : "",
+		sourceDir: resolvedSource,
+		targetDir: resolvedTarget,
 		game: settings.global.game,
 		settings: normalizedSettings,
-		data: store.get(DATA) || {},
-		presets: store.get(PRESETS) || [],
+		data: snapshot.data ?? store.get(DATA) ?? {},
+		presets: snapshot.presets ?? store.get(PRESETS) ?? [],
 		downloads,
 		updatedAt: new Date().toISOString(),
-		categories: store.get(CATEGORIES) || [],
+		categories: snapshot.categories ?? store.get(CATEGORIES) ?? [],
 	};
 	return { config, gameConfig };
+}
+export function getConfig(settings: Settings) {
+	return getConfigPayload({ settings });
+}
+async function persistConfigs(snapshot: RuntimeStateSnapshot = {}, skip = false) {
+	const { config, gameConfig } = getConfigPayload(snapshot);
+	const promises: Promise<void>[] = [writeTextFile("config.json", JSON.stringify(config, null, 2))];
+	if (config.game && !skip) {
+		promises.push(writeTextFile(`config${config.game}.json`, JSON.stringify(gameConfig, null, 2)));
+	}
+	await Promise.all(promises);
 }
 export async function saveConfigs(skip = false, settings = store.get(SETTINGS)) {
 	info("[IMM] Saving configs...");
 	try {
-		const { config, gameConfig } = getConfig(settings);
-		const promises: Promise<void>[] = [];
-		promises.push(writeTextFile("config.json", JSON.stringify(config, null, 2)));
-		if (config.game && !skip) {
-			promises.push(writeTextFile(`config${config.game}.json`, JSON.stringify(gameConfig, null, 2)));
-		}
-		await Promise.all(promises);
+		await persistConfigs({ settings }, skip);
 	} catch (error) {
 		//console.error("Error saving configs:", error);
 		throw error;
 	}
+}
+export async function flushRuntimeState(reason = "manual", snapshot: RuntimeStateSnapshot = {}) {
+	info(`[IMM] Flushing runtime state (${reason})...`);
+	await persistConfigs(snapshot);
 }
 export async function selectPath(
 	options = { multiple: false, directory: false } as {

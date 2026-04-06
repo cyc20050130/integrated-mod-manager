@@ -75,6 +75,8 @@ function ModConflicts() {
 										updateAvl={""}
 										key={idx}
 										inConflict={0}
+										isBlacklisted={false}
+										blacklistedLabel={""}
 									/>
 								</div>
 							))}

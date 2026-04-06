@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { IMAGE_SERVER, managedSRC } from "./consts";
+import { GAMES, IMAGE_SERVER, managedSRC, VERSION } from "./consts";
 import {
 	DATA,
 	FILE_TO_DL,
@@ -24,6 +24,7 @@ import { error, info } from "@/lib/logger";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { getConfig } from "./filesys";
 import { save } from "@tauri-apps/plugin-dialog";
+import type { Games, GlobalSettings, OnlineBlacklistEntry } from "./types";
 
 export { join };
 let IMAGE_SERVER_URL = IMAGE_SERVER;
@@ -231,6 +232,54 @@ export function modRouteFromURL(url: string): string {
 	let modId = url?.split("mods/").pop()?.split("/")[0] || "";
 	return modId ? "Mod/" + modId : "";
 }
+export function normalizeModRoute(sourceOrRoute?: string): string {
+	const value = String(sourceOrRoute || "").trim();
+	if (!value) return "";
+	const directMatch = value.match(/^mod\/(\d+)$/i);
+	if (directMatch) return `Mod/${directMatch[1]}`;
+	const routeMatch = value.match(/(?:^|[/?#])(Mod\/\d+)(?:$|[/?#])/i);
+	if (routeMatch) {
+		const modId = routeMatch[1].split("/")[1];
+		return modId ? `Mod/${modId}` : "";
+	}
+	return modRouteFromURL(value);
+}
+export function onlineBlacklistKey(game: Games, routeOrSource?: string) {
+	const route = normalizeModRoute(routeOrSource);
+	return route ? `${game}:${route}` : "";
+}
+export function isModBlacklisted(tags?: string[]) {
+	return !!tags?.includes("blacklisted");
+}
+export function withBlacklistTag(tags: string[] | undefined, blacklisted: boolean) {
+	const next = new Set(tags || []);
+	if (blacklisted) next.add("blacklisted");
+	else next.delete("blacklisted");
+	return Array.from(next);
+}
+export function isRouteBlacklisted(entries: OnlineBlacklistEntry[] | undefined, game: Games, routeOrSource?: string) {
+	const key = onlineBlacklistKey(game, routeOrSource);
+	return !!key && (entries || []).some((entry) => onlineBlacklistKey(entry.game, entry.route || entry.source) === key);
+}
+function sanitizeOnlineBlacklist(input: any): OnlineBlacklistEntry[] {
+	if (!Array.isArray(input)) return [];
+	const deduped = new Map<string, OnlineBlacklistEntry>();
+	input.forEach((entry) => {
+		const candidate = (entry || {}) as Record<string, any>;
+		const game = GAMES.includes(candidate.game) ? candidate.game : "";
+		const route = normalizeModRoute(candidate.route || candidate.source || "");
+		if (!route) return;
+		const key = onlineBlacklistKey(game, route);
+		deduped.set(key, {
+			game,
+			route,
+			source: typeof candidate.source === "string" ? candidate.source : "",
+			name: typeof candidate.name === "string" ? candidate.name : "",
+			createdAt: Number.isFinite(candidate.createdAt) ? Number(candidate.createdAt) : Date.now(),
+		});
+	});
+	return Array.from(deduped.values());
+}
 export function isOlderThanOneDay(dateStr: string) {
 	const updateAgeMs = Date.now() - (dateStr ? new Date(dateStr).getTime() : 0);
 	return Number.isFinite(updateAgeMs) && updateAgeMs > 86_400_000;
@@ -244,6 +293,48 @@ export function compareVersions(a = "", b = "") {
 		if (diff !== 0) return diff;
 	}
 	return 0;
+}
+function sanitizeWuwaModFixerState(input: any) {
+	const candidate = (input || {}) as Record<string, any>;
+	return {
+		version: typeof candidate.version === "string" ? candidate.version : "",
+		exePath: typeof candidate.exePath === "string" ? candidate.exePath : "",
+		checkedAt: Number.isFinite(candidate.checkedAt) ? Number(candidate.checkedAt) : 0,
+		releaseUrl: typeof candidate.releaseUrl === "string" ? candidate.releaseUrl : "",
+	};
+}
+export function sanitizeGlobalSettings(input: any): GlobalSettings & { version?: string; updatedAt?: string; notice?: number } {
+	const candidate = (input || {}) as Record<string, any>;
+	const ignore =
+		typeof candidate.ignore === "string" && compareVersions(candidate.ignore || "0.0.0", VERSION) > 0
+			? candidate.ignore
+			: "";
+	return {
+		bgOpacity: candidate.bgOpacity ?? 1,
+		winOpacity: candidate.winOpacity ?? 1,
+		winType: candidate.winType ?? 0,
+		bgType: candidate.bgType ?? 2,
+		listType: candidate.listType ?? 0,
+		nsfw: candidate.nsfw ?? 1,
+		toggleClick: candidate.toggleClick ?? 2,
+		ignore,
+		clientDate: candidate.clientDate ?? "",
+		XXMI: candidate.XXMI ?? "",
+		lang: candidate.lang ?? "",
+		game: candidate.game ?? "",
+		version: candidate.version,
+		updatedAt: candidate.updatedAt,
+		notice: candidate.notice ?? 0,
+		preReleases: false,
+		chkModUpdates:
+			typeof candidate.chkModUpdates === "boolean"
+				? candidate.chkModUpdates
+				: typeof candidate.chkModUpd === "boolean"
+					? candidate.chkModUpd
+					: true,
+		onlineBlacklist: sanitizeOnlineBlacklist(candidate.onlineBlacklist),
+		wuwaModFixer: sanitizeWuwaModFixerState(candidate.wuwaModFixer),
+	};
 }
 let initialCheck = true;
 

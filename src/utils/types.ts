@@ -1,5 +1,18 @@
 export type Games = "WW" | "ZZ" | "GI" | "SR" | "EF" | ""; //| "GI" ;
 export type Language = "en" | "cn" | "ru" | "jp" | "kr" | "";
+export interface WuwaModFixerState {
+	version: string;
+	exePath: string;
+	checkedAt: number;
+	releaseUrl: string;
+}
+export interface OnlineBlacklistEntry {
+	game: Games;
+	route: string;
+	source?: string;
+	name?: string;
+	createdAt: number;
+}
 export interface DirEntry {
 	name: string;
 	isDirectory: boolean;
@@ -24,6 +37,8 @@ export interface GlobalSettings {
 	notice?: number;
 	preReleases: boolean;
 	chkModUpdates: boolean;
+	onlineBlacklist: OnlineBlacklistEntry[];
+	wuwaModFixer: WuwaModFixerState;
 }
 export interface GameSettings {
 	launch: 0 | 1 | 2;

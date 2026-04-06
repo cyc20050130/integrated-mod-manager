@@ -1,11 +1,11 @@
 {
-  "version": "3.1.7",
-  "notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Stopped source-linked redownloads from overriding a correct online mod title with an older linked local name unless the path or normalized name clearly matches.\",\"Made post-install preview downloads skip the global idle wait and refresh local cards as soon as the preview file lands.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.1.7 fixes redownload title corruption and speeds up installed preview refresh.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.7\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-  "pub_date": "2026-04-02T00:00:00Z",
+  "version": "3.1.8",
+  "notes": "{\"major\":[],\"minor\":[\"Added blacklist controls in both online and local mod sidebars for linked GameBanana mods.\",\"Added bundled Wuwa Mod Fixer support so the fixer can be prepared and launched from IMM.\"],\"patch\":[\"Blacklisted mods now show a warning state and stay marked across matching linked local entries.\",\"Startup config recovery now merges newer runtime and backup config candidates more defensively.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.1.8 adds blacklist controls and bundled Wuwa Mod Fixer support.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.1.8\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+  "pub_date": "2026-04-06T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHRzTFN6TkJzaEFZcnpVQ05XL1NqMGpHWjdxMXZSV3ZCRS9OUlJ1UzJWdHVCSG9PUUVjVWdWQ0FVbjltS1dKS3Jpa2hHY09WK04yeC9wU2FkVlZ1NHdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1MzE3MjE1CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjEuN194NjQtc2V0dXAuZXhlCmNtcGhuZHptSTVYTjlhVHZHWE8yQ0s3bC9nd2MwOVhTRUpJaGRvMUd4a2k0c3JETjZPRFhUajNNMURVeno1VUlobE8wVDlKeElXcm05ejhIZnFUSEJRPT0K",
-      "url": "https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._3.1.7_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGtwSEVPT2xIb2RrTzRud29Dd2hxdjdIbjBEa1NEUmxKZVdTZnRjUUM1TjZONEZwY0JKRnBqZ3dlU2k0eWNwK2lIYXkxb1h0dmVpVkZUSGR0NThIRWdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc1NDQ5OTA3CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjEuOF94NjQtc2V0dXAuZXhlCnRldWxkRGlybzJudCszdm5NeEV3UDRFK25kWkllTVl4WnFUblNSZFBZWHRVbkp0anBCek55dlpIUDhZbmVIemN6dzhJUFFjTEU5TG9rMkttWUtYd0NRPT0K",
+      "url": "https://github.com/cyc20050130/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._3.1.8_x64-setup.exe"
     }
   }
 }

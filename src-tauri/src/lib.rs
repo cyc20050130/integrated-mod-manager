@@ -8,7 +8,7 @@ use tauri_plugin_shell::ShellExt;
 use std::collections::{HashMap, HashSet};
 use std::fs::{remove_file, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -356,6 +356,158 @@ fn mime_to_extension(mime_type: &str) -> Option<&'static str> {
         .find(|(mime, _)| *mime == clean_mime)
         .map(|(_, ext)| *ext)
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledToolInfo {
+    version: String,
+    exe_path: String,
+    source_path: String,
+}
+
+fn compare_version_names(left: &str, right: &str) -> std::cmp::Ordering {
+    let left_parts = left
+        .trim_start_matches('v')
+        .split('.')
+        .map(|part| part.parse::<u32>().unwrap_or(0))
+        .collect::<Vec<_>>();
+    let right_parts = right
+        .trim_start_matches('v')
+        .split('.')
+        .map(|part| part.parse::<u32>().unwrap_or(0))
+        .collect::<Vec<_>>();
+    let max_len = left_parts.len().max(right_parts.len());
+    for index in 0..max_len {
+        let cmp = left_parts.get(index).copied().unwrap_or(0).cmp(
+            &right_parts.get(index).copied().unwrap_or(0),
+        );
+        if cmp != std::cmp::Ordering::Equal {
+            return cmp;
+        }
+    }
+    left.cmp(right)
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|err| err.to_string())?;
+    for entry in std::fs::read_dir(src).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|err| err.to_string())?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+            continue;
+        }
+        let should_copy = match (std::fs::metadata(&src_path), std::fs::metadata(&dst_path)) {
+            (Ok(src_meta), Ok(dst_meta)) => {
+                src_meta.len() != dst_meta.len()
+                    || src_meta.modified().ok() != dst_meta.modified().ok()
+            }
+            (Ok(_), Err(_)) => true,
+            _ => false,
+        };
+        if should_copy {
+            if let Some(parent) = dst_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            std::fs::copy(&src_path, &dst_path).map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn find_fixer_exe(root: &Path, depth: usize) -> Option<PathBuf> {
+    if !root.exists() || depth == 0 {
+        return None;
+    }
+    let entries = std::fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_file() {
+            let name = path.file_name()?.to_string_lossy().to_lowercase();
+            if name.ends_with(".exe") && name.contains("wuwa_mod_fixer") {
+                return Some(path);
+            }
+        }
+    }
+    let entries = std::fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_dir() {
+            if let Some(found) = find_fixer_exe(&path, depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_bundled_fixer_root(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(resource_path) = app_handle
+        .path()
+        .resolve("tools/Wuwa_Mod_Fixer", tauri::path::BaseDirectory::Resource)
+    {
+        if resource_path.exists() {
+            return Ok(resource_path);
+        }
+    }
+
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tools")
+        .join("Wuwa_Mod_Fixer");
+    if dev_path.exists() {
+        return Ok(dev_path);
+    }
+
+    Err("Bundled Wuwa Mod Fixer resource is missing.".to_string())
+}
+
+fn resolve_latest_bundled_fixer_dir(root: &Path) -> Result<(String, PathBuf), String> {
+    let mut candidates = std::fs::read_dir(root)
+        .map_err(|err| err.to_string())?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let file_type = entry.file_type().ok()?;
+            if file_type.is_dir() && !name.trim().is_empty() {
+                Some((name, path))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| compare_version_names(&right.0, &left.0));
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No bundled Wuwa Mod Fixer versions were found.".to_string())
+}
+
+#[tauri::command]
+fn ensure_bundled_wuwa_mod_fixer(app_handle: tauri::AppHandle) -> Result<BundledToolInfo, String> {
+    let bundled_root = resolve_bundled_fixer_root(&app_handle)?;
+    let (version, bundled_version_dir) = resolve_latest_bundled_fixer_dir(&bundled_root)?;
+    let runtime_dir = std::env::current_dir().map_err(|err| err.to_string())?;
+    let runtime_root = runtime_dir.join("tools").join("Wuwa_Mod_Fixer");
+    let runtime_version_dir = runtime_root.join(&version);
+
+    copy_dir_recursive(&bundled_version_dir, &runtime_version_dir)?;
+
+    let exe_path = find_fixer_exe(&runtime_version_dir, 5)
+        .ok_or_else(|| format!("Bundled Wuwa Mod Fixer executable not found in {:?}", runtime_version_dir))?;
+
+    Ok(BundledToolInfo {
+        version,
+        exe_path: exe_path.to_string_lossy().to_string(),
+        source_path: bundled_version_dir.to_string_lossy().to_string(),
+    })
+}
+
 async fn decompress_file(app_handle: tauri::AppHandle, file_path: &str, save_path: &str) -> Result<(), String> {
    let program_path = app_handle
     .path()
@@ -1062,6 +1214,18 @@ fn get_session_id() -> u64 {
 }
 
 #[tauri::command]
+fn get_runtime_data_dir() -> Result<String, String> {
+    std::env::current_dir()
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn request_app_restart(app_handle: tauri::AppHandle) {
+    app_handle.request_restart();
+}
+
+#[tauri::command]
 fn execute_with_args(exe_path: String, args: Vec<String>) -> Result<String, String> {
     if !Path::new(&exe_path).exists() {
         return Err(format!("Executable not found: {}", exe_path));
@@ -1223,6 +1387,9 @@ pub fn run() {
             cancel_download,
             get_image_server_url,
             get_session_id,
+            get_runtime_data_dir,
+            ensure_bundled_wuwa_mod_fixer,
+            request_app_restart,
             execute_with_args,
             create_symlink,
             extract_archive,

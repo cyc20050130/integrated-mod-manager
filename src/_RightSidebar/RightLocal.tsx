@@ -9,6 +9,7 @@ import {
 	ONLINE,
 	openConflict,
 	SELECTED,
+	SETTINGS,
 	SOURCE,
 	TEXT_DATA,
 } from "@/utils/vars";
@@ -25,12 +26,21 @@ import {
 	SearchIcon,
 	Settings2Icon,
 	SwordsIcon,
+	TriangleAlertIcon,
 	TrashIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { GAME_GB_IDS, GAMES, managedSRC } from "@/utils/consts";
-import { getImageUrl, handleImageError, handleInAppLink, join } from "@/utils/utils";
+import {
+	getImageUrl,
+	handleImageError,
+	handleInAppLink,
+	isRouteBlacklisted,
+	join,
+	normalizeModRoute,
+	withBlacklistTag,
+} from "@/utils/utils";
 import { Sidebar, SidebarContent, SidebarGroup } from "@/components/ui/sidebar";
 // @ts-ignore: no type declarations available for this optional Tauri plugin
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
@@ -188,6 +198,7 @@ function RightLocal() {
 	const [selected, setSelected] = useAtom(SELECTED);
 	const textData = useAtomValue(TEXT_DATA);
 	const [data, setData] = useAtom(DATA);
+	const [settings, setSettings] = useAtom(SETTINGS);
 	const [item, setItem] = useState<Mod | undefined>();
 
 	const [alertOpen, setAlertOpen] = useState(false);
@@ -309,6 +320,89 @@ function RightLocal() {
 		}
 	}, [item, modList]);
 	const tags = new Set(item?.tags || []);
+	const blacklistCopy = {
+		label: ((textData as Record<string, any>).Blacklisted as string) || "Blacklisted",
+		add: ((textData as Record<string, any>).BlacklistMod as string) || "Blacklist Mod",
+		remove: ((textData as Record<string, any>).RemoveFromBlacklist as string) || "Remove Blacklist",
+		addedToast: ((textData as Record<string, any>).BlacklistedAdded as string) || "Mod added to blacklist.",
+		removedToast: ((textData as Record<string, any>).BlacklistedRemoved as string) || "Mod removed from blacklist.",
+	};
+	const sourceRoute = normalizeModRoute(item?.source);
+	const isCurrentBlacklisted = item?.source
+		? tags.has("blacklisted") || isRouteBlacklisted(settings.global.onlineBlacklist, game, sourceRoute)
+		: tags.has("blacklisted");
+	const syncRouteBlacklistState = useCallback(
+		(route: string, blacklisted: boolean) => {
+			if (!route) return;
+			setData((prev) => {
+				const next = { ...prev };
+				Object.entries(prev).forEach(([path, modData]) => {
+					if (normalizeModRoute(modData.source) !== route) return;
+					next[path] = {
+						...modData,
+						tags: withBlacklistTag(modData.tags, blacklisted),
+					};
+				});
+				return next;
+			});
+			setModList((prev) =>
+				prev.map((mod) =>
+					normalizeModRoute(mod.source) === route ? { ...mod, tags: withBlacklistTag(mod.tags, blacklisted) } : mod
+				)
+			);
+		},
+		[setData, setModList]
+	);
+	const toggleBlacklist = useCallback(() => {
+		if (!item) return;
+		const nextBlacklisted = !isCurrentBlacklisted;
+		if (sourceRoute) {
+			setSettings((prev) => {
+				const filtered = (prev.global.onlineBlacklist || []).filter(
+					(entry) => !(entry.game === game && normalizeModRoute(entry.route || entry.source) === sourceRoute)
+				);
+				return {
+					...prev,
+					global: {
+						...prev.global,
+						onlineBlacklist: nextBlacklisted
+							? [
+									...filtered,
+									{
+										game,
+										route: sourceRoute,
+										source: item.source || "",
+										name: item.name,
+										createdAt: Date.now(),
+									},
+								]
+							: filtered,
+					},
+				};
+			});
+			syncRouteBlacklistState(sourceRoute, nextBlacklisted);
+		} else {
+			setData((prev) => {
+				return {
+					...prev,
+					[item.path]: {
+						...prev[item.path],
+						tags: withBlacklistTag(prev[item.path]?.tags, nextBlacklisted),
+					},
+				};
+			});
+			setModList((prev) =>
+				prev.map((mod) =>
+					mod.path === item.path ? { ...mod, tags: withBlacklistTag(mod.tags, nextBlacklisted) } : mod
+				)
+			);
+		}
+		saveConfigs();
+		addToast({
+			type: nextBlacklisted ? "error" : "success",
+			message: nextBlacklisted ? blacklistCopy.addedToast : blacklistCopy.removedToast,
+		});
+	}, [item, isCurrentBlacklisted, sourceRoute, setSettings, game, syncRouteBlacklistState, setData, setModList, blacklistCopy]);
 	//info(item?.keys);
 	return (
 		<Sidebar side="right" className="pt-8 duration-300">
@@ -547,19 +641,29 @@ function RightLocal() {
 									<Input
 										onBlur={(e) => {
 											if (item && e.currentTarget.value !== item?.source) {
+												const nextSource = e.currentTarget.value;
+												const nextRoute = normalizeModRoute(nextSource);
+												const nextBlacklisted = nextRoute
+													? isRouteBlacklisted(settings.global.onlineBlacklist, game, nextRoute)
+													: tags.has("blacklisted");
 												setData((prev) => {
 													prev[item.path] = {
 														...prev[item.path],
-														source: e.currentTarget.value,
+														source: nextSource,
 														updatedAt: Date.now(),
 														viewedAt: 0,
+														tags: withBlacklistTag(prev[item.path]?.tags, nextBlacklisted),
 													};
 													return { ...prev };
 												});
 												setModList((prev) => {
 													return prev.map((m) => {
 														if (m.path == item.path) {
-															return { ...m, source: e.currentTarget.value };
+															return {
+																...m,
+																source: nextSource,
+																tags: withBlacklistTag(m.tags, nextBlacklisted),
+															};
 														}
 														return m;
 													});
@@ -626,6 +730,12 @@ function RightLocal() {
 									{}
 								</div>
 							</div>
+							{item && isCurrentBlacklisted && (
+								<div className="mx-1 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+									<TriangleAlertIcon className="h-4 w-4 min-w-4" />
+									<span>{blacklistCopy.label}</span>
+								</div>
+							)}
 							<div className="bg-pat1 flex justify-between w-full px-1 rounded-lg">
 								<Label className="bg-input/0 flex items-center justify-center hover:bg-input/0 h-10 w-28.5 text-accent ">
 									{textData._Tags.Tags}
@@ -719,6 +829,18 @@ function RightLocal() {
 										<TooltipContent>
 											{new Set(item?.tags || []).has("nsfw") ? textData._Tags.UnmarkNSFW : textData._Tags.MarkNSFW}
 										</TooltipContent>
+									</Tooltip>
+									<Tooltip>
+										<TooltipTrigger>
+											<Button
+												onClick={toggleBlacklist}
+												className="aspect-square flex flex-col h-8"
+												variant={isCurrentBlacklisted ? "outline" : "destructive"}
+											>
+												<TriangleAlertIcon className="w-3.5 h-3.5" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>{isCurrentBlacklisted ? blacklistCopy.remove : blacklistCopy.add}</TooltipContent>
 									</Tooltip>
 								</div>
 							</div>

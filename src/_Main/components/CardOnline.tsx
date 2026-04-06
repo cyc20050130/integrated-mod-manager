@@ -1,10 +1,7 @@
 import React, { useState } from "react";
-import { EyeOffIcon, LoaderIcon, MessageSquareIcon, PlusIcon, ThumbsUpIcon } from "lucide-react";
+import { EyeOffIcon, LoaderIcon, MessageSquareIcon, PlusIcon, ThumbsUpIcon, TriangleAlertIcon } from "lucide-react";
 import { getTimeDifference, handleImageError } from "@/utils/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-// import { CSS_CLASSES, COMMON_STYLES } from "@/utils/consts";
-// import type { CardLocalProps } from "@/utils/types";
 
 interface CardOnlineProps {
 	_sName: string;
@@ -23,7 +20,16 @@ interface CardOnlineProps {
 	blur?: boolean;
 	now: number;
 	show: string;
+	isInstalled?: boolean;
+	hasUpdate?: boolean;
+	isBlacklisted?: boolean;
+	installedLabel?: string;
+	updateLabel?: string;
+	blacklistedLabel?: string;
 }
+
+const statusBadgeClass =
+	"rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none backdrop-blur bg-background/70";
 
 const Online = React.memo((data: CardOnlineProps) => {
 	const [revealed, setRevealed] = useState(false);
@@ -33,7 +39,7 @@ const Online = React.memo((data: CardOnlineProps) => {
 	const needsBlur = data._sInitialVisibility === "hide" && data.blur === true && !revealed;
 
 	return (
-		<div className="card-generic card-online ">
+		<div className="card-generic card-online">
 			<div className="relative min-h-full overflow-hidden rounded-t-lg data-gi:rounded-none">
 				<img
 					className="fadein flex min-h-full w-full items-center justify-center object-cover duration-200 pointer-events-none"
@@ -45,11 +51,29 @@ const Online = React.memo((data: CardOnlineProps) => {
 						filter: needsBlur ? "brightness(0.5) blur(4px)" : "brightness(1)",
 					}}
 				/>
+				<div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2">
+					<div className="max-w-[6.5rem] rounded-md bg-background/60 px-2 py-1 text-xs text-accent backdrop-blur">
+						{data._sModelName}
+					</div>
+					<div className="flex max-w-[8.5rem] flex-col items-end gap-1 text-right">
+						{data.isBlacklisted && (
+							<div className={`${statusBadgeClass} border-destructive/50 text-destructive`}>
+								<TriangleAlertIcon className="mr-1 inline h-3 w-3" />
+								{data.blacklistedLabel}
+							</div>
+						)}
+						{data.hasUpdate ? (
+							<div className={`${statusBadgeClass} border-amber-400/40 text-amber-200`}>{data.updateLabel}</div>
+						) : data.isInstalled ? (
+							<div className={`${statusBadgeClass} border-accent/40 text-accent`}>{data.installedLabel}</div>
+						) : null}
+					</div>
+				</div>
 			</div>
 			{needsBlur && (
 				<div className="max-h-0 fadein mb-41 -mt-41 w-fit z-20 self-center">
 					<Button
-						className=" bg-background/50 duration-200 pointer-events-auto"
+						className="bg-background/50 duration-200 pointer-events-auto"
 						onClick={() => {
 							setRevealed(true);
 						}}
@@ -58,35 +82,25 @@ const Online = React.memo((data: CardOnlineProps) => {
 					</Button>
 				</div>
 			)}
-			<div
-				className={`w-fit fadein bg-background/50 text-accent  backdrop-blur -mt-68 flex flex-col items-center px-4 py-1 mb-44 rounded-br-lg pointer-events-none`}
-			>
-				{data._sModelName}
-			</div>
 
-			<div className={`bg-background/50 fadein backdrop-blur flex flex-col items-center w-full px-4 py-1`}>
-				<Input
-					readOnly
-					type="text"
-					className="bg-semi w-56 cursor-pointerx select-none focus-within:select-auto overflow-hidden h-8 focus-visible:ring-[0px] border-0 text-ellipsis"
-					defaultValue={data._sName}
-				/>
-				<div className="flex justify-between w-full h-6 text-xs">
-					<label className="flex items-center justify-center">
-						<PlusIcon className="h-4" />
-						{getTimeDifference(data.now, data._tsDateAdded || 0)}
+			<div className="bg-background/50 fadein backdrop-blur flex flex-col w-full gap-2 px-4 py-2">
+				<div className="min-h-9 max-h-9 overflow-hidden text-sm leading-4 break-words">{data._sName}</div>
+				<div className="flex justify-between w-full h-6 text-xs gap-2">
+					<label className="flex items-center justify-center min-w-0 gap-1">
+						<PlusIcon className="h-4 min-w-4" />
+						<span className="truncate">{getTimeDifference(data.now, data._tsDateAdded || 0)}</span>
 					</label>
-					<label className="flex items-center justify-center">
-						<LoaderIcon className="h-4" />
-						{getTimeDifference(data.now, data._tsDateModified || 0)}
+					<label className="flex items-center justify-center min-w-0 gap-1">
+						<LoaderIcon className="h-4 min-w-4" />
+						<span className="truncate">{getTimeDifference(data.now, data._tsDateModified || 0)}</span>
 					</label>
-					<label className="flex items-center justify-center">
-						<ThumbsUpIcon className="h-4" />
-						{data._nLikeCount || "0"}
+					<label className="flex items-center justify-center min-w-0 gap-1">
+						<ThumbsUpIcon className="h-4 min-w-4" />
+						<span className="truncate">{data._nLikeCount || "0"}</span>
 					</label>
-					<label className="flex items-center justify-center">
-						<MessageSquareIcon className="h-4" />
-						{data._nPostCount || "0"}
+					<label className="flex items-center justify-center min-w-0 gap-1">
+						<MessageSquareIcon className="h-4 min-w-4" />
+						<span className="truncate">{data._nPostCount || "0"}</span>
 					</label>
 				</div>
 			</div>

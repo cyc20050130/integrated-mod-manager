@@ -11,6 +11,7 @@ import { deriveNameFromFileName, formatBytes, sanitizeFileName } from "@/utils/u
 import {
 	cleanCancelledDownload,
 	createModDownloadTarget,
+	flushRuntimeState,
 	refreshModList,
 	saveConfigs,
 	validateModDownload,
@@ -331,20 +332,34 @@ function Downloads() {
 					updatedAt: item.updated * 1000,
 				};
 
-				setDownloads((prev) => ({
-					...prev,
-					downloading: prev.downloading.map((x) => (x.key === key ? { ...x, ...runtimeItem } : x)),
-				}));
+				let persistedDownloads = downloadsRef.current;
+				setDownloads((prev) => {
+					persistedDownloads = {
+						...prev,
+						downloading: prev.downloading.map((x) => (x.key === key ? { ...x, ...runtimeItem } : x)),
+					};
+					return persistedDownloads;
+				});
 
+				let persistedData = {} as Record<string, any>;
 				setData((prevData) => {
 					if (runtimeItem.path) {
-						prevData[runtimeItem.path] = {
-							source: runtimeItem.source,
-							updatedAt: prevData[runtimeItem.path]?.updatedAt || -1,
-							...prevData[runtimeItem.path],
+						persistedData = {
+							...prevData,
+							[runtimeItem.path]: {
+								source: runtimeItem.source,
+								updatedAt: prevData[runtimeItem.path]?.updatedAt || -1,
+								...prevData[runtimeItem.path],
+							},
 						};
+					} else {
+						persistedData = { ...prevData };
 					}
-					return { ...prevData };
+					return persistedData;
+				});
+				await flushRuntimeState("download-started", {
+					data: persistedData,
+					downloads: persistedDownloads,
 				});
 				scheduleSave();
 
@@ -523,30 +538,51 @@ function Downloads() {
 
 				if (type === "auto") {
 					await validateModDownload(finished.dlPath || "");
+					let persistedData = {} as Record<string, any>;
 					setData((prev) => {
 						if (finished.path) {
-							prev[finished.path] = {
-								...prev[finished.path],
-								source: finished.source,
-								updatedAt: finished.updatedAt || Date.now(),
-								viewedAt: Date.now(),
+							persistedData = {
+								...prev,
+								[finished.path]: {
+									...prev[finished.path],
+									source: finished.source,
+									updatedAt: finished.updatedAt || Date.now(),
+									viewedAt: Date.now(),
+								},
 							};
+						} else {
+							persistedData = { ...prev };
 						}
-						return { ...prev };
+						return persistedData;
 					});
-					setDownloads((prev) => ({
-						...prev,
-						completed: [...prev.completed, { ...finished, status: "completed" }],
-						extracting: prev.extracting.filter((item) => item.key !== key),
-					}));
+					let persistedDownloads = downloadsRef.current;
+					setDownloads((prev) => {
+						persistedDownloads = {
+							...prev,
+							completed: [...prev.completed, { ...finished, status: "completed" }],
+							extracting: prev.extracting.filter((item) => item.key !== key),
+						};
+						return persistedDownloads;
+					});
+					await flushRuntimeState("download-finished", {
+						data: persistedData,
+						downloads: persistedDownloads,
+					});
 					modList(await refreshModList());
 				} else {
 					await validateModDownload(finished.dlPath || "", true);
-					setDownloads((prev) => ({
-						...prev,
-						completed: [...prev.completed, { ...finished, status: "completed" }],
-						extracting: prev.extracting.filter((item) => item.key !== key),
-					}));
+					let persistedDownloads = downloadsRef.current;
+					setDownloads((prev) => {
+						persistedDownloads = {
+							...prev,
+							completed: [...prev.completed, { ...finished, status: "completed" }],
+							extracting: prev.extracting.filter((item) => item.key !== key),
+						};
+						return persistedDownloads;
+					});
+					await flushRuntimeState("download-finished-manual", {
+						downloads: persistedDownloads,
+					});
 				}
 			});
 
@@ -604,10 +640,16 @@ function Downloads() {
 	}, [game, setDownloads]);
 
 	const clearCompleted = () => {
-		setDownloads((prev) => ({ ...prev, completed: [], failed: [] }));
+		let persistedDownloads = downloadsRef.current;
+		setDownloads((prev) => {
+			persistedDownloads = { ...prev, completed: [], failed: [] };
+			return persistedDownloads;
+		});
+		void flushRuntimeState("downloads-cleared", { downloads: persistedDownloads });
 	};
 
 	const retryFailedDownloads = useCallback(() => {
+		let persistedDownloads = downloadsRef.current;
 		setDownloads((prev) => {
 			if (!prev.failed.length) return prev;
 			const now = Date.now();
@@ -628,12 +670,14 @@ function Downloads() {
 					displayName: item.displayName || item.name,
 				};
 			});
-			return {
+			persistedDownloads = {
 				...prev,
 				queue: [...prev.queue, ...retried],
 				failed: [],
 			};
+			return persistedDownloads;
 		});
+		void flushRuntimeState("downloads-retried", { downloads: persistedDownloads });
 	}, [setDownloads]);
 
 	const cancelExtract = (key: string) => {
@@ -665,26 +709,41 @@ function Downloads() {
 		}
 
 		if (item.status === "pending") {
-			setDownloads((prev) => ({
-				...prev,
-				queue: prev.queue.filter((x) => !sameDownload(x, item)),
-			}));
+			let persistedDownloads = downloadsRef.current;
+			setDownloads((prev) => {
+				persistedDownloads = {
+					...prev,
+					queue: prev.queue.filter((x) => !sameDownload(x, item)),
+				};
+				return persistedDownloads;
+			});
+			void flushRuntimeState("download-pending-removed", { downloads: persistedDownloads });
 			return;
 		}
 
 		if (item.status === "completed") {
-			setDownloads((prev) => ({
-				...prev,
-				completed: prev.completed.filter((x) => !sameDownload(x, item)),
-			}));
+			let persistedDownloads = downloadsRef.current;
+			setDownloads((prev) => {
+				persistedDownloads = {
+					...prev,
+					completed: prev.completed.filter((x) => !sameDownload(x, item)),
+				};
+				return persistedDownloads;
+			});
+			void flushRuntimeState("download-completed-removed", { downloads: persistedDownloads });
 			return;
 		}
 
 		if (item.status === "failed") {
-			setDownloads((prev) => ({
-				...prev,
-				failed: prev.failed.filter((x) => !sameDownload(x, item)),
-			}));
+			let persistedDownloads = downloadsRef.current;
+			setDownloads((prev) => {
+				persistedDownloads = {
+					...prev,
+					failed: prev.failed.filter((x) => !sameDownload(x, item)),
+				};
+				return persistedDownloads;
+			});
+			void flushRuntimeState("download-failed-removed", { downloads: persistedDownloads });
 		}
 	};
 

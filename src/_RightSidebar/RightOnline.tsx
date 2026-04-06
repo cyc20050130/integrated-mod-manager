@@ -1,7 +1,17 @@
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
-import { fetchMod, formatSize, getImageUrl, getTimeDifference, handleImageError, modRouteFromURL } from "@/utils/utils";
+import {
+	fetchMod,
+	formatSize,
+	getImageUrl,
+	getTimeDifference,
+	handleImageError,
+	isRouteBlacklisted,
+	modRouteFromURL,
+	normalizeModRoute,
+	withBlacklistTag,
+} from "@/utils/utils";
 import {
 	DATA,
 	DOWNLOAD_LIST,
@@ -12,6 +22,7 @@ import {
 	ONLINE_DATA,
 	ONLINE_SELECTED,
 	RIGHT_SLIDEOVER_OPEN,
+	SETTINGS,
 	TEXT_DATA,
 } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
@@ -36,6 +47,7 @@ import {
 	StampIcon,
 	ThumbsDownIcon,
 	ThumbsUpIcon,
+	TriangleAlertIcon,
 	Trash2Icon,
 	UploadIcon,
 } from "lucide-react";
@@ -99,6 +111,7 @@ function RightOnline({ open }: { open: boolean }) {
 	const setRightSlideOverOpen = useSetAtom(RIGHT_SLIDEOVER_OPEN);
 	const [modList, setModList] = useAtom(MOD_LIST);
 	const [data, setData] = useAtom(DATA);
+	const [settings, setSettings] = useAtom(SETTINGS);
 	const [onlineData, setOnlineData] = useAtom(ONLINE_DATA);
 	const [aboutOpen, setAboutOpen] = useState(false);
 	const [updateOpen, setUpdateOpen] = useState(false);
@@ -119,6 +132,73 @@ function RightOnline({ open }: { open: boolean }) {
 	const gameMatched = item?._aGame ? ignoreGameCheck || GAME_GB_IDS[item._aGame._idRow] == game : false;
 	const installedItem = installedItems.find((it) => it.source && modRouteFromURL(it.source) == selected) || null;
 	const type = installedItem ? (installedItem.modStatus ? "Update" : "Reinstall") : "Install";
+	const blacklistRoute = normalizeModRoute(selected || item?._sProfileUrl || "");
+	const isBlacklisted = isRouteBlacklisted(settings.global.onlineBlacklist, game, blacklistRoute);
+	const blacklistCopy = {
+		label: ((textData as Record<string, any>).Blacklisted as string) || "Blacklisted",
+		warning:
+			((textData as Record<string, any>).BlacklistedWarning as string) ||
+			"This mod is blacklisted. Installed entries with the same source stay marked.",
+		add: ((textData as Record<string, any>).BlacklistMod as string) || "Blacklist Mod",
+		remove: ((textData as Record<string, any>).RemoveFromBlacklist as string) || "Remove Blacklist",
+		addedToast: ((textData as Record<string, any>).BlacklistedAdded as string) || "Mod added to blacklist.",
+		removedToast: ((textData as Record<string, any>).BlacklistedRemoved as string) || "Mod removed from blacklist.",
+	};
+	const syncRouteBlacklistState = useCallback(
+		(route: string, blacklisted: boolean) => {
+			if (!route) return;
+			setData((prev) => {
+				const next = { ...prev };
+				Object.entries(prev).forEach(([path, modData]) => {
+					if (normalizeModRoute(modData.source) !== route) return;
+					next[path] = {
+						...modData,
+						tags: withBlacklistTag(modData.tags, blacklisted),
+					};
+				});
+				return next;
+			});
+			setModList((prev) =>
+				prev.map((mod) =>
+					normalizeModRoute(mod.source) === route ? { ...mod, tags: withBlacklistTag(mod.tags, blacklisted) } : mod
+				)
+			);
+		},
+		[setData, setModList]
+	);
+	const toggleBlacklist = useCallback(() => {
+		if (!blacklistRoute) return;
+		const nextBlacklisted = !isBlacklisted;
+		setSettings((prev) => {
+			const filtered = (prev.global.onlineBlacklist || []).filter(
+				(entry) => !(entry.game === game && normalizeModRoute(entry.route || entry.source) === blacklistRoute)
+			);
+			return {
+				...prev,
+				global: {
+					...prev.global,
+					onlineBlacklist: nextBlacklisted
+						? [
+								...filtered,
+								{
+									game,
+									route: blacklistRoute,
+									source: item?._sProfileUrl || "",
+									name: item?._sName || "",
+									createdAt: Date.now(),
+								},
+							]
+						: filtered,
+				},
+			};
+		});
+		syncRouteBlacklistState(blacklistRoute, nextBlacklisted);
+		saveConfigs();
+		addToast({
+			type: nextBlacklisted ? "error" : "success",
+			message: nextBlacklisted ? blacklistCopy.addedToast : blacklistCopy.removedToast,
+		});
+	}, [blacklistRoute, isBlacklisted, setSettings, game, item, syncRouteBlacklistState, blacklistCopy]);
 	const addToDownloadQueue = useCallback(
 		async (file: any) => {
 			setDownloadList((prev) => {
@@ -636,13 +716,18 @@ function RightOnline({ open }: { open: boolean }) {
 																						source: item._sProfileUrl,
 																						updatedAt: Date.now(),
 																						viewedAt: 0,
+																						tags: withBlacklistTag(prev[currentValue]?.tags, isBlacklisted),
 																					};
 																					return { ...prev };
 																				});
 																				setModList((prev) => {
 																					return prev.map((m) => {
 																						if (m.path == currentValue) {
-																							return { ...m, source: item._sProfileUrl };
+																							return {
+																								...m,
+																								source: item._sProfileUrl,
+																								tags: withBlacklistTag(m.tags, isBlacklisted),
+																							};
 																						}
 																						return m;
 																					});
@@ -698,6 +783,15 @@ function RightOnline({ open }: { open: boolean }) {
 								</div>
 								{gameMatched ? (
 									<>
+										{isBlacklisted && (
+											<div className="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+												<TriangleAlertIcon className="h-4 w-4 min-w-4" />
+												<div className="flex flex-col">
+													<span className="font-medium">{blacklistCopy.label}</span>
+													<span className="text-xs opacity-90">{blacklistCopy.warning}</span>
+												</div>
+											</div>
+										)}
 										<div id="container" className="flex flex-col w-full pb-2 mb-24 overflow-hidden overflow-y-scroll">
 											<div
 												key={item._sName + "pix"}
@@ -991,6 +1085,14 @@ function RightOnline({ open }: { open: boolean }) {
 											</div>
 											<Separator className="min-w-0 min-h-full border-l" />
 											<div className="min-w-fit flex items-center justify-center w-full gap-1">
+												<Button
+													variant={isBlacklisted ? "outline" : "destructive"}
+													className="min-w-34"
+													onClick={toggleBlacklist}
+												>
+													<TriangleAlertIcon className="h-4 w-4" />
+													{isBlacklisted ? blacklistCopy.remove : blacklistCopy.add}
+												</Button>
 												<Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
 													<PopoverTrigger
 														style={{ width: `${type == "Install" ? "19.5rem" : "16.5rem"}` }}

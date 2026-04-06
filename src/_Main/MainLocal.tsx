@@ -18,7 +18,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import CardLocal from "./components/CardLocal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { preventContextMenu } from "@/utils/utils";
+import { isModBlacklisted, preventContextMenu } from "@/utils/utils";
 import { toggleMod } from "@/utils/filesys";
 import MiniSearch from "minisearch";
 import { join, setChange } from "@/utils/hotreload";
@@ -222,8 +222,10 @@ function MainLocal() {
 				});
 				break;
 		}
+		const regularMods = newList.filter((mod) => !isModBlacklisted(mod.tags));
+		const blacklistedMods = newList.filter((mod) => isModBlacklisted(mod.tags));
 
-		setFilteredList(newList);
+		setFilteredList([...regularMods, ...blacklistedMods]);
 	}, [modList, filter, category, search, filterChangeCount, sort]);
 
 	const handleClick = async (e: MouseEvent, mod: Mod) => {
@@ -373,6 +375,8 @@ function MainLocal() {
 											hasUpdate={updateObj[mod.path]}
 											updateAvl={textData.UpdateAvl}
 											inConflict={conflicts.mods[mod.path] ?? -1}
+											isBlacklisted={isModBlacklisted(mod.tags)}
+											blacklistedLabel={((textData as Record<string, any>).Blacklisted as string) || "Blacklisted"}
 										/>
 									)}
 								</motion.div>

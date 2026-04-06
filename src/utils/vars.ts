@@ -21,10 +21,11 @@ import {
 } from "./types";
 interface UpdateInfo {
 	version: string;
-	status: "available" | "downloading" | "ready" | "error" | "installed" | "ignored";
+	status: "checking" | "up_to_date" | "available" | "downloading" | "installing" | "relaunching" | "error";
 	date: string;
 	body: string;
 	raw: any | null;
+	error?: string;
 }
 const INIT_DONE = atom(false);
 const MAIN_FUNC_STATUS = atom("" as String);
@@ -42,13 +43,20 @@ const SETTINGS = atom<Settings>({
 		listType: 0,
 		nsfw: 1,
 		toggleClick: 2,
-		ignore: VERSION,
+		ignore: "",
 		clientDate: "1759866302559426603",
 		XXMI: "",
 		lang: "",
 		game: "",
 		preReleases: false,
 		chkModUpdates: true,
+		onlineBlacklist: [],
+		wuwaModFixer: {
+			version: "",
+			exePath: "",
+			checkedAt: 0,
+			releaseUrl: "",
+		},
 	},
 	game: {
 		launch: 0,
@@ -106,6 +114,7 @@ const TEXT_DATA = atom(TEXT["en"]);
 const PROGRESS_OVERLAY = atom<ProgressData>({ title: "", open: false, finished: false, button: "", name: "" });
 const IMM_UPDATE = atom(null as UpdateInfo | null);
 const UPDATER_OPEN = atom(false);
+const WUWA_MOD_FIXER_OPEN = atom(false);
 const NOTICE = atom({
 	heading: "",
 	subheading: "",
@@ -186,6 +195,7 @@ export {
 	XXMI_MODE,
 	FIRST_LOAD,
 	HELP_OPEN,
+	WUWA_MOD_FIXER_OPEN,
 	TUTORIAL_OPEN,
 	NOTICE,
 	NOTICE_OPEN,

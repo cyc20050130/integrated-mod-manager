@@ -5,10 +5,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { managedSRC, exts, GAMES } from "./consts";
 import { apiClient } from "./api";
 import {
+	DATA,
 	GAME,
 	LAST_UPDATED,
 	LINK_AUDIT_REPORT,
 	LINK_AUDIT_RUNNING,
+	PRESETS,
 	PREVIEW_BACKFILL_STATE,
 	store,
 	TEXT_DATA,
@@ -232,6 +234,53 @@ function buildSuggestions(game: Games, unlinked: LinkAuditModEntry[], orphans: L
 	return suggestions.sort((a, b) => b.confidence - a.confidence);
 }
 
+function hasObjectValues(value: unknown) {
+	return typeof value === "object" && value !== null && Object.keys(value as Record<string, unknown>).length > 0;
+}
+
+function mergeModDataRecords(current: ModData | undefined, orphan: ModData | undefined): ModData {
+	const next = {
+		...(orphan || {}),
+		...(current || {}),
+	} as ModData;
+
+	if (!next.source) next.source = String(current?.source || orphan?.source || "").trim();
+	const updatedAt = current?.updatedAt ?? orphan?.updatedAt;
+	if (updatedAt !== undefined && !next.updatedAt) next.updatedAt = updatedAt;
+	const viewedAt = current?.viewedAt ?? orphan?.viewedAt;
+	if (viewedAt !== undefined && !next.viewedAt) next.viewedAt = viewedAt;
+	const note = current?.note ?? orphan?.note;
+	if (note !== undefined && !next.note) next.note = note;
+	if ((!next.tags || next.tags.length === 0) && orphan?.tags?.length) next.tags = [...orphan.tags];
+	const namespace = current?.namespace ?? orphan?.namespace;
+	if (namespace !== undefined && !next.namespace) next.namespace = namespace;
+	if (!hasObjectValues(next.vars) && hasObjectValues(orphan?.vars)) next.vars = { ...(orphan?.vars || {}) };
+	if (!next.crop && orphan?.crop) next.crop = { ...orphan.crop };
+
+	return next;
+}
+
+function remapPresetPaths(paths: string[], fromPath: string, toPath: string) {
+	let changed = false;
+	const seen = new Set<string>();
+	const next: string[] = [];
+
+	for (const rawPath of paths || []) {
+		const normalized = normalizePathKey(rawPath);
+		const finalPath = normalized === fromPath ? toPath : rawPath;
+		const finalKey = normalizePathKey(finalPath);
+		if (!finalKey || seen.has(finalKey)) {
+			if (normalized === fromPath) changed = true;
+			continue;
+		}
+		if (normalized === fromPath && finalKey === toPath) changed = true;
+		seen.add(finalKey);
+		next.push(finalPath);
+	}
+
+	return { changed, paths: next };
+}
+
 export async function scanLinkIntegrity(scope: Games[] = LINK_SCAN_SCOPE): Promise<LinkAuditReport> {
 	const gameReports: LinkAuditGameReport[] = [];
 	for (const game of scope) {
@@ -318,6 +367,85 @@ export async function runLinkIntegrityScan(scope: Games[] = LINK_SCAN_SCOPE) {
 	} finally {
 		store.set(LINK_AUDIT_RUNNING, false);
 	}
+}
+
+export async function applyLinkAuditSuggestions(
+	report: LinkAuditReport | null = store.get(LINK_AUDIT_REPORT),
+	scope: Games[] = LINK_SCAN_SCOPE,
+	minConfidence = 0.58
+) {
+	const effectiveReport =
+		report && report.scope.some((game) => scope.includes(game)) ? report : await scanLinkIntegrity(scope);
+	const currentGame = store.get(GAME);
+	let applied = 0;
+	let skipped = 0;
+
+	for (const gameReport of effectiveReport.games) {
+		if (!scope.includes(gameReport.game)) continue;
+		if (!(await exists(gameReport.configPath))) continue;
+
+		let parsed: any;
+		try {
+			parsed = JSON.parse(await readTextFile(gameReport.configPath));
+		} catch {
+			continue;
+		}
+
+		const nextData = { ...((parsed?.data || {}) as Record<string, ModData>) };
+		const nextPresets = Array.isArray(parsed?.presets)
+			? parsed.presets.map((preset: any) => ({
+					...preset,
+					data: Array.isArray(preset?.data) ? [...preset.data] : [],
+				}))
+			: [];
+		let changed = false;
+
+		for (const suggestion of gameReport.suggestedMappings) {
+			if (suggestion.confidence < minConfidence) {
+				skipped += 1;
+				continue;
+			}
+
+			const fromPath = normalizePathKey(suggestion.candidateDataPath);
+			const toPath = normalizePathKey(suggestion.localPath);
+			if (!fromPath || !toPath || fromPath === toPath) {
+				skipped += 1;
+				continue;
+			}
+
+			const orphanRecord = nextData[fromPath];
+			if (!orphanRecord?.source) {
+				skipped += 1;
+				continue;
+			}
+
+			nextData[toPath] = mergeModDataRecords(nextData[toPath], orphanRecord);
+			delete nextData[fromPath];
+
+			for (const preset of nextPresets) {
+				const remapped = remapPresetPaths(preset.data || [], fromPath, toPath);
+				if (remapped.changed) {
+					preset.data = remapped.paths;
+				}
+			}
+
+			applied += 1;
+			changed = true;
+		}
+
+		if (!changed) continue;
+
+		parsed.data = nextData;
+		parsed.presets = nextPresets;
+		await writeTextFile(gameReport.configPath, JSON.stringify(parsed, null, 2));
+
+		if (currentGame === gameReport.game) {
+			store.set(DATA, nextData);
+			store.set(PRESETS, nextPresets);
+		}
+	}
+
+	return { applied, skipped, report: effectiveReport };
 }
 
 export async function exportLinkAuditReport(report: LinkAuditReport | null) {

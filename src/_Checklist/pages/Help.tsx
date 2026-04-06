@@ -2,9 +2,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { BANANA_LINK, DISCORD_LINK } from "@/utils/consts";
 import { resetWithBackup } from "@/utils/filesys";
-import { GAME, SOURCE, TARGET, TEXT_DATA, UPDATER_OPEN } from "@/utils/vars";
+import { GAME, SOURCE, TARGET, TEXT_DATA, UPDATER_OPEN, WUWA_MOD_FIXER_OPEN } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { BadgeHelpIcon } from "lucide-react";
+import { BadgeHelpIcon, WrenchIcon } from "lucide-react";
 
 function Help({ setPage }: { setPage: (page: number) => void }) {
 	const [game, setGame] = useAtom(GAME);
@@ -12,6 +12,12 @@ function Help({ setPage }: { setPage: (page: number) => void }) {
 	const setTarget = useSetAtom(TARGET);
 	const textData = useAtomValue(TEXT_DATA);
 	const setUpdaterOpen = useSetAtom(UPDATER_OPEN);
+	const setWuwaModFixerOpen = useSetAtom(WUWA_MOD_FIXER_OPEN);
+	const fixerHelp = textData?._Checklist?._Help?.FixLegacyMods || "Old Wuthering Waves mods not working?";
+	const fixerHelpDesc =
+		textData?._Checklist?._Help?.FixLegacyModsDesc ||
+		"Launch Wuwa Mod Fixer to repair older mods that broke after recent game updates.";
+	const fixerOpenLabel = textData?._Checklist?._Help?.OpenFixer || "Open Fixer";
 	return (
 		<Dialog>
 			<DialogTrigger asChild>
@@ -75,6 +81,24 @@ function Help({ setPage }: { setPage: (page: number) => void }) {
 							{textData._Checklist._Help.Check}
 						</Button>
 					</div>
+					{game === "WW" && (
+						<div className="border-border/40 bg-sidebar/20 flex items-center justify-between gap-3 p-3 py-6 border rounded-md">
+							<div className="text-sm text-left">
+								<h3 className="text-foreground font-medium">{fixerHelp}</h3>
+								<p className="text-muted-foreground text-xs">{fixerHelpDesc}</p>
+							</div>
+							<Button
+								size="sm"
+								className="w-28"
+								onClick={() => {
+									setWuwaModFixerOpen(true);
+								}}
+							>
+								<WrenchIcon className="w-4 h-4 mr-1" />
+								{fixerOpenLabel}
+							</Button>
+						</div>
+					)}
 					<div className="border-border/40 bg-sidebar/20 flex items-center justify-between gap-3 p-3 py-6 border rounded-md">
 						<div className="text-sm text-left">
 							<h3 className="text-foreground font-medium">{textData._Checklist._Help.Backup}</h3>

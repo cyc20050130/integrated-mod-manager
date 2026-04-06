@@ -1,6 +1,7 @@
 import { apiClient } from "@/utils/api";
 import {
 	GAME,
+	INSTALLED_ITEMS,
 	ONLINE_DATA,
 	ONLINE_PATH,
 	ONLINE_SELECTED,
@@ -17,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CardOnline from "./components/CardOnline";
 
 import Carousel from "./components/Carousel";
-import { preventContextMenu } from "@/utils/utils";
+import { isRouteBlacklisted, normalizeModRoute, preventContextMenu } from "@/utils/utils";
 import { LoaderIcon } from "lucide-react";
 import { OnlineMod } from "@/utils/types";
 import { info } from "@/lib/logger";
@@ -34,7 +35,8 @@ function MainOnline() {
 	const [initial, setInitial] = useState(true);
 	const containerRef = useRef(null as any);
 	const carouselRef = useRef(null as any);
-	const nsfw = useAtomValue(SETTINGS).global.nsfw;
+	const settings = useAtomValue(SETTINGS);
+	const nsfw = settings.global.nsfw;
 	const textData = useAtomValue(TEXT_DATA);
 	const [onlineData, setOnlineData] = useAtom(ONLINE_DATA);
 	const onlineType = useAtomValue(ONLINE_TYPE);
@@ -45,6 +47,32 @@ function MainOnline() {
 	const types = useAtomValue(TYPES);
 	const [visibleRange, setVisibleRange] = useState({ start: -1, end: -1 });
 	const game = useAtomValue(GAME);
+	const installedItems = useAtomValue(INSTALLED_ITEMS);
+	const cardCopy = useMemo(
+		() => ({
+			installed: textData.Installed || "Installed",
+			update: textData.Update || "Update",
+			blacklisted: ((textData as Record<string, any>).Blacklisted as string) || "Blacklisted",
+		}),
+		[textData]
+	);
+	const installedStatusByRoute = useMemo(() => {
+		const routeMap = new Map<string, number>();
+		installedItems.forEach((installedItem) => {
+			const route = normalizeModRoute(installedItem.source);
+			if (!route) return;
+			routeMap.set(route, Math.max(routeMap.get(route) || 0, installedItem.modStatus || 0));
+		});
+		return routeMap;
+	}, [installedItems]);
+	const blacklistedRoutes = useMemo(() => {
+		return new Set(
+			(settings.global.onlineBlacklist || [])
+				.filter((entry) => entry.game === game)
+				.map((entry) => normalizeModRoute(entry.route || entry.source))
+				.filter(Boolean)
+		);
+	}, [settings.global.onlineBlacklist, game]);
 	const onModClick = useCallback(
 		(e: MouseEvent, mod: OnlineMod) => {
 			let targetTag = (e.target as HTMLElement).tagName.toLowerCase();
@@ -296,6 +324,10 @@ function MainOnline() {
 				>
 					{filteredOnlineData.map((item, index) => {
 						const isVisible = isItemVisible(index);
+						const modRoute = `${item._sModelName}/${item._idRow}`;
+						const installedStatus = installedStatusByRoute.get(modRoute) || 0;
+						const isBlacklisted =
+							blacklistedRoutes.has(modRoute) || isRouteBlacklisted(settings.global.onlineBlacklist, game, modRoute);
 						return (
 							<motion.div
 								key={`${item._sModelName}-${item._idRow}`}
@@ -311,7 +343,18 @@ function MainOnline() {
 								{isVisible ? (
 									<div className="card-generic card-online"></div>
 								) : (
-									<CardOnline {...item} now={now} blur={nsfw == 1} show={textData._Main._components._Filter.Show} />
+									<CardOnline
+										{...item}
+										now={now}
+										blur={nsfw == 1}
+										show={textData._Main._components._Filter.Show}
+										isInstalled={installedStatus >= 0 && installedStatusByRoute.has(modRoute)}
+										hasUpdate={installedStatus > 0}
+										isBlacklisted={isBlacklisted}
+										installedLabel={cardCopy.installed}
+										updateLabel={cardCopy.update}
+										blacklistedLabel={cardCopy.blacklisted}
+									/>
 								)}
 							</motion.div>
 						);

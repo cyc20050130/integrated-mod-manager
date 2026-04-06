@@ -1,7 +1,7 @@
 import React from "react";
 import { Label } from "@/components/ui/label";
 import { getImageUrl, handleImageError, handleInAppLink } from "@/utils/utils";
-import { Link2Icon, Link2OffIcon, SwordsIcon, UploadIcon } from "lucide-react";
+import { Link2Icon, Link2OffIcon, SwordsIcon, TriangleAlertIcon, UploadIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { openConflict } from "@/utils/vars";
 
@@ -24,9 +24,12 @@ interface CardLocalProps {
 	hasUpdate: boolean;
 	updateAvl: string;
 	inConflict: number;
+	isBlacklisted: boolean;
+	blacklistedLabel: string;
 }
 
-const CardLocal = React.memo(({ item, selected, lastUpdated, hasUpdate, updateAvl, inConflict }: CardLocalProps) => {
+const CardLocal = React.memo(
+	({ item, selected, lastUpdated, hasUpdate, updateAvl, inConflict, isBlacklisted, blacklistedLabel }: CardLocalProps) => {
 	const previewUrl = `${getImageUrl(item.path)}?${lastUpdated}`;
 	return (
 		<div
@@ -35,6 +38,12 @@ const CardLocal = React.memo(({ item, selected, lastUpdated, hasUpdate, updateAv
 				borderColor: item.enabled ? "var(--accent)" : "",
 			}}
 		>
+			{isBlacklisted && (
+				<div className="absolute right-2 top-2 z-10 rounded-full border border-destructive/50 bg-background/75 px-2 py-1 text-[10px] leading-none text-destructive backdrop-blur">
+					<TriangleAlertIcon className="mr-1 inline h-3 w-3" />
+					{blacklistedLabel}
+				</div>
+			)}
 			<div className="relative w-full fadein h-[calc(100%-2.5rem)] flex items-center justify-center duration-200 rounded-t-lg data-gi:rounded-none pointer-events-none overflow-hidden">
 				<img
 					style={{
@@ -72,7 +81,7 @@ const CardLocal = React.memo(({ item, selected, lastUpdated, hasUpdate, updateAv
 					<Link2OffIcon className="text-muted h-4" />
 				)}
 				<Label
-					className="text-ellipsis w-56 overflow-hidden border-0 text-xs pointer-events-none select-none"
+					className="w-56 overflow-hidden border-0 text-xs pointer-events-none select-none truncate"
 					style={{ backgroundColor: "#fff0", filter: item.enabled ? "brightness(1)" : "brightness(0.5) saturate(0.5)" }}
 				>
 					{item.name}
@@ -97,7 +106,8 @@ const CardLocal = React.memo(({ item, selected, lastUpdated, hasUpdate, updateAv
 			)}
 		</div>
 	);
-});
+	}
+);
 
 CardLocal.displayName = "CardLocal";
 

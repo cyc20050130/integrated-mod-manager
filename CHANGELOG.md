@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.1.8 - 2026-04-06
+
+### Added
+- Added blacklist controls for online and local mod detail panels so GameBanana-linked mods can be marked and unmarked directly from either side.
+- Added bundled Wuwa Mod Fixer support so the fixer can be prepared, launched, and resynced from inside IMM.
+
+### Improved
+- Blacklisted mods now keep a visible warning state across the online browser, installed list ordering, and linked local entries that share the same source route.
+- Improved release/runtime config recovery by merging newer configs and backup candidates more defensively during startup.
+
 ## 3.1.7 - 2026-04-04
 
 ### Fixed
