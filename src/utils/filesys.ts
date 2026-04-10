@@ -63,6 +63,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { error, info, warn } from "@/lib/logger";
 import { addToExtracts } from "@/_LeftSidebar/components/Downloads";
 import { normalizeDownloadList, withNormalizedDownloadSettings } from "./downloads";
+import { syncIniStateFromText } from "./iniStateSyncCore.js";
 export async function setGame(game: string) {
 	try {
 		const config = await readTextFile(`config.json`);
@@ -225,6 +226,13 @@ export async function saveConfigs(skip = false, settings = store.get(SETTINGS)) 
 export async function flushRuntimeState(reason = "manual", snapshot: RuntimeStateSnapshot = {}) {
 	info(`[IMM] Flushing runtime state (${reason})...`);
 	await persistConfigs(snapshot);
+}
+export function getD3DXUserIniPath(targetPath = tgt) {
+	const resolvedTarget = String(targetPath || "");
+	if (!resolvedTarget) return "";
+	const parentParts = resolvedTarget.split("\\").slice(0, -1);
+	if (!parentParts.length) return "";
+	return join(...parentParts, "d3dx_user.ini");
 }
 export async function selectPath(
 	options = { multiple: false, directory: false } as {
@@ -1671,69 +1679,51 @@ export async function deleteMod(path: string) {
 		throw error;
 	}
 }
-async function updateDataFromD3DXIni(modPaths: string | string[]) {
-	let mods = [] as string[];
-	if (Array.isArray(modPaths)) {
-		mods = modPaths;
-	} else {
-		mods = [modPaths];
-	}
-	const root = join(...tgt.split("\\").slice(0, -1), "d3dx_user.ini");
-	const lines = [] as string[];
-	if (await exists(root)) {
-		lines.push(
-			...(await readTextFile(root))
-				.toLowerCase()
-				.split("\n")
-				.map((line: string) => line.trim())
-				.filter((line: string) => line && !line.startsWith(";") && line.includes("="))
+function getTrackedMods(modPaths: string[]) {
+	const data = store.get(DATA);
+	const modList = store.get(MOD_LIST);
+	const namespaces = new Map(modList.map((mod) => [mod.path, mod.namespace || ""]));
+	return modPaths.map((modPath) => ({
+		path: modPath,
+		namespace: data[modPath]?.namespace || namespaces.get(modPath) || "",
+	}));
+}
+export async function syncIniStateFromD3DXIni(
+	modPaths?: string | string[],
+	options: {
+		persist?: boolean;
+		rewritePrefs?: boolean;
+		clearPrefsBeforeSync?: boolean;
+		targetPath?: string;
+	} = {}
+) {
+	const mods = (Array.isArray(modPaths) ? modPaths : modPaths ? [modPaths] : store.get(MOD_LIST).map((mod) => mod.path))
+		.map((modPath) => String(modPath || "").trim())
+		.filter((modPath) => modPath);
+	if (!mods.length) return [] as string[];
+
+	const root = getD3DXUserIniPath(options.targetPath);
+	if (!root || !(await exists(root))) return [] as string[];
+	if (options.clearPrefsBeforeSync) {
+		await Promise.all(
+			mods.map((modPath) => remove(join(tgt, managedTGT, PREFS, modPath + ".ini")).catch(() => undefined))
 		);
 	}
-	const data = store.get(DATA);
-	let modified = false;
-	for (let modPath of mods) {
-		data[modPath] = data[modPath] || {};
-		data[modPath].vars = data[modPath].vars || {};
-		try {
-			remove(join(tgt, managedTGT, PREFS, modPath + ".ini"));
-		} catch {}
-		const path = `mods\\${managedTGT}\\${modPath}\\`.toLowerCase();
-		const namespace = data[modPath]?.namespace ? data[modPath].namespace.toLowerCase() + "\\" : "";
-		for (let line of lines) {
-			const mode = line.includes(path) ? 0 : namespace && line.includes(namespace) ? 1 : -1;
-			if (mode == -1) continue;
-			const lineKey = mode ? namespace : path;
-			const [KeyVar, Val] = line
-				.split("=")
-				.map((part: string, i: number) => (i ? part.trim() : part.trim().split(lineKey)[1]));
-			const Var = (mode ? KeyVar : KeyVar.split("\\").pop() || "").toLowerCase().trim();
-			const Key = mode ? "namespace" : KeyVar.split("\\").slice(0, -1).join("\\").toLowerCase().trim();
-			if (Key && Var && Val) {
-				if (!data[modPath].vars.hasOwnProperty(Key)) data[modPath].vars[Key] = {};
-				if (!data[modPath].vars[Key].hasOwnProperty(Var)) data[modPath].vars[Key][Var] = {};
-				data[modPath].vars[Key.trim()][Var.toLowerCase().trim()].state = Val.trim();
-				modified = true;
-			}
-		}
+	const rawIni = await readTextFile(root);
+	const trackedMods = getTrackedMods(mods);
+	const { nextData, changedMods } = syncIniStateFromText(rawIni, store.get(DATA), trackedMods, managedTGT);
+	if (!changedMods.length) return changedMods;
+	store.set(DATA, nextData);
+	if (options.rewritePrefs !== false) {
+		await Promise.all(changedMods.map((modPath) => updatePrefsIniFromData(modPath)));
 	}
-	if (modified) {
-		store.set(DATA, (prev) => {
-			prev = { ...prev };
-			mods.forEach((modPath) => {
-				if (Object.keys(data[modPath].vars || {}).length > 0) {
-					prev[modPath] = {
-						...prev[modPath],
-						vars: data[modPath].vars,
-					} as any;
-				}
-			});
-			return prev;
-		});
-		saveConfigs();
+	if (options.persist !== false) {
+		await saveConfigs();
 	}
-	info("[IMM] Updating data from ini for mod data:", data);
+	info("[IMM] Updated runtime ini state for mods:", changedMods);
+	return changedMods;
 }
-async function updatePrefsIniFromData(modPath: string, oldPath = "") {
+export async function updatePrefsIniFromData(modPath: string, oldPath = "") {
 	const data = store.get(DATA)[modPath];
 	if (!data || !data.vars) return;
 	const [category, name] = modPath.split("\\");
@@ -1828,7 +1818,10 @@ export async function toggleMod(path: string, enabled: boolean, forced = false):
 				}
 			}
 		} else {
-			await updateDataFromD3DXIni(path);
+			await syncIniStateFromD3DXIni(path, {
+				rewritePrefs: false,
+				clearPrefsBeforeSync: true,
+			});
 			try {
 				await remove(modTgt);
 			} catch (err) {

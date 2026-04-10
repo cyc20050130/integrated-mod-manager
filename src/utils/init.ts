@@ -48,6 +48,7 @@ import { Category, Games, Preset, Settings } from "./types";
 import { toResumableDownloadList, withNormalizedDownloadSettings } from "./downloads";
 import { resetPageCounts } from "@/_Main/MainOnline";
 import { info } from "@/lib/logger";
+import { syncIniStateOnce } from "./iniStateSync";
 // import { v2_0_4_migration } from "./filesys";
 let paths = {
 	"": "",
@@ -403,6 +404,7 @@ function removeHelpers() {
 	resetPageCounts();
 }
 export async function launchGame() {
+	await syncIniStateOnce("launch-game");
 	if (await exists(config.XXMI))
 		isGameProcessRunning(config.game).then((running) => {
 			if (!running) {
