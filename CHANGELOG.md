@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.9 - 2026-04-10
+
+### Fixed
+- Persisted live mod variable state from `d3dx_user.ini` while IMM is open, so in-game hotkey outfit and style changes no longer reset on the next launch.
+- Added startup and pre-launch ini state sync to catch the latest XXMI runtime values before the game is started again.
+
 ## 3.1.8 - 2026-04-06
 
 ### Added
