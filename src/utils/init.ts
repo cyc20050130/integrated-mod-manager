@@ -143,13 +143,13 @@ async function safeWriteTextFile(pathLike: string, contents: string) {
 	}
 }
 
-function getDefaultXxmiDirFromAppData(appDataDir: string) {
-	const parentParts = String(appDataDir || "")
-		.split("\\")
-		.filter(Boolean)
-		.slice(0, -1);
-	if (!parentParts.length) return "";
-	return join(...parentParts, "XXMI Launcher");
+function getDefaultXxmiDirCandidatesFromAppData(appDataDir: string) {
+	const normalized = String(appDataDir || "").replaceAll("/", "\\").replace(/\\+$/g, "");
+	if (!normalized) return [] as string[];
+	const directCandidate = join(normalized, "XXMI Launcher");
+	const parentParts = normalized.split("\\").filter(Boolean).slice(0, -1);
+	const siblingCandidate = parentParts.length ? join(...parentParts, "XXMI Launcher") : "";
+	return Array.from(new Set([directCandidate, siblingCandidate].filter(Boolean)));
 }
 
 let paths = {
@@ -734,7 +734,7 @@ export async function main(useGame = "" as Games) {
 		appData = await path.dataDir();
 		cwd = await readRuntimeDataDir();
 		info("[IMM] Runtime data directory:", cwd);
-		const XXMI = getDefaultXxmiDirFromAppData(appData);
+		const xxmiCandidates = getDefaultXxmiDirCandidatesFromAppData(appData);
 		if (!(await safeExists("config.json"))) {
 			store.set(MAIN_FUNC_STATUS, "Creating default config.json");
 			info("[IMM] Creating default config.json...");
@@ -768,8 +768,13 @@ export async function main(useGame = "" as Games) {
 			store.set(FIRST_LOAD, false);
 		}
 		apiClient.setClient(config.clientDate || "");
-		if ((config.XXMI == "" || !(await safeExists(config.XXMI))) && (await safeExists(XXMI))) {
-			config.XXMI = XXMI;
+		if (config.XXMI == "" || !(await safeExists(config.XXMI))) {
+			for (const candidate of xxmiCandidates) {
+				if (await safeExists(candidate)) {
+					config.XXMI = candidate;
+					break;
+				}
+			}
 		}
 		paths.XX = config.XXMI;
 		config.game = useGame || config.game;

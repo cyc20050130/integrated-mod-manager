@@ -6,11 +6,12 @@ function readInitSource() {
 	return readFileSync(new URL("../src/utils/init.ts", import.meta.url), "utf8");
 }
 
-test("default XXMI discovery targets the Roaming sibling directory instead of the app-specific data folder", () => {
+test("default XXMI discovery tests both direct and sibling Roaming candidates", () => {
 	const source = readInitSource();
 
-	assert.match(source, /function getDefaultXxmiDirFromAppData\(/);
-	assert.match(source, /\.split\("\\\\"\)/);
-	assert.match(source, /\.slice\(0, -1\)/);
-	assert.match(source, /join\(\.\.\.parentParts, "XXMI Launcher"\)/);
+	assert.match(source, /function getDefaultXxmiDirCandidatesFromAppData\(/);
+	assert.match(source, /const directCandidate = join\(normalized, "XXMI Launcher"\)/);
+	assert.match(source, /parentParts\.length \? join\(\.\.\.parentParts, "XXMI Launcher"\) : ""/);
+	assert.match(source, /for \(const candidate of xxmiCandidates\)/);
+	assert.match(source, /if \(await safeExists\(candidate\)\)/);
 });
