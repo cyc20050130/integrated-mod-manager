@@ -1,11 +1,11 @@
 {
-	"version": "3.2.1",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Stopped startup from waiting on updater checks, so IMM can finish loading even when update networking is slow or stalled.\",\"Switched updater manifest resolution to the committed repository manifest and corrected signed installer asset URLs.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.1 fixes updater delivery and startup stalls.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.1\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-06T12:00:00Z",
+	"version": "3.2.2",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Prevented startup-time background health checks from overwriting runtime config with default values before initialization completes.\",\"Fixed launch-time config corruption that could clear the remembered game, language, and XXMI path and leave IMM stuck on the loading flow.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.2 fixes startup config corruption that could leave IMM stuck loading.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.2\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-06T12:10:00Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGkxRHUzZVpubUdqZSszLzVTdlZlRTgrdG9pSGg2czFDRjhuZjZiZDU4TmNpM01qYW11ajI0M21vYnUvL1BBOG1VR2o2L1lSWnBYWCtmQ1RZYnhXUkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MDY4MDAwCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMV94NjQtc2V0dXAuZXhlCkF5WUNUV0twM29GU2VKMTBHM1pLcFQzNytTN2tNLzZNWlp3aWhiejZsODdZTkoyV0tMa3pFRVdzV2doUEFZUkx2emxlWG9ZSkllZWFzY0pNcFA2VEF3PT0K",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.1/Integrated.Mod.Manager.IMM._3.2.1_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHBQL3EySmhEOHJqZWpoNlVSbllneU5UekUyMnZjU01xaHgrZW4wcGtXV1czdmY0RzgyU0lnRzZMSGRyWEphRi9IRU1VaTBtNExmcW9GaHBGclJsVEFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MDcwNjg2CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMl94NjQtc2V0dXAuZXhlClJhMGkwc3Y1dU4xMlRjVHdlYmF2Uy95SEV6M2xaQm1QVFBQdjJqMWJMVXpYdjVhbnU5czVUWWR6WkNpSEMwdUNNcjl2U0ZoenBVUWxlcmU3VmJtSkRBPT0K",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.2/Integrated.Mod.Manager.IMM._3.2.2_x64-setup.exe"
 		}
 	}
 }

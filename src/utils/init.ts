@@ -124,6 +124,25 @@ function getErrorMessage(error: unknown) {
 	return String(error || "Update check failed");
 }
 
+async function safeExists(pathLike: string) {
+	try {
+		return await exists(pathLike);
+	} catch (error) {
+		info(`[IMM] exists() check failed for ${pathLike}:`, error);
+		return false;
+	}
+}
+
+async function safeWriteTextFile(pathLike: string, contents: string) {
+	try {
+		await writeTextFile(pathLike, contents);
+		return true;
+	} catch (error) {
+		info(`[IMM] writeTextFile() failed for ${pathLike}:`, error);
+		return false;
+	}
+}
+
 let paths = {
 	"": "",
 	exe: "",
@@ -362,7 +381,7 @@ export async function verifyGameDir(game: Games) {
 export async function initGame(game: RuntimeGame, status = true) {
 	info(`[IMM] Initializing game: ${game}...`);
 	store.set(ONLINE_DATA, {});
-	const savedConfig = (await exists(`config${game}.json`))
+	const savedConfig = (await safeExists(`config${game}.json`))
 		? readJsonText<Partial<RuntimeGameConfig>>(await readTextFile(`config${game}.json`))
 		: {};
 	const mergedSettings = {
@@ -513,7 +532,7 @@ async function initHelpers() {
 export async function checkWWMM() {
 	info("[IMM] Checking for WWMM config...");
 	const wwmmPath = await path.join(await path.localDataDir(), "Wuwa Mod Manager (WWMM)", "config.json");
-	if (await exists(wwmmPath)) {
+	if (await safeExists(wwmmPath)) {
 		//info('exists')
 		return (await readTextFile(wwmmPath)) || null;
 	}
@@ -527,11 +546,11 @@ export async function maintainBackups() {
 	mkdir("backups", { recursive: true });
 	const backupPath = "backups\\AUTO_";
 	for (const file of files) {
-		if (await exists(file)) {
+		if (await safeExists(file)) {
 			try {
 				const data = JSON.parse(await readTextFile(file));
 				delete data.categories;
-				if (await exists(backupPath + file + ".bak")) {
+				if (await safeExists(backupPath + file + ".bak")) {
 					try {
 						const backupData = readJsonText<Record<string, unknown>>(await readTextFile(backupPath + file + ".bak"));
 						if (
@@ -540,34 +559,35 @@ export async function maintainBackups() {
 						) {
 							info(`[IMM] Creating backup for: ${file}...`);
 							await remove(backupPath + file + ".bak.bak").catch(() => undefined);
-							await writeTextFile(backupPath + file + ".bak.bak", await readTextFile(backupPath + file + ".bak"));
-							await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
+							const currentBackupText = await readTextFile(backupPath + file + ".bak");
+							await safeWriteTextFile(backupPath + file + ".bak.bak", currentBackupText);
+							await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 						}
 					} catch {
 						info(`[IMM] Detected corrupted backup file: ${file}.bak, creating new backup...`);
-						await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
+						await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 					}
 				} else {
 					info(`[IMM] Creating initial backup for: ${file}...`);
-					await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
+					await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 				}
 			} catch {
 				info(`[IMM] Detected corrupted config file: ${file}, restoring from backup...`);
 				store.set(MAIN_FUNC_STATUS, `Config file corrupted, restoring from backup`);
-				if (await exists(backupPath + file + ".bak")) {
+				if (await safeExists(backupPath + file + ".bak")) {
 					try {
 						const backupData = readJsonText<Record<string, unknown>>(await readTextFile(backupPath + file + ".bak"));
-						await writeTextFile(file, JSON.stringify(backupData, null, 2));
+						await safeWriteTextFile(file, JSON.stringify(backupData, null, 2));
 						info(`[IMM] Successfully restored backup for: ${file}`);
 					} catch {
 						info(`[IMM] Detected corrupted backup config file: ${file}.bak, restoring from secondary backup...`);
-						if (await exists(backupPath + file + ".bak.bak")) {
+						if (await safeExists(backupPath + file + ".bak.bak")) {
 							try {
 								const backupData2 = readJsonText<Record<string, unknown>>(
 									await readTextFile(backupPath + file + ".bak.bak")
 								);
-								await writeTextFile(file, JSON.stringify(backupData2, null, 2));
-								await writeTextFile(backupPath + file + ".bak", JSON.stringify(backupData2, null, 2));
+								await safeWriteTextFile(file, JSON.stringify(backupData2, null, 2));
+								await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(backupData2, null, 2));
 								info(`[IMM] Successfully restored secondary backup for: ${file}`);
 							} catch (e) {
 								info(`[IMM] Failed to restore secondary backup for: ${file}:`, e);
@@ -603,6 +623,9 @@ let cwd = "";
 let runtimeDirPromise: Promise<string> | null = null;
 export function getCwd() {
 	return cwd;
+}
+export function isAppInitialized() {
+	return isInitialized;
 }
 async function readRuntimeDataDir() {
 	if (!runtimeDirPromise) {
@@ -692,77 +715,88 @@ export async function refreshAppUpdateCheck(openUpdater = false) {
 	}
 }
 export async function main(useGame = "" as Games) {
-	store.set(MAIN_FUNC_STATUS, "Initializing App");
-	isInitialized = false;
-	info("[IMM] Initializing application...");
-	invoke("get_username");
-	resetAtoms();
-	removeHelpers();
-	appData = await path.dataDir();
-	cwd = await readRuntimeDataDir();
-	const XXMI = `${appData}\\XXMI Launcher`;
-	if (!(await exists("config.json"))) {
-		store.set(MAIN_FUNC_STATUS, "Creating default config.json");
-		info("[IMM] Creating default config.json...");
-		await writeTextFile("config.json", JSON.stringify(defConfig, null, 2));
-	}
-	await maintainBackups();
-	const rawConfig = readJsonText<Record<string, unknown>>(await readTextFile("config.json"));
-	config = sanitizeGlobalSettings(safeLoadJson(structuredClone(defConfig), rawConfig));
-	if (compareVersions(config.version || "0.0.0", "2.2.0") < 0) {
-		config.chkModUpdates = true;
-		config.bgType = 1;
-	}
-	config = sanitizeGlobalSettings(config);
-	info("[IMM] Loaded config:", config);
-	store.set(MAIN_FUNC_STATUS, "Config loaded");
-	const savedLang = store.get(SAVED_LANG);
-	if (!savedLang && config.lang) {
-		store.set(SAVED_LANG, config.lang);
-	}
-	config.lang = store.get(SAVED_LANG) || config.lang;
-	if (!config.XXMI && !config.game && !config.lang) {
-		store.set(MAIN_FUNC_STATUS, "First time setup detected, checking for WWMM");
-		info("[IMM] First time setup detected, checking for WWMM...");
-		store.set(FIRST_LOAD, true);
-		const temp = await checkWWMM();
-		if (temp) config = await updateConfig(JSON.parse(temp));
-	} else {
-		store.set(FIRST_LOAD, false);
-	}
-	apiClient.setClient(config.clientDate || "");
-	if ((config.XXMI == "" || !(await exists(config.XXMI))) && (await exists(XXMI))) {
-		config.XXMI = XXMI;
-	}
-	paths.XX = config.XXMI;
-	config.game = useGame || config.game;
-	if (sessionStorage.getItem("imm-deep-link-game")) {
-		config.game = sessionStorage.getItem("imm-deep-link-game") as Games;
-		config.game = GAMES.includes(config.game) ? config.game : "";
-		sessionStorage.removeItem("imm-deep-link-game");
-	}
+	try {
+		store.set(MAIN_FUNC_STATUS, "Initializing App");
+		isInitialized = false;
+		info("[IMM] Initializing application...");
+		invoke("get_username");
+		resetAtoms();
+		removeHelpers();
+		appData = await path.dataDir();
+		cwd = await readRuntimeDataDir();
+		info("[IMM] Runtime data directory:", cwd);
+		const XXMI = `${appData}\\XXMI Launcher`;
+		if (!(await safeExists("config.json"))) {
+			store.set(MAIN_FUNC_STATUS, "Creating default config.json");
+			info("[IMM] Creating default config.json...");
+			await writeTextFile("config.json", JSON.stringify(defConfig, null, 2));
+		}
+		await maintainBackups();
+		info("[IMM] Reading runtime config.json...");
+		const rawConfigText = await readTextFile("config.json");
+		info("[IMM] Runtime config.json length:", rawConfigText.length);
+		const rawConfig = readJsonText<Record<string, unknown>>(rawConfigText);
+		config = sanitizeGlobalSettings(safeLoadJson(structuredClone(defConfig), rawConfig));
+		if (compareVersions(config.version || "0.0.0", "2.2.0") < 0) {
+			config.chkModUpdates = true;
+			config.bgType = 1;
+		}
+		config = sanitizeGlobalSettings(config);
+		info("[IMM] Loaded config:", config);
+		store.set(MAIN_FUNC_STATUS, "Config loaded");
+		const savedLang = store.get(SAVED_LANG);
+		if (!savedLang && config.lang) {
+			store.set(SAVED_LANG, config.lang);
+		}
+		config.lang = store.get(SAVED_LANG) || config.lang;
+		if (!config.XXMI && !config.game && !config.lang) {
+			store.set(MAIN_FUNC_STATUS, "First time setup detected, checking for WWMM");
+			info("[IMM] First time setup detected, checking for WWMM...");
+			store.set(FIRST_LOAD, true);
+			const temp = await checkWWMM();
+			if (temp) config = await updateConfig(JSON.parse(temp));
+		} else {
+			store.set(FIRST_LOAD, false);
+		}
+		apiClient.setClient(config.clientDate || "");
+		if ((config.XXMI == "" || !(await safeExists(config.XXMI))) && (await safeExists(XXMI))) {
+			config.XXMI = XXMI;
+		}
+		paths.XX = config.XXMI;
+		config.game = useGame || config.game;
+		if (sessionStorage.getItem("imm-deep-link-game")) {
+			config.game = sessionStorage.getItem("imm-deep-link-game") as Games;
+			config.game = GAMES.includes(config.game) ? config.game : "";
+			sessionStorage.removeItem("imm-deep-link-game");
+		}
 		if (config.game) apiClient.setGame(config.game as RuntimeGame);
-	if (compareVersions(config.version || "0.0.0", "2.1.0") < 0) {
-		config = await updateConfig();
-	}
-	info("[IMM] Saving config...");
-	await writeTextFile("config.json", JSON.stringify(config, null, 2));
-	await readXXMIConfig(config.XXMI || "");
-	store.set(MAIN_FUNC_STATUS, "Initializing game");
-	info("[IMM] Initializing game...");
-	if (config.game) configXX = await initGame(config.game as RuntimeGame);
-	info("[IMM] Setting window type...");
-	if (config.winType > 1) setWindowType(config.winType);
-	const bg = document.querySelector("body");
-	if (bg)
-		bg.style.backgroundColor = "color-mix(in oklab, var(--background) " + config.bgOpacity * 100 + "%, transparent)";
+		if (compareVersions(config.version || "0.0.0", "2.1.0") < 0) {
+			config = await updateConfig();
+		}
+		info("[IMM] Saving config...");
+		await writeTextFile("config.json", JSON.stringify(config, null, 2));
+		await readXXMIConfig(config.XXMI || "");
+		store.set(MAIN_FUNC_STATUS, "Initializing game");
+		info("[IMM] Initializing game...");
+		if (config.game) configXX = await initGame(config.game as RuntimeGame);
+		info("[IMM] Setting window type...");
+		if (config.winType > 1) setWindowType(config.winType);
+		const bg = document.querySelector("body");
+		if (bg)
+			bg.style.backgroundColor = "color-mix(in oklab, var(--background) " + config.bgOpacity * 100 + "%, transparent)";
 
-	store.set(SETTINGS, (prev) => ({
-		global: sanitizeGlobalSettings({ ...prev.global, ...config }),
-		game: { ...prev.game, ...configXX.settings },
-	}));
-	initHelpers();
-	isInitialized = true;
-	store.set(MAIN_FUNC_STATUS, "fin");
-	void refreshAppUpdateCheck(false);
+		store.set(SETTINGS, (prev) => ({
+			global: sanitizeGlobalSettings({ ...prev.global, ...config }),
+			game: { ...prev.game, ...configXX.settings },
+		}));
+		initHelpers();
+		isInitialized = true;
+		store.set(MAIN_FUNC_STATUS, "fin");
+		void refreshAppUpdateCheck(false);
+	} catch (error) {
+		const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
+		info("[IMM] main() failed:", message);
+		store.set(MAIN_FUNC_STATUS, "Startup failed");
+		store.set(ERR, message);
+	}
 }

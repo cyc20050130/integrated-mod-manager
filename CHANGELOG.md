@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.2 - 2026-05-06
+
+### Fixed
+- Prevented startup-time background health checks from overwriting runtime config with default values before initialization completes.
+- Stopped launch-time config corruption that could clear the remembered game, language, and XXMI path and leave IMM stuck on the loading/intro flow.
+
 ## 3.2.1 - 2026-05-06
 
 ### Fixed

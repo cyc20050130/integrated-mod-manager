@@ -33,7 +33,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { compareVersions, join, sanitizeFileName, sanitizeGlobalSettings } from "./utils";
-import { main, updateConfig } from "./init";
+import { isAppInitialized, main, updateConfig } from "./init";
 import { addToast } from "@/_Toaster/ToastProvider";
 import MiniSearch from "minisearch";
 import {
@@ -206,6 +206,7 @@ async function persistConfigs(snapshot: RuntimeStateSnapshot = {}, skip = false)
 }
 export async function saveConfigs(skip = false, settings = store.get(SETTINGS)) {
 	info("[IMM] Saving configs...");
+	if (!isAppInitialized()) return;
 	await persistConfigs({ settings }, skip);
 }
 export async function flushRuntimeState(reason = "manual", snapshot: RuntimeStateSnapshot = {}) {
