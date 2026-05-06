@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.1 - 2026-05-06
+
+### Fixed
+- Stopped startup from waiting on the updater check, so IMM can finish loading even if update networking is slow or stuck.
+- Switched updater manifest resolution to the committed repository manifest and corrected installer asset URLs for signed update downloads.
+
 ## 3.2.0 - 2026-04-27
 
 ### Added

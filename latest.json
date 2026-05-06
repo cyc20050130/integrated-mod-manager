@@ -1,11 +1,11 @@
 {
-  "version": "3.2.0",
-  "notes": "{\"major\":[\"Added CI coverage for lint, tests, frontend build, and Rust library tests.\"],\"minor\":[\"Hardened online detail HTML rendering with DOMPurify sanitization.\",\"Unified WW online now avoids production fallback to local dev fixtures and reports unsupported temp duplicate comparison explicitly.\"],\"patch\":[\"Added noreferrer/noopener to external links.\",\"Narrowed Tauri asset, fs, opener, and devtools permissions for release builds.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.0 focuses on release hardening, CI, and safer online content rendering.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.0\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-  "pub_date": "2026-04-27T00:00:00Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGtxRmRGUnBCTHZzbXA5S3YyVXZRQUtYeHZSeHkwRVFGTDhVZlRON2Y1aWQzbkxKZ09HeVVITUVpZVRWZTIvNWMzZXlOUkszRWExdXQ4TmJqc3N4M0F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc3MjkwODAyCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMF94NjQtc2V0dXAuZXhlCnRvTVc4TmRLUDIreWRqY3EyMlIyZmxQMS9nMytTdVFKTmo4K3B3MzVUZ2x5alJRa3g0Rm1GbFliQ3M0Yjljc0trMkd6ZHFweDlYbkpJSzhKZzBJSER3PT0K",
-      "url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.0/Integrated.Mod.Manager.IMM._3.2.0_x64-setup.exe"
-    }
-  }
+	"version": "3.2.1",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Stopped startup from waiting on updater checks, so IMM can finish loading even when update networking is slow or stalled.\",\"Switched updater manifest resolution to the committed repository manifest and corrected signed installer asset URLs.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.1 fixes updater delivery and startup stalls.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.1\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-06T12:00:00Z",
+	"platforms": {
+		"windows-x86_64": {
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGkxRHUzZVpubUdqZSszLzVTdlZlRTgrdG9pSGg2czFDRjhuZjZiZDU4TmNpM01qYW11ajI0M21vYnUvL1BBOG1VR2o2L1lSWnBYWCtmQ1RZYnhXUkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MDY4MDAwCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMV94NjQtc2V0dXAuZXhlCkF5WUNUV0twM29GU2VKMTBHM1pLcFQzNytTN2tNLzZNWlp3aWhiejZsODdZTkoyV0tMa3pFRVdzV2doUEFZUkx2emxlWG9ZSkllZWFzY0pNcFA2VEF3PT0K",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.1/Integrated.Mod.Manager.IMM._3.2.1_x64-setup.exe"
+		}
+	}
 }
