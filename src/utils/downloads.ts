@@ -51,7 +51,7 @@ function ensureStatus(status: unknown): DownloadItem["status"] {
 	return "pending";
 }
 
-function normalizeItem(item: any): DownloadItem | null {
+function normalizeItem(item: Record<string, unknown> | null | undefined): DownloadItem | null {
 	if (!item || typeof item !== "object") return null;
 	const name = String(item.name || "").trim();
 	const file = String(item.file || "").trim();
@@ -100,10 +100,11 @@ function normalizeItemArray(value: unknown): DownloadItem[] {
 	});
 }
 
-export function normalizeDownloadList(raw: any): DownloadList {
-	const pendingFromQueue = normalizeItemArray(raw?.queue).map((item) => ({ ...item, status: "pending" as const }));
+export function normalizeDownloadList(raw: unknown): DownloadList {
+	const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+	const pendingFromQueue = normalizeItemArray(source.queue).map((item) => ({ ...item, status: "pending" as const }));
 
-	const downloadingRaw = raw?.downloading;
+	const downloadingRaw = source.downloading;
 	const downloadingItems = Array.isArray(downloadingRaw)
 		? normalizeItemArray(downloadingRaw)
 		: downloadingRaw
@@ -111,9 +112,9 @@ export function normalizeDownloadList(raw: any): DownloadList {
 			: [];
 	const downloading = downloadingItems.map((item) => ({ ...item, status: "downloading" as const }));
 
-	const extracting = normalizeItemArray(raw?.extracting).map((item) => ({ ...item, status: "extracting" as const }));
-	const completed = normalizeItemArray(raw?.completed).map((item) => ({ ...item, status: "completed" as const }));
-	const failed = normalizeItemArray(raw?.failed).map((item) => ({ ...item, status: "failed" as const }));
+	const extracting = normalizeItemArray(source.extracting).map((item) => ({ ...item, status: "extracting" as const }));
+	const completed = normalizeItemArray(source.completed).map((item) => ({ ...item, status: "completed" as const }));
+	const failed = normalizeItemArray(source.failed).map((item) => ({ ...item, status: "failed" as const }));
 
 	return {
 		queue: pendingFromQueue,
@@ -124,7 +125,7 @@ export function normalizeDownloadList(raw: any): DownloadList {
 	};
 }
 
-export function toResumableDownloadList(raw: any): DownloadList {
+export function toResumableDownloadList(raw: unknown): DownloadList {
 	const normalized = normalizeDownloadList(raw);
 	const queue = normalized.queue.map((item) => ({
 		...item,

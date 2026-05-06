@@ -2,15 +2,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+	GAME,
 	MOD_LIST,
 	// LEFT_SIDEBAR_OPEN,
 	ONLINE,
 	ONLINE_DATA,
 	ONLINE_PATH,
+	ONLINE_SOURCE,
+	ONLINE_SELECTED,
 	ONLINE_SORT,
 	ONLINE_TYPE,
 	// RIGHT_SIDEBAR_OPEN,
-	// RIGHT_SLIDEOVER_OPEN,
+	RIGHT_SLIDEOVER_OPEN,
 	SEARCH,
 	SORT,
 	TEXT_DATA,
@@ -27,41 +30,55 @@ import {
 	SearchIcon,
 	ThumbsUpIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Notice from "./Notice";
 // import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { addToast } from "@/_Toaster/ToastProvider";
 import { refreshModList } from "@/utils/filesys";
 import { SORT_OPTIONS } from "@/utils/consts";
 import { handleInAppLink } from "@/utils/utils";
+import { buildUnifiedCardRoute, toOnlineListCard, type OnlineSourceId } from "@/utils/unifiedOnline";
+import { buildUnifiedOnlineCacheKey, listUnifiedWwCards, shouldUseUnifiedWwOnline } from "@/utils/unifiedOnlineBridge";
 const searched = {
 	online: "",
 	offline: "",
 };
+
+const DEV_UNIFIED_CARD_ID = "gamebanana:camellya-blue-dress";
+const DEV_UNIFIED_AUTO_OPEN_KEY = "imm-dev-ww-unified-auto-opened";
+const isDevRuntime =
+	typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+
 function TopBar() {
 	// const [leftSidebarOpen, setLeftSidebarOpen] = useAtom(LEFT_SIDEBAR_OPEN);
 	// const [rightSidebarOpen, setRightSidebarOpen] = useAtom(RIGHT_SIDEBAR_OPEN);
 	// const [rightSlideOverOpen, setRightSlideOverOpen] = useAtom(RIGHT_SLIDEOVER_OPEN);
+	const [online, setOnline] = useAtom(ONLINE);
 	const [onlineType, setOnlineType] = useAtom(ONLINE_TYPE);
 	const [onlineSort, setOnlineSort] = useAtom(ONLINE_SORT);
 	const [onlinePath, setOnlinePath] = useAtom(ONLINE_PATH);
+	const [onlineSource, setOnlineSource] = useAtom(ONLINE_SOURCE);
 	const [sort, setSort] = useAtom(SORT);
 	const [popoverOpen, setPopoverOpen] = useState(false);
 	const [search, setSearch] = useAtom(SEARCH);
 	const [term, setTerm] = useState("");
 	const textData = useAtomValue(TEXT_DATA);
-	const online = useAtomValue(ONLINE);
+	const game = useAtomValue(GAME);
 	const setModList = useSetAtom(MOD_LIST);
 	const setOnlineData = useSetAtom(ONLINE_DATA);
+	const setOnlineSelected = useSetAtom(ONLINE_SELECTED);
+	const setRightSlideOverOpen = useSetAtom(RIGHT_SLIDEOVER_OPEN);
+	const devUnifiedAutoOpenPendingRef = useRef(false);
+
 	useEffect(() => {
 		const handler = setTimeout(
 			() => {
 				if (term?.startsWith("http")) {
 					handleInAppLink(term);
 					const searchInput = (document.getElementById("search-input") as HTMLInputElement) || null;
-					if(searchInput){
+					if (searchInput) {
 						searchInput.value = "";
-					searchInput.blur();
+						searchInput.blur();
 					}
 					if (online) setOnlinePath("home&_type=" + onlineType);
 					else setSearch("");
@@ -80,9 +97,9 @@ function TopBar() {
 		return () => {
 			clearTimeout(handler);
 		};
-	}, [term]);
+	}, [online, onlineType, setOnlinePath, setSearch, term]);
 	useEffect(() => {
-		let searchInput = (document.getElementById("search-input") as HTMLInputElement) || null;
+		const searchInput = (document.getElementById("search-input") as HTMLInputElement) || null;
 		if (searchInput) {
 			searched[online ? "offline" : "online"] = online
 				? search
@@ -91,7 +108,7 @@ function TopBar() {
 					: "";
 			searchInput.value = online ? searched.online : searched.offline;
 		}
-	}, [online]);
+	}, [online, onlinePath, search]);
 	useEffect(() => {
 		let searchInput = null as HTMLInputElement | null;
 		const handleKeyDown = (event: KeyboardEvent) => {
@@ -113,7 +130,88 @@ function TopBar() {
 		};
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [online]);
+	}, [online, onlineType, setOnlinePath, setSearch]);
+	const openDevUnifiedDetail = useCallback(async (preferredSourceId: OnlineSourceId | null = null) => {
+		if (!shouldUseUnifiedWwOnline(game)) {
+			return;
+		}
+
+		const devPath = "home&type=Mod";
+		const devSource = "all" as const;
+		setOnline(true);
+		setOnlineType("Mod");
+		setOnlineSort("");
+		setOnlineSource(devSource);
+		setOnlinePath(devPath);
+
+		try {
+			const unifiedCards = await listUnifiedWwCards({
+				path: devPath,
+				source: devSource,
+			});
+			const targetCard =
+				(preferredSourceId
+					? unifiedCards.find((card) => card.sources.some((source) => source.sourceId === preferredSourceId))
+					: null) ||
+				unifiedCards.find((card) => card.cardId === DEV_UNIFIED_CARD_ID) ||
+				unifiedCards.find(
+					(card) =>
+						card.primarySourceId === "gamebanana" &&
+						card.sources.some((source) => source.sourceId === "gamebanana")
+				) ||
+				unifiedCards[0];
+
+			if (!targetCard) {
+				addToast({
+					type: "error",
+					message: "开发态 unified 调试卡片未找到",
+				});
+				return;
+			}
+
+			const cacheKey = buildUnifiedOnlineCacheKey(devPath, devSource);
+			const selectedRoute = buildUnifiedCardRoute(targetCard.cardId);
+			const preferredSource =
+				preferredSourceId && targetCard.sources.some((source) => source.sourceId === preferredSourceId)
+					? preferredSourceId
+					: null;
+			const selectedItem = {
+				...toOnlineListCard(targetCard),
+				...(preferredSource ? { _unifiedPreferredSourceId: preferredSource } : {}),
+			};
+			setOnlineData((prev) => ({
+				...prev,
+				[cacheKey]: unifiedCards.map(toOnlineListCard),
+				[selectedRoute]: selectedItem,
+			}));
+			setOnlineSelected(selectedRoute);
+			setRightSlideOverOpen(true);
+			addToast({
+				type: "info",
+				message: `已打开开发态 unified 详情：${targetCard.displayName}${preferredSource ? ` (${preferredSource})` : ""}`,
+			});
+		} catch (error) {
+			console.error("Error opening dev unified detail:", error);
+			addToast({
+				type: "error",
+				message: "打开开发态 unified 详情失败",
+			});
+		}
+	}, [game, setOnline, setOnlineData, setOnlinePath, setOnlineSelected, setOnlineSort, setOnlineSource, setOnlineType, setRightSlideOverOpen]);
+	useEffect(() => {
+		if (!isDevRuntime || !shouldUseUnifiedWwOnline(game) || typeof sessionStorage === "undefined") {
+			return;
+		}
+		if (sessionStorage.getItem(DEV_UNIFIED_AUTO_OPEN_KEY) === "done" || devUnifiedAutoOpenPendingRef.current) {
+			return;
+		}
+
+		devUnifiedAutoOpenPendingRef.current = true;
+		void openDevUnifiedDetail().finally(() => {
+			sessionStorage.setItem(DEV_UNIFIED_AUTO_OPEN_KEY, "done");
+			devUnifiedAutoOpenPendingRef.current = false;
+		});
+	}, [game, openDevUnifiedDetail]);
 	return (
 		<div className="text-accent min-h-16 flex items-center justify-center w-full h-16 gap-2 p-2">
 			<div className="bg-sidebar button-like flex items-center justify-between w-full h-full px-3 py-1 overflow-hidden border rounded-lg">
@@ -256,13 +354,44 @@ function TopBar() {
 				}
 			</div>
 			<Notice />
+			{isDevRuntime && shouldUseUnifiedWwOnline(game) && (
+				<>
+					<Button
+						onClick={() => {
+							void openDevUnifiedDetail();
+						}}
+						className="bg-sidebar flex items-center justify-center min-w-fit h-12 gap-0 duration-200 border rounded-lg px-3 text-xs"
+					>
+						调试 GB 复用
+					</Button>
+					<Button
+						onClick={() => {
+							void openDevUnifiedDetail("hui");
+						}}
+						className="bg-sidebar flex items-center justify-center min-w-fit h-12 gap-0 duration-200 border rounded-lg px-3 text-xs"
+					>
+						调试 Hui 通用
+					</Button>
+					<Button
+						onClick={() => {
+							void openDevUnifiedDetail("keke");
+						}}
+						className="bg-sidebar flex items-center justify-center min-w-fit h-12 gap-0 duration-200 border rounded-lg px-3 text-xs"
+					>
+						调试 Keke 通用
+					</Button>
+				</>
+			)}
 			<Button
 				onClick={() => {
-					if (online) {
+				if (online) {
 						const curPath = onlinePath;
+						const cacheKey = shouldUseUnifiedWwOnline(game)
+							? buildUnifiedOnlineCacheKey(curPath, onlineSource)
+							: curPath;
 						setOnlinePath("");
 						setOnlineData((prev) => {
-							delete prev[curPath];
+							delete prev[cacheKey];
 							if (curPath.startsWith("home")) delete prev.banner;
 							return { ...prev };
 						});

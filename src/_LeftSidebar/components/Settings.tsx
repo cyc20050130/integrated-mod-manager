@@ -60,8 +60,8 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 let bg: HTMLBodyElement | null = null;
-let keys = [] as any[];
-let keysdown = [] as any[];
+let keys: string[] = [];
+let keysdown: string[] = [];
 function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	const textData = useAtomValue(TEXT_DATA);
 	const customMode = useAtomValue(XXMI_MODE);
@@ -97,7 +97,11 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	};
 	const importConfig = async () => {
 		try {
-			const dialogOptions: any = {
+			const dialogOptions: {
+				title: string;
+				filters: { name: string; extensions: string[] }[];
+				defaultPath?: string;
+			} = {
 				title: textData._LeftSideBar._components._Settings._ImportExport.ImportPop || "Import Config",
 				filters: [
 					{
@@ -121,7 +125,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 					addToast({ type: "error", message: textData._Toasts.InvalidConfig });
 				}
 			}
-		} catch (error) {
+		} catch {
 			addToast({ type: "error", message: textData._Toasts.ErrorImporting });
 		}
 	};
@@ -491,13 +495,13 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<Tabs
 												defaultValue={settings.game.hotReload.toString()}
 												className="w-full"
-												onValueChange={(e: any) => {
-													e = parseInt(e) as 0 | 1 | 2;
+												onValueChange={(e) => {
+													const nextValue = Number.parseInt(e, 10) as 0 | 1 | 2;
 													setSettings((prev) => {
-														prev.game.hotReload = e;
+														prev.game.hotReload = nextValue;
 														return { ...prev };
 													});
-													setHotreload(e, settings.global.game, target);
+													setHotreload(nextValue, settings.global.game, target);
 													saveConfigs();
 												}}
 											>
@@ -551,7 +555,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 														: {}
 												}
 												onValueChange={(e) => {
-													let val = parseInt(e) as 0 | 1 | 2;
+													const val = parseInt(e) as 0 | 1 | 2;
 													if (val == 2 || settings.game.launch == 2) setPrePostLaunch(settings.global.game, val == 2);
 													if (val == 2) {
 														setAlertType("xxmi");
@@ -735,9 +739,9 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 													<div className="flex flex-col gap-1">
 														<div>{textData._LeftSideBar._components._Settings._HotKey.HKMsg1}</div>
 														<div>
-															{textData._LeftSideBar._components._Settings._HotKey.HKMsg2} <b>'IMM'</b>{" "}
+															{textData._LeftSideBar._components._Settings._HotKey.HKMsg2} <b>&apos;IMM&apos;</b>{" "}
 															{textData._LeftSideBar._components._Settings._HotKey.HKMsg3}{" "}
-															<b>'{textData._LeftSideBar._components._Settings._AutoReload.OnFocus}'</b>
+															<b>&apos;{textData._LeftSideBar._components._Settings._AutoReload.OnFocus}&apos;</b>
 														</div>
 														<Separator />
 														<div>{textData._LeftSideBar._components._Settings._HotKey.HKMsg4}</div>
@@ -756,7 +760,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 										<div className="max-h-51 flex flex-col w-full h-full gap-1 p-2 ml-2 overflow-x-hidden overflow-y-auto">
 											{presets.length > 0 ? (
 												presets.map((preset, index) => (
-													<div className="flex flex-col items-center justify-between w-full h-16 gap-2">
+													<div key={preset.name || `preset-${index}`} className="flex flex-col items-center justify-between w-full h-16 gap-2">
 														<Input
 															className="w-full text-muted-foreground text-ellipsis h-10 p-0 overflow-hidden break-words border-0"
 															style={{ backgroundColor: "#0000" }}
@@ -779,8 +783,8 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 																	keysdown = [];
 																	keys = [];
 																} else {
-																	let next: any = [];
-																	let key = processHotkeyCode(e.code)
+																	let next: string[] = [];
+																	const key = processHotkeyCode(e.code)
 																		.split("")
 																		.map((x, i) => (i == 0 ? x.toUpperCase() : x))
 																		.join("");
@@ -798,8 +802,8 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 															}}
 															onKeyUpCapture={(e) => {
 																if (e.code == "Backspace" || e.code == "Escape") return;
-																let key = e.code;
-																let index = keysdown.indexOf(key);
+																const key = e.code;
+																const index = keysdown.indexOf(key);
 																if (index > -1) keysdown.splice(index, 1);
 																if (keysdown.length == 0) {
 																	keys = [];

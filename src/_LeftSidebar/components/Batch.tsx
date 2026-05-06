@@ -12,6 +12,8 @@ import {
 	addToBatchPreview,
 	changeModName,
 	folderSelector,
+	guardedRemove,
+	guardedRename,
 	refreshModList,
 	saveConfigs,
 	sourceBatchPreview,
@@ -20,7 +22,6 @@ import {
 import { join } from "@/utils/hotreload";
 import { setCategories } from "@/utils/init";
 import { CATEGORIES, MOD_LIST, SETTINGS, SOURCE, TARGET, TEXT_DATA } from "@/utils/vars";
-import { remove, rename } from "@tauri-apps/plugin-fs";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
@@ -39,7 +40,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { JSX, useCallback, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, JSX, useEffect, useState } from "react";
 import { error, info } from "@/lib/logger";
 import { cn } from "@/lib/utils.ts";
 
@@ -56,16 +57,17 @@ type BatchNode = {
 function editChild(name: string, parent: string[], treeData: BatchNode[], children: BatchNode[]): BatchNode[] {
 	return treeData
 		? treeData.map((node) => {
-				if (node.name === name && node.parent === parent.join("\\")) {
-					return {
-						...node,
-						children,
-					};
-				} else if (node.children) {
-					return { ...node, children: editChild(name, parent, node.children, children) };
-				}
-				return node;
-		  })
+			if (node.name === name && node.parent === parent.join("\\")) {
+				return {
+					...node,
+					children,
+				};
+			}
+			if (node.children) {
+				return { ...node, children: editChild(name, parent, node.children, children) };
+			}
+			return node;
+		})
 		: [];
 }
 function getChildrenAtPath(nodes: BatchNode[], indexPath: number[]): BatchNode[] {
@@ -79,19 +81,20 @@ function getChildrenAtPath(nodes: BatchNode[], indexPath: number[]): BatchNode[]
 	}
 	return current?.children || [];
 }
-function normalizeManagedMods(targets: string[], tree: BatchNode[], categories: any[]): string[] {
+type CategoryOption = { _sName: string; _sIconUrl?: string };
+
+function normalizeManagedMods(targets: string[], tree: BatchNode[], categories: CategoryOption[]): string[] {
 	const normalized: Set<string> = new Set();
-	categories = [...categories.map((cat) => cat._sName), UNCATEGORIZED];
+	let categoryNames = [...categories.map((cat) => cat._sName), UNCATEGORIZED];
 	if (!targets.includes(managedSRC)) {
-		categories = targets.filter((t) => t.split("\\").length == 2).map((t) => t.split("\\")[1]);
+		categoryNames = targets.filter((t) => t.split("\\").length == 2).map((t) => t.split("\\")[1]);
 		targets.forEach((t) => {
 			if (t.split("\\").length == 3) normalized.add(t);
 		});
 		// info(cats,mods);
 	}
 	function handleCategories(category: BatchNode) {
-		// const isValid = categories.some((cat) => cat === category.name) ;
-		if (categories.includes(category.name) && category.name !== RESTORE) {
+		if (categoryNames.includes(category.name) && category.name !== RESTORE) {
 			category.children?.forEach((mod) => {
 				normalized.add(mod.path);
 			});
@@ -117,83 +120,48 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	const [alertOpen, setAlertOpen] = useState(false);
 	const [popoverOpen, setPopoverOpen] = useState(false);
 	const [settings, setSettings] = useAtom(SETTINGS);
-	const customCategories = settings.game.customCategories || ({} as any);
+	const customCategories = settings.game.customCategories || ({} as Record<string, { _sIconUrl: string }>);
 	const textData = useAtomValue(TEXT_DATA);
 	const [treeData, setTreeData] = useState<BatchNode[]>([]);
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [checked, setChecked] = useState<Set<string>>(new Set());
 	const [shiftDown, setShiftDown] = useState<boolean>(false);
 	const setModList = useSetAtom(MOD_LIST);
-	const [curSelectedIndices, setCurSelectedIndices] = useState<number[]>([]);
+	const [, setCurSelectedIndices] = useState<number[]>([]);
 	const [isMaximized, setIsMaximized] = useState<boolean>(false);
 	const [newCategory, setNewCategory] = useState<string>("");
 	const source = useAtomValue(SOURCE);
 	const target = useAtomValue(TARGET);
 	const categories = useAtomValue(CATEGORIES);
-	useEffect(() => {
-		if (checked.size === 0 && curSelectedIndices.length > 0) {
-			setCurSelectedIndices([]);
-			prevSelectedIndices = [];
-		} else {
-			if (shiftDown && prevSelectedIndices.length > 0 && curSelectedIndices.length > 0) {
-				const prevPath = [...prevSelectedIndices];
-				const curPath = [...curSelectedIndices];
-				const maxPrefix = Math.min(prevPath.length, curPath.length);
-				let prefixLen = 0;
-				while (prefixLen < maxPrefix && prevPath[prefixLen] === curPath[prefixLen]) {
-					prefixLen++;
-				}
-				const common = prevPath.slice(0, prefixLen);
-				const prevRemainder = prevPath.slice(prefixLen);
-				const curRemainder = curPath.slice(prefixLen);
-				const sameDepth = prevRemainder.length === curRemainder.length;
-				if (sameDepth && prevRemainder.length === 1 && curRemainder.length === 1) {
-					const siblings = getChildrenAtPath(treeData, common);
-					if (siblings.length > 0) {
-						const startIndex = Math.min(prevRemainder[0], curRemainder[0]);
-						const endIndex = Math.max(prevRemainder[0], curRemainder[0]);
-						const newChecked = new Set(checked);
-						let changed = false;
-						for (let i = startIndex; i <= endIndex; i++) {
-							const node = siblings[i];
-							if (!node) continue;
-							if (!newChecked.has(node.path)) {
-								newChecked.add(node.path);
-								changed = true;
-							}
-						}
-						if (changed) {
-							setChecked(newChecked);
-						}
-					}
-				}
-				prevSelectedIndices = [...curPath];
-			} else {
-				prevSelectedIndices = [...curSelectedIndices];
-			}
-		}
-	}, [checked, curSelectedIndices, shiftDown, treeData]);
-	useEffect(() => {
-		if (!dialogOpen) {
-			if(!prevState){
-				prevState = false;
-				return;
-			}
-			addToast({
-				type: "info",
-				message: textData._Toasts.RefreshMods,
-			});
-			setChecked(new Set());
-			setCurSelectedIndices([]);
-			prevSelectedIndices = [];
-			setExpanded(new Set());
-			setTreeData([]);
-			refreshModList().then((data) => {
-				setModList(data);
-			});
+
+	function resetSelectionState() {
+		setChecked(new Set());
+		setCurSelectedIndices([]);
+		prevSelectedIndices = [];
+	}
+
+	function handleDialogOpenChange(open: boolean) {
+		setDialogOpen(open);
+		if (open) return;
+		if (!prevState) {
 			prevState = false;
 			return;
 		}
+		addToast({
+			type: "info",
+			message: textData._Toasts.RefreshMods,
+		});
+		resetSelectionState();
+		setExpanded(new Set());
+		setTreeData([]);
+		refreshModList().then((data) => {
+			setModList(data);
+		});
+		prevState = false;
+	}
+
+	useEffect(() => {
+		if (!dialogOpen) return;
 		const handleKeyDown = (event: KeyboardEvent) => {
 			if (event.key === "Shift") {
 				setShiftDown(true);
@@ -227,7 +195,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 			window.removeEventListener("keydown", handleKeyDown);
 			window.removeEventListener("keyup", handleKeyUp);
 		};
-	}, [dialogOpen, refresh]);
+	}, [dialogOpen, refresh, setModList]);
 	function toggleSelectedMods(enable: boolean) {
 		const promises = normalizeManagedMods(cleanChecked, treeData, categories).map((modPath) => {
 			return toggleMod(modPath.replaceAll(managedSRC, ""), enable);
@@ -239,86 +207,73 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 			});
 		});
 	}
-	const expand = useCallback(
-		(item: any) => {
-			const newExpanded = new Set(expanded);
-			if (expanded.has(item.path) || item.path === managedTGT) {
-				newExpanded.delete(item.path);
-			} else {
-				if (item.children && item.children.length === 0) {
-					const path = item.path.split("\\").slice(0, -1);
+	function expand(item: BatchNode) {
+		const newExpanded = new Set(expanded);
+		if (expanded.has(item.path) || item.path === managedTGT) {
+			newExpanded.delete(item.path);
+		} else {
+			if (item.children && item.children.length === 0) {
+				const path = item.path.split("\\").slice(0, -1);
+				setTreeData((prev) => {
+					return [
+						...editChild(item.name, path, prev, [
+							{
+								depth: item.depth + 1,
+								isDir: false,
+								name: textData._LeftSideBar._components._Batch.EmptyFolder,
+								parent: item.path,
+								path: `${item.path}\\Loading...`,
+								isSkeleton: true,
+							},
+						]),
+					];
+				});
+				addToBatchPreview(item.path).then((children) => {
 					setTreeData((prev) => {
-						return [
-							...editChild(item.name, path, prev, [
-								{
-									depth: item.depth + 1,
-									isDir: false,
-									name: textData._LeftSideBar._components._Batch.EmptyFolder,
-									parent: item.path,
-									path: `${item.path}\\Loading...`,
-									isSkeleton: true,
-								},
-							]),
-						];
+						return [...editChild(item.name, path, prev, children)];
 					});
-					addToBatchPreview(item.path).then((children) => {
-						// setTimeout(() => {
-						setTreeData((prev) => {
-							return [...editChild(item.name, path, prev, children)];
-						});
-						// }, 100);
-					});
-				}
-				if (checked.has(item.path))
-					addToast({
-						type: "warning",
-						message: textData._Toasts.CannotExpandSelected,
-					});
-				else newExpanded.add(item.path);
+				});
 			}
-			setExpanded(newExpanded);
-		},
-		[expanded, checked]
-	);
-	const cleanChecked = useMemo(() => {
-		return Array.from(checked).filter((path) => {
-			let isRedundant = false;
-			checked.forEach((otherPath) => {
-				if (otherPath !== path && path.startsWith(otherPath + "\\")) {
-					isRedundant = true;
-				}
-			});
-			return !isRedundant;
+			if (checked.has(item.path)) {
+				addToast({
+					type: "warning",
+					message: textData._Toasts.CannotExpandSelected,
+				});
+			} else {
+				newExpanded.add(item.path);
+			}
+		}
+		setExpanded(newExpanded);
+	}
+	const cleanChecked = Array.from(checked).filter((path) => {
+		let isRedundant = false;
+		checked.forEach((otherPath) => {
+			if (otherPath !== path && path.startsWith(otherPath + "\\")) {
+				isRedundant = true;
+			}
 		});
-	}, [checked]);
+		return !isRedundant;
+	});
 
-	const toggleValid = useMemo(() => {
-		return (
-			cleanChecked.filter((path) => path.startsWith(managedSRC) && path.split("\\").length <= 3).length ==
-				cleanChecked.length && cleanChecked.length > 0
-		);
-	}, [cleanChecked, treeData]);
-	const moveValid = useMemo(() => {
-		// info(cleanChecked.filter((path) => path.startsWith(managedSRC) && path.split("\\").length == 3).length, cleanChecked.filter((path)  => !path.startsWith(managedSRC) && path.split("\\").length == 1).length, cleanChecked.length );
-		return (
-			cleanChecked.filter((path) => path.startsWith(managedSRC) && path.split("\\").length == 3).length +
-				cleanChecked.filter((path) => !path.startsWith(managedSRC) && path.split("\\").length < 3).length ==
-				cleanChecked.length && cleanChecked.length > 0
-		);
-	}, [cleanChecked, treeData]);
-	const deleteValid = useMemo(() => {
-		return !(cleanChecked.includes(managedSRC) || cleanChecked.length == 0);
-	}, [cleanChecked, treeData]);
+	const toggleValid =
+		cleanChecked.filter((path) => path.startsWith(managedSRC) && path.split("\\").length <= 3).length ===
+			cleanChecked.length && cleanChecked.length > 0;
+	const moveValid =
+		cleanChecked.filter((path) => path.startsWith(managedSRC) && path.split("\\").length === 3).length +
+			cleanChecked.filter((path) => !path.startsWith(managedSRC) && path.split("\\").length < 3).length ===
+			cleanChecked.length && cleanChecked.length > 0;
+	const deleteValid = !(cleanChecked.includes(managedSRC) || cleanChecked.length === 0);
 	const renderChildren = (nodes: BatchNode[], depth = 0, indices: number[] = []): JSX.Element[] => {
 		return nodes.map((item, index) => (
 			<div
-				className={cn('w-full flex select-none pointer-events-auto flex-col', depth > 0 && "border-l")}
+				key={item.path}
+				className={cn("w-full flex select-none pointer-events-auto flex-col", depth > 0 && "border-l")}
 				style={{
 					backgroundColor: checked.has(item.path)
-						? index % 2 == 0
-							? `color-mix(in oklab, var(--warn) 20%, ${index % 2 == 0 ? "#1b1b1b50" : "#31313150"})`
-							: `color-mix(in oklab, var(--warn) 30%, ${index % 2 == 0 ? "#1b1b1b50" : "#31313150"})`
-						: index % 2 == 0
+						? index % 2 === 0
+							? `color-mix(in oklab, var(--warn) 20%, ${index % 2 === 0 ? "#1b1b1b50" : "#31313150"})`
+							: `color-mix(in oklab, var(--warn) 30%, ${index % 2 === 0 ? "#1b1b1b50" : "#31313150"})`
+						: index % 2 === 0
 						? "#1b1b1b50"
 						: "#31313150",
 				}}
@@ -336,17 +291,43 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 					onClick={(e) => {
 						if (e.currentTarget !== e.target || item.path === managedTGT) return;
 						const newChecked = new Set(checked);
+						const nextIndices = [...indices, index];
 						if (shiftDown && prevSelectedIndices.length > 0) {
-							setCurSelectedIndices([...indices, index]);
+							const prevPath = [...prevSelectedIndices];
+							const maxPrefix = Math.min(prevPath.length, nextIndices.length);
+							let prefixLen = 0;
+							while (prefixLen < maxPrefix && prevPath[prefixLen] === nextIndices[prefixLen]) {
+								prefixLen++;
+							}
+							const common = prevPath.slice(0, prefixLen);
+							const prevRemainder = prevPath.slice(prefixLen);
+							const curRemainder = nextIndices.slice(prefixLen);
+							const sameDepth = prevRemainder.length === curRemainder.length;
+							if (sameDepth && prevRemainder.length === 1 && curRemainder.length === 1) {
+								const siblings = getChildrenAtPath(treeData, common);
+								if (siblings.length > 0) {
+									const startIndex = Math.min(prevRemainder[0], curRemainder[0]);
+									const endIndex = Math.max(prevRemainder[0], curRemainder[0]);
+									for (let i = startIndex; i <= endIndex; i++) {
+										const node = siblings[i];
+										if (!node) continue;
+										newChecked.add(node.path);
+									}
+								}
+							}
+							setCurSelectedIndices(nextIndices);
+							setChecked(newChecked);
+							prevSelectedIndices = [...nextIndices];
 							return;
 						}
-						setCurSelectedIndices([...indices, index]);
 						if (newChecked.has(item.path)) {
 							newChecked.delete(item.path);
 						} else {
 							newChecked.add(item.path);
 						}
+						setCurSelectedIndices(newChecked.size === 0 ? [] : nextIndices);
 						setChecked(newChecked);
+						prevSelectedIndices = newChecked.size === 0 ? [] : [...nextIndices];
 					}}
 				>
 					{" "}
@@ -417,22 +398,21 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 							initial={{ height: 0, opacity: 0 }}
 							animate={{ height: "auto", opacity: 1 }}
 							exit={{ height: 0, opacity: 0 }}
-							key={item.children?.length}
 							className="flex1 flex-col items-center w-full pl-6"
 						>
 							{renderChildren(
 								item.children && item.children.length > 0
 									? item.children
 									: [
-											{
-												depth: item.depth + 1,
-												isDir: false,
-												name: textData._LeftSideBar._components._Batch.EmptyFolder,
-												parent: item.path,
-												path: `${item.path}\\Loading...`,
-												isSkeleton: true,
-											},
-									  ],
+										{
+											depth: item.depth + 1,
+											isDir: false,
+											name: textData._LeftSideBar._components._Batch.EmptyFolder,
+											parent: item.path,
+											path: `${item.path}\\Loading...`,
+											isSkeleton: true,
+										},
+									],
 								depth + 1,
 								[...indices, index]
 							)}
@@ -443,7 +423,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 		));
 	};
 	return (
-		<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+		<Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
 			<DialogTrigger asChild>
 				<Button
 					className="w-38.75 text-ellipsis h-12 overflow-hidden"
@@ -489,14 +469,14 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 
 									setAlertOpen(false);
 									const promises = cleanChecked.map((modPath) => {
-										return remove(join(source, modPath), { recursive: true });
+										return guardedRemove(join(source, modPath), { recursive: true, allowedRoots: [source] });
 									});
 									addToast({
 										type: "success",
 										message: textData._Toasts.Deleting.replace("<length/>", promises.length.toString()),
 									});
 									Promise.all(promises).then(() => {
-										setChecked(new Set());
+										resetSelectionState();
 										setRefresh((prev) => prev + 1);
 										addToast({
 											type: "success",
@@ -554,7 +534,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 					{textData._LeftSideBar._components._Batch.ItemsSelected} {cleanChecked.length}
 					<label
 						onClick={() => {
-							setChecked(new Set());
+							resetSelectionState();
 						}}
 						className="text-destructive hover:opacity-75 ml-2 text-sm duration-200 opacity-50 pointer-events-auto"
 					>
@@ -595,7 +575,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 								const promises = selected.map((modPath) => {
 									const modName = modPath.split("\\").slice(-1)[0];
 									const newPath = dest + "\\" + modName;
-									return rename(join(source, modPath), newPath);
+									return guardedRename(join(source, modPath), newPath, { allowedRoots: [source] });
 								});
 								addToast({
 									type: "success",
@@ -603,7 +583,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 								});
 								Promise.all(promises)
 									.then(() => {
-										setChecked(new Set());
+										resetSelectionState();
 										setRefresh((prev) => prev + 1);
 										addToast({
 											type: "success",
@@ -665,7 +645,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 						</PopoverTrigger>
 						<PopoverContent className="w-80 z-2000 absolute p-0 mr-2 -mt-12 -translate-x-1/2 -translate-y-full border rounded-lg pointer-events-auto">
 							<Command
-								onChange={(e: any) => {
+								onChange={(e: ChangeEvent<HTMLInputElement>) => {
 									const value = e.target.value.trim();
 									if (
 										!categories.some((cat) => cat._sName.toLowerCase() === value.toLowerCase()) ||
@@ -708,7 +688,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 												let mods = [...cleanChecked];
 												mods = mods.map((modPath) => `${currentValue}\\${modPath.split("\\").slice(-1)[0]}`);
 												info('Mods', { mods: mods });
-												let promises = mods.map((modPath, index) => {
+												const promises = mods.map((modPath, index) => {
 													info(cleanChecked[index], modPath, !cleanChecked[index].startsWith(managedSRC));
 													return changeModName(
 														cleanChecked[index].replace(managedSRC + "\\", ""),
@@ -722,7 +702,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 												});
 												Promise.all(promises)
 													.then(() => {
-														setChecked(new Set());
+														resetSelectionState();
 														setRefresh((prev) => prev + 1);
 														addToast({
 															type: "success",
@@ -764,7 +744,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 													let mods = [...cleanChecked];
 													mods = mods.map((modPath) => `${currentValue}\\${modPath.split("\\").slice(-1)[0]}`);
 													info(mods);
-													let promises = mods.map((modPath, index) => {
+													const promises = mods.map((modPath, index) => {
 														info(cleanChecked[index], modPath, !cleanChecked[index].startsWith(managedSRC));
 														return changeModName(
 															cleanChecked[index].replace(managedSRC + "\\", ""),
@@ -777,7 +757,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 														message: textData._Toasts.Moving.replace("<length/>", mods.length.toString()),
 													});
 													Promise.all(promises).then(() => {
-														setChecked(new Set());
+														resetSelectionState();
 														setRefresh((prev) => prev + 1);
 														addToast({
 															type: "success",

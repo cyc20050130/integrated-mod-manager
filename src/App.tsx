@@ -58,7 +58,7 @@ function App() {
 		saveConfigs();
 		setModList(await refreshModList());
 		return Promise.resolve();
-	}, []);
+	}, [setModList]);
 	useEffect(() => {
 		if (err) {
 			throw new Error(err);
@@ -94,8 +94,10 @@ function App() {
 	}, [initDone, target, modList]);
 	useEffect(() => {
 		if (previousOnline !== online) {
-			setShowModeSwitch(true);
-			setPreviousOnline(online);
+			queueMicrotask(() => {
+				setShowModeSwitch(true);
+				setPreviousOnline(online);
+			});
 			const timer2 = setTimeout(() => {
 				setRightSidebarOpen(!online);
 			}, 300);
@@ -110,7 +112,7 @@ function App() {
 			};
 		}
 		return undefined;
-	}, [online]);
+	}, [online, previousOnline, setRightSidebarOpen]);
 	const leftSidebarStyle = useMemo(
 		() => ({
 			minWidth: leftSidebarOpen ? "20.95rem" : "3.95rem",

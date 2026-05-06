@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { GAMES, IMAGE_SERVER, managedSRC, VERSION } from "./consts";
 import {
 	DATA,
@@ -24,7 +24,7 @@ import { error, info } from "@/lib/logger";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { getConfig } from "./filesys";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { Games, GlobalSettings, OnlineBlacklistEntry } from "./types";
+import type { Games, GlobalSettings, InstalledItem, ModDataObj, OnlineBlacklistEntry, Settings } from "./types";
 
 export { join };
 let IMAGE_SERVER_URL = IMAGE_SERVER;
@@ -32,26 +32,68 @@ export function setImageServer(url: string) {
 	IMAGE_SERVER_URL = url;
 }
 const reservedWindowsNames = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
-const illegalCharacters = /[<>:"/\\|?*\x00-\x1F]/g;
-export function safeLoadJson(cur: any, neww: any) {
+const illegalCharacters = /[<>:"/\\|?*]/g;
+type JsonRecord = Record<string, unknown>;
+type CheckedCacheEntry = { updated: number; status: number };
+type CheckedCacheMap = Record<string, CheckedCacheEntry>;
+type TextData = (typeof TEXT)["en"];
+interface SanitizeFileNameOptions {
+	replacement?: string;
+	defaultName?: string;
+	maxLength?: number;
+}
+interface BananaUpdateRecord {
+	_sText?: string;
+	_sVersion?: string;
+	_tsDateModified?: number;
+	_tsDateAdded?: number;
+	_aChangeLog?: unknown[];
+	_sName?: string;
+}
+interface BananaFileRecord {
+	_tsDateModified?: number;
+	_tsDateAdded?: number;
+}
+interface ModStatusCandidate {
+	name: string;
+	source: string;
+	updated: number;
+	viewed: number;
+	modStatus: number;
+}
+type RawGlobalSettings = Partial<Omit<GlobalSettings, "onlineBlacklist" | "wuwaModFixer">> & {
+	chkModUpd?: boolean;
+	version?: string;
+	updatedAt?: string;
+	notice?: number;
+	onlineBlacklist?: unknown;
+	wuwaModFixer?: unknown;
+};
+function isJsonRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function replaceControlCharacters(input: string, replacement: string) {
+	return Array.from(input, (character) => (character.charCodeAt(0) < 32 ? replacement : character)).join("");
+}
+export function safeLoadJson(cur: JsonRecord | undefined, neww: JsonRecord | undefined) {
 	if (!cur || !neww) return;
 	Object.keys(neww).forEach((key) => {
-		if (typeof neww[key] === "object" && !Array.isArray(neww[key])) {
-			cur[key] = safeLoadJson(cur[key], neww[key]) || cur[key] || {};
+		if (isJsonRecord(neww[key])) {
+			cur[key] = safeLoadJson(isJsonRecord(cur[key]) ? cur[key] : undefined, neww[key]) || cur[key] || {};
 		} else {
 			cur[key] = neww[key];
 		}
 	});
 	return cur;
 }
-export function sanitizeFileName(input: string, options: any = {}): string {
+export function sanitizeFileName(input: string, options: SanitizeFileNameOptions = {}): string {
 	const { replacement = "_", defaultName = "untitled", maxLength = 255 } = options;
 
 	if (typeof input !== "string") {
 		return defaultName;
 	}
 
-	let sanitized = input
+	let sanitized = replaceControlCharacters(input, replacement)
 		.normalize("NFC")
 		.replace(illegalCharacters, replacement)
 		.replace(/\s+/g, " ")
@@ -173,8 +215,8 @@ export async function fetchMod(selected: string, controller?: AbortController) {
 	//info(selected);
 	await apiClient.updates(selected, controller?.signal).then(async (data) => {
 		await apiClient.mod(selected, controller?.signal).then((data2) => {
-			let updates =
-				data._aRecords?.map((record: any) => ({
+			const updates =
+				data._aRecords?.map((record: BananaUpdateRecord) => ({
 					_sText: record._sText,
 					_sVersion: record._sVersion,
 					_sDate: record._tsDateModified || record._tsDateAdded,
@@ -203,7 +245,7 @@ export async function fetchMod(selected: string, controller?: AbortController) {
 	});
 	return allData;
 }
-export async function exportConfig(settings: any, textData: any) {
+export async function exportConfig(settings: Settings, textData: TextData) {
 	try {
 		const { gameConfig } = getConfig(settings);
 		const filePath = await save({
@@ -220,7 +262,7 @@ export async function exportConfig(settings: any, textData: any) {
 			await writeTextFile(filePath, JSON.stringify(gameConfig, null, 2));
 			addToast({ type: "success", message: textData._Toasts.ConfigExported });
 		}
-	} catch (error) {
+	} catch {
 		addToast({ type: "error", message: textData._Toasts.ErrorExporting });
 	}
 }
@@ -229,7 +271,7 @@ export function formatBytes(bytes: number, size = 0): string {
 	return bytes >= 1024 ? formatBytes(bytes / 1024, size + 1) : `${Math.round(bytes * 100) / 100} ${sizeLabels[size]}`;
 }
 export function modRouteFromURL(url: string): string {
-	let modId = url?.split("mods/").pop()?.split("/")[0] || "";
+	const modId = url?.split("mods/").pop()?.split("/")[0] || "";
 	return modId ? "Mod/" + modId : "";
 }
 export function normalizeModRoute(sourceOrRoute?: string): string {
@@ -261,12 +303,12 @@ export function isRouteBlacklisted(entries: OnlineBlacklistEntry[] | undefined, 
 	const key = onlineBlacklistKey(game, routeOrSource);
 	return !!key && (entries || []).some((entry) => onlineBlacklistKey(entry.game, entry.route || entry.source) === key);
 }
-function sanitizeOnlineBlacklist(input: any): OnlineBlacklistEntry[] {
+function sanitizeOnlineBlacklist(input: unknown): OnlineBlacklistEntry[] {
 	if (!Array.isArray(input)) return [];
 	const deduped = new Map<string, OnlineBlacklistEntry>();
 	input.forEach((entry) => {
-		const candidate = (entry || {}) as Record<string, any>;
-		const game = GAMES.includes(candidate.game) ? candidate.game : "";
+		const candidate = (entry || {}) as Partial<OnlineBlacklistEntry> & { createdAt?: unknown };
+		const game = candidate.game && GAMES.includes(candidate.game) ? candidate.game : "";
 		const route = normalizeModRoute(candidate.route || candidate.source || "");
 		if (!route) return;
 		const key = onlineBlacklistKey(game, route);
@@ -294,8 +336,8 @@ export function compareVersions(a = "", b = "") {
 	}
 	return 0;
 }
-function sanitizeWuwaModFixerState(input: any) {
-	const candidate = (input || {}) as Record<string, any>;
+function sanitizeWuwaModFixerState(input: unknown) {
+	const candidate = (input || {}) as Partial<GlobalSettings["wuwaModFixer"]> & { checkedAt?: unknown };
 	return {
 		version: typeof candidate.version === "string" ? candidate.version : "",
 		exePath: typeof candidate.exePath === "string" ? candidate.exePath : "",
@@ -303,28 +345,29 @@ function sanitizeWuwaModFixerState(input: any) {
 		releaseUrl: typeof candidate.releaseUrl === "string" ? candidate.releaseUrl : "",
 	};
 }
-export function sanitizeGlobalSettings(input: any): GlobalSettings & { version?: string; updatedAt?: string; notice?: number } {
-	const candidate = (input || {}) as Record<string, any>;
+export function sanitizeGlobalSettings(input: unknown): GlobalSettings & { version?: string; updatedAt?: string; notice?: number } {
+	const candidate = (input || {}) as RawGlobalSettings;
 	const ignore =
 		typeof candidate.ignore === "string" && compareVersions(candidate.ignore || "0.0.0", VERSION) > 0
 			? candidate.ignore
 			: "";
+	const optionalMeta: { version?: string; updatedAt?: string; notice?: number } = {};
+	if (typeof candidate.version === "string") optionalMeta.version = candidate.version;
+	if (typeof candidate.updatedAt === "string") optionalMeta.updatedAt = candidate.updatedAt;
+	if (typeof candidate.notice === "number") optionalMeta.notice = candidate.notice;
 	return {
-		bgOpacity: candidate.bgOpacity ?? 1,
-		winOpacity: candidate.winOpacity ?? 1,
+		bgOpacity: typeof candidate.bgOpacity === "number" ? candidate.bgOpacity : 1,
+		winOpacity: typeof candidate.winOpacity === "number" ? candidate.winOpacity : 1,
 		winType: candidate.winType ?? 0,
 		bgType: candidate.bgType ?? 2,
 		listType: candidate.listType ?? 0,
 		nsfw: candidate.nsfw ?? 1,
 		toggleClick: candidate.toggleClick ?? 2,
 		ignore,
-		clientDate: candidate.clientDate ?? "",
-		XXMI: candidate.XXMI ?? "",
+		clientDate: typeof candidate.clientDate === "string" ? candidate.clientDate : "",
+		XXMI: typeof candidate.XXMI === "string" ? candidate.XXMI : "",
 		lang: candidate.lang ?? "",
 		game: candidate.game ?? "",
-		version: candidate.version,
-		updatedAt: candidate.updatedAt,
-		notice: candidate.notice ?? 0,
 		preReleases: false,
 		chkModUpdates:
 			typeof candidate.chkModUpdates === "boolean"
@@ -334,24 +377,26 @@ export function sanitizeGlobalSettings(input: any): GlobalSettings & { version?:
 					: true,
 		onlineBlacklist: sanitizeOnlineBlacklist(candidate.onlineBlacklist),
 		wuwaModFixer: sanitizeWuwaModFixerState(candidate.wuwaModFixer),
+		...optionalMeta,
 	};
 }
 let initialCheck = true;
 
 // Load cached data from localStorage and clean up old entries (> 30 minutes)
 const oneHour = 60 * 60 * 1000;
-function loadCheckedCache(): Record<string, { updated: number; status: number }> {
+function loadCheckedCache(): CheckedCacheMap {
 	try {
 		const cached = localStorage.getItem("mod_check_cache");
 		if (!cached) return {};
-		const parsed = JSON.parse(cached);
+		const parsed = JSON.parse(cached) as Record<string, unknown>;
 		const now = Date.now();
 		// Filter out entries older than 30 minutes
-		const cleaned: Record<string, { updated: number; status: number }> = {};
+		const cleaned: CheckedCacheMap = {};
 		for (const [key, value] of Object.entries(parsed)) {
 			if (typeof value === "object" && value !== null && "updated" in value && "status" in value) {
-				if (now - (value as any).updated < oneHour) {
-					cleaned[key] = value as { updated: number; status: number };
+				const cacheEntry = value as Partial<CheckedCacheEntry>;
+				if (typeof cacheEntry.updated === "number" && typeof cacheEntry.status === "number" && now - cacheEntry.updated < oneHour) {
+					cleaned[key] = { updated: cacheEntry.updated, status: cacheEntry.status };
 				}
 			}
 		}
@@ -363,7 +408,7 @@ function loadCheckedCache(): Record<string, { updated: number; status: number }>
 }
 
 // Save cached data to localStorage
-function saveCheckedCache(cache: Record<string, { updated: number; status: number }>) {
+function saveCheckedCache(cache: CheckedCacheMap) {
 	try {
 		localStorage.setItem("mod_check_cache", JSON.stringify(cache));
 	} catch (err) {
@@ -387,7 +432,7 @@ export function handleInAppLink(url: string) {
 		}
 	}
 	if (!url.startsWith("http")) return;
-	let mod = modRouteFromURL(url);
+	const mod = modRouteFromURL(url);
 	if (mod) {
 		store.set(ONLINE, true);
 		store.set(ONLINE_SELECTED, mod);
@@ -398,147 +443,145 @@ export function useInstalledItemsManager() {
 	const [installedItems, setInstalledItems] = useAtom(INSTALLED_ITEMS);
 	const localData = useAtomValue(DATA);
 	const modList = useAtomValue(MOD_LIST);
-	const validPaths = new Set(modList.map((mod) => mod.path));
+	const validPaths = useMemo(() => new Set(modList.map((mod) => mod.path)), [modList]);
 	info("[IMM] Valid mod paths:", validPaths);
 
 	useEffect(() => {
 		if (installedItems.length == 0) initialCheck = true;
 	}, [installedItems]);
 	useEffect(() => {
-		if (Object.keys(localData).length > 0) {
-			async function checkModStatus(item: any) {
-				info("[IMM] Checking mod status for", item.name);
-				let modStatus = 0;
-				if (!check) {
+		const checkModStatus = async (item: ModStatusCandidate) => {
+			info("[IMM] Checking mod status for", item.name);
+			let modStatus = 0;
+			if (!check) {
+				return 0;
+			}
+			if (Object.prototype.hasOwnProperty.call(checked, item.name) && now - (checked[item.name]?.updated || 0) < oneHour) {
+				info("[IMM] Mod status found in cache for", item.name);
+				modStatus = item.updated < checked[item.name].status ? (item.viewed < checked[item.name].status ? 2 : 1) : 0;
+			} else {
+				try {
+					const data = (await fetchModNoUpdates(modRouteFromURL(item.source))) as {
+						_tsDateModified?: number;
+						_aFiles?: BananaFileRecord[];
+					};
+					if (data._tsDateModified) {
+						let latest = item.updated || 0;
+						data._aFiles?.forEach((file: BananaFileRecord) => {
+							latest = Math.max(latest, (file._tsDateModified || file._tsDateAdded || 0) * 1000);
+						});
+						modStatus = item.updated < latest ? (item.viewed < latest ? 2 : 1) : 0;
+						checked[item.name] = { updated: Date.now(), status: latest };
+					}
+				} catch {
 					return 0;
 				}
-				if (checked.hasOwnProperty(item.name) && now - (checked[item.name]?.updated || 0) < oneHour) {
-					info("[IMM] Mod status found in cache for", item.name);
-					modStatus = item.updated < checked[item.name].status ? (item.viewed < checked[item.name].status ? 2 : 1) : 0;
-				} else {
-					try {
-						// info("[IMM] Fetching mod url ", modRouteFromURL(item.source));
-						const data = (await fetchModNoUpdates(modRouteFromURL(item.source))) as any;
-						// console.log(data, item);
-						// info("[IMM] Fetched mod data for", item.name, data);
-						if (data._tsDateModified) {
-							let latest = item.updated || 0;
-							data._aFiles.forEach((file: any) => {
-								latest = Math.max(latest, (file._tsDateModified || file._tsDateAdded || 0) * 1000);
-							});
-							// setUpdateCache((prev) => ({ ...prev, [item.name]: latest }));
-							modStatus = item.updated < latest ? (item.viewed < latest ? 2 : 1) : 0;
-							checked[item.name] = { updated: Date.now(), status: latest };
+			}
+			info("[IMM] Final mod status for", item.name, "is", modStatus);
+			return modStatus;
+		};
+		const updateInstalledItems = async (localDataSnapshot: ModDataObj) => {
+			const itemsToProcess: ModStatusCandidate[] = Object.keys(localDataSnapshot)
+				.filter((key) => localDataSnapshot[key].source && validPaths.has(key))
+				.map((key) => ({
+					name: key,
+					source: localDataSnapshot[key].source || "",
+					updated: localDataSnapshot[key].updatedAt || 0,
+					viewed: localDataSnapshot[key].viewedAt || 0,
+					modStatus: 0,
+				}));
+			if (initialCheck) {
+				setInstalledItems(itemsToProcess);
+			}
+			const batchSize = 10;
+			const processedItems: InstalledItem[] = [];
+			const totalItems = itemsToProcess.length;
+			const startTime = Date.now();
+			const modsProgressContainer = document.getElementById("mods-progress-container");
+			const modsProgressBar = document.getElementById("mods-progress");
+			const modsCheckedLabel = document.getElementById("mods-checked");
+			const modsTotalLabel = document.getElementById("mods-total");
+			now = Date.now();
+			if (modsProgressContainer && modsTotalLabel) {
+				modsTotalLabel.innerText = totalItems.toString();
+				modsProgressContainer.style.bottom = "0px";
+			}
+			if (!check) info("[IMM] Mod update checking is disabled.");
+			for (let i = 0; i < itemsToProcess.length; i += batchSize) {
+				const batch = itemsToProcess.slice(i, i + batchSize);
+				const newInBatch = batch.filter((item) => !Object.prototype.hasOwnProperty.call(checked, item.name));
+				const batchResults = await Promise.all(
+					batch.map(async (item) => {
+						const modStatus = await checkModStatus(item);
+						return { ...item, modStatus };
+					})
+				);
+				processedItems.push(...batchResults);
+				const checkedCount = Math.min(i + batchSize, totalItems);
+
+				if (modsProgressBar && modsCheckedLabel) {
+					modsProgressBar.style.width = `${(checkedCount / totalItems) * 100}%`;
+					modsCheckedLabel.innerText = checkedCount.toString();
+				}
+				if (i + batchSize < itemsToProcess.length && newInBatch.length > 0) {
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+				}
+			}
+
+			const newCount = processedItems.filter((item) => item.modStatus === 2).length;
+			info("[IMM] Mod status check completed. New updates found:", newCount);
+			saveCheckedCache(checked);
+
+			if (initialCheck && totalItems) {
+				initialCheck = false;
+				setTimeout(
+					() => {
+						let lang = "en";
+						try {
+							lang = JSON.parse(localStorage.getItem("imm-lang") || '"en"');
+						} catch {
+							// Ignore invalid cached language values and keep English.
 						}
-					} catch (error) {
-						return 0;
-					}
-				}
-				info("[IMM] Final mod status for", item.name, "is", modStatus);
-				return modStatus;
+						if (newCount > 0) {
+							addToast({
+								type: "info",
+								message: TEXT[lang as keyof typeof TEXT]._Toasts.NewUpdates.replace("<new/>", newCount.toString()),
+								duration: 10000,
+								onClick: () => {
+									store.set(FILTER, (prev) => ({ ...prev, upd: "has" }));
+								},
+							});
+						} else {
+							addToast({
+								type: "info",
+								message: TEXT[lang as keyof typeof TEXT]._Toasts.ModsLoaded,
+							});
+						}
+					},
+					Math.max(3500 - (Date.now() - startTime), 0)
+				);
 			}
-			async function updateInstalledItems(localDataSnapshot: any) {
-				const itemsToProcess = Object.keys(localDataSnapshot)
-					.filter((key) => localDataSnapshot[key].source && validPaths.has(key))
-					.map((key) => ({
-						name: key,
-						source: localDataSnapshot[key].source,
-						updated: localDataSnapshot[key].updatedAt || 0,
-						viewed: localDataSnapshot[key].viewedAt || 0,
-						modStatus: 0,
-					}));
-				if (initialCheck) {
-					setInstalledItems(itemsToProcess);
-				}
-				// Process items in batches of 10
-				const batchSize = 10;
-				const processedItems: any[] = [];
-				const totalItems = itemsToProcess.length;
-				const startTime = Date.now();
-				const modsProgressContainer = document.getElementById("mods-progress-container");
-				const modsProgressBar = document.getElementById("mods-progress");
-				const modsCheckedLabel = document.getElementById("mods-checked");
-				const modsTotalLabel = document.getElementById("mods-total");
-				now = Date.now();
-				if (modsProgressContainer && modsTotalLabel) {
-					modsTotalLabel.innerText = totalItems.toString();
-					modsProgressContainer.style.bottom = "0px";
-				}
-				if (!check) info("[IMM] Mod update checking is disabled.");
-				for (let i = 0; i < itemsToProcess.length; i += batchSize) {
-					const batch = itemsToProcess.slice(i, i + batchSize);
-					const newInBatch = batch.filter((item) => !checked.hasOwnProperty(item.name));
-					const batchResults = await Promise.all(
-						batch.map(async (item) => {
-							const modStatus = await checkModStatus(item);
-							return { ...item, modStatus };
-						})
-					);
-					processedItems.push(...batchResults);
-					const checkedCount = Math.min(i + batchSize, totalItems);
-					// const newCount = processedItems.filter((item) => item.modStatus === 2).length;
-
-					if (modsProgressBar && modsCheckedLabel) {
-						modsProgressBar.style.width = `${(checkedCount / totalItems) * 100}%`;
-						modsCheckedLabel.innerText = checkedCount.toString();
-					}
-					// Add 1s delay between batches (except after the last batch)
-					if (i + batchSize < itemsToProcess.length && newInBatch.length > 0) {
-						await new Promise((resolve) => setTimeout(resolve, 1000));
-					}
-				}
-
-				const newCount = processedItems.filter((item) => item.modStatus === 2).length;
-				console.log("[IMM] Mod status check completed. New updates found:", newCount);
-				// Save the updated cache to localStorage
-				saveCheckedCache(checked);
-
-				if (initialCheck && totalItems) {
-					initialCheck = false;
-					setTimeout(
-						() => {
-							let lang = "en";
-							try {
-								lang = JSON.parse(localStorage.getItem("imm-lang") || '"en"');
-							} catch {}
-							if (newCount > 0) {
-								addToast({
-									type: "info",
-									message: TEXT[lang as keyof typeof TEXT]._Toasts.NewUpdates.replace("<new/>", newCount.toString()),
-									duration: 10000,
-									onClick: () => {
-										store.set(FILTER, (prev) => ({ ...prev, upd: "has" }));
-									},
-								});
-							} else
-								addToast({
-									type: "info",
-									message: TEXT[lang as keyof typeof TEXT]._Toasts.ModsLoaded,
-								});
-						},
-						Math.max(3500 - (Date.now() - startTime), 0)
-					);
-				}
-				if (modsProgressContainer) {
-					setTimeout(() => {
-						modsProgressContainer.style.bottom = "-48px";
-					}, 500);
-				}
-				setInstalledItems([
-					...processedItems.sort((a: any, b: any) => {
-						const flagDiff = b.modStatus - a.modStatus;
-						if (flagDiff !== 0) return flagDiff;
-						return a.name
-							.toLocaleLowerCase()
-							.split("\\")
-							.slice(-1)[0]
-							.localeCompare(b.name.toLocaleLowerCase().split("\\").slice(-1)[0]);
-					}),
-				]);
+			if (modsProgressContainer) {
+				setTimeout(() => {
+					modsProgressContainer.style.bottom = "-48px";
+				}, 500);
 			}
+			setInstalledItems([
+				...processedItems.sort((a, b) => {
+					const flagDiff = b.modStatus - a.modStatus;
+					if (flagDiff !== 0) return flagDiff;
+					return a.name
+						.toLocaleLowerCase()
+						.split("\\")
+						.slice(-1)[0]
+						.localeCompare(b.name.toLocaleLowerCase().split("\\").slice(-1)[0]);
+				}),
+			]);
+		};
+		if (Object.keys(localData).length > 0) {
 			updateInstalledItems({ ...localData });
 		} else {
 			setInstalledItems([]);
 		}
-	}, [localData, modList]);
+	}, [localData, setInstalledItems, validPaths]);
 }

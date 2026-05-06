@@ -9,8 +9,7 @@ import { Separator } from "@radix-ui/react-separator";
 import { useAtom, useAtomValue } from "jotai";
 import { CheckIcon, CircleIcon, EditIcon, PlusIcon, SaveIcon, XIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useMemo } from "react";
-let focusedPreset = -1;
+import { useCallback, useMemo, useState } from "react";
 function LeftLocal() {
 	const leftSidebarOpen = useAtomValue(LEFT_SIDEBAR_OPEN);
 	const textData = useAtomValue(TEXT_DATA);
@@ -18,6 +17,9 @@ function LeftLocal() {
 	const [presets, setPresets] = useAtom(PRESETS);
 	const [currentPreset, setCurrentPreset] = useAtom(CURRENT_PRESET);
 	const [modList, setModList] = useAtom(MOD_LIST);
+	const [focusedPreset, setFocusedPreset] = useState(-1);
+	type FilterState = typeof filter;
+	type FilterKey = keyof FilterState;
 	const updatePreset = (index: number, name: string, shouldSave = false, shouldDelete = false) => {
 		const tempPresets = [...presets];
 		let wasCreated = false;
@@ -26,7 +28,7 @@ function LeftLocal() {
 			wasCreated = true;
 		}
 		let counter = 1;
-		let orgName = name;
+		const orgName = name;
 		while (tempPresets.find((p, i) => p.name === name && i !== index)) {
 			name = `${orgName} (${counter++})`;
 		}
@@ -34,7 +36,7 @@ function LeftLocal() {
 
 		if (shouldSave) {
 			tempPresets[index].data = [];
-			for (let mod of modList) {
+			for (const mod of modList) {
 				if (mod.enabled) {
 					tempPresets[index].data.push(mod.path);
 				}
@@ -56,56 +58,61 @@ function LeftLocal() {
 
 		if (wasCreated) {
 			setCurrentPreset(index);
-			focusedPreset = index;
+			setFocusedPreset(index);
 		}
 
 		saveConfigs();
 	};
-	const filterParams = [
-		{
-			key: "src",
-			sub: "",
-			label: textData._RightSideBar._RightLocal.Source,
-		},
-		{
-			key: "upd",
-			sub: "",
-			label: textData.Update,
-		},
-		{
-			key: "tag",
-			sub: "fav",
-			label: textData._Tags.Favorite,
-		},
-		{
-			key: "tag",
-			sub: "nsfw",
-			label: textData._Tags.NSFW,
-		},
-	];
+	const filterParams = useMemo(
+		() =>
+			[
+				{
+					key: "src" as const,
+					sub: "",
+					label: textData._RightSideBar._RightLocal.Source,
+				},
+				{
+					key: "upd" as const,
+					sub: "",
+					label: textData.Update,
+				},
+				{
+					key: "tag" as const,
+					sub: "fav",
+					label: textData._Tags.Favorite,
+				},
+				{
+					key: "tag" as const,
+					sub: "nsfw",
+					label: textData._Tags.NSFW,
+				},
+			] as const,
+		[textData]
+	);
 	const filterFunction = useCallback(
-		(key: string, val: string, subkey = "", reset = false) => {
-			setFilter((prev: any) => {
+		(key: FilterKey, val: string, subkey = "", reset = false) => {
+			setFilter((prev: FilterState) => {
+				const next = { ...prev } as FilterState;
 				if (reset) {
 					filterParams.forEach((item) => {
 						if (item.sub) {
-							prev[item.key][item.sub] = "any";
+							(next[item.key] as Record<string, string>)[item.sub] = "any";
 						} else {
-							prev[item.key] = "any";
+							next[item.key] = "any" as FilterState[typeof item.key];
 						}
 					});
 				}
-				if (subkey && (reset || prev[key][subkey] !== val)) {
-					prev[key][subkey] = val;
-				} else if (!subkey && (reset || prev[key] !== val)) {
-					prev[key] = val;
+				if (subkey && (reset || (next[key] as Record<string, string>)[subkey] !== val)) {
+					(next[key] as Record<string, string>)[subkey] = val;
+				} else if (!subkey && (reset || next[key] !== val)) {
+					next[key] = val as FilterState[typeof key];
 				} else {
 					return prev;
 				}
-				return { ...prev };
+				return next;
 			});
 		},
-		[filter, setFilter, filterParams]
+		[filterParams, setFilter]
 	);
 	const activeFilters = useMemo(() => {
 		return Object.keys(filter).some((key) => {
@@ -201,7 +208,7 @@ function LeftLocal() {
 							</div>
 							{filterParams.map((item) => {
 								return (
-									<div className="flex flex-row gap-4 items-center">
+									<div key={`filter-group-${item.key}-${item.sub || "root"}`} className="flex flex-row gap-4 items-center">
 										<label className="min-w-24 text-center">{item.label}</label>
 										<div className="flex flex-row gap-1 w-full">
 											{[
@@ -354,11 +361,11 @@ function LeftLocal() {
 													autoFocus={index === focusedPreset}
 													onFocus={(e) => {
 														e.currentTarget.select();
-														focusedPreset = index;
+														setFocusedPreset(index);
 													}}
 													onBlur={(e) => {
 														if (e.currentTarget.value !== preset.name) {
-															focusedPreset = -1;
+															setFocusedPreset(-1);
 															updatePreset(index, e.currentTarget.value);
 														}
 													}}
@@ -369,7 +376,7 @@ function LeftLocal() {
 												/>
 												<EditIcon
 													onClick={(e) => {
-														let prev = e.currentTarget.previousSibling as HTMLInputElement;
+														const prev = e.currentTarget.previousSibling as HTMLInputElement;
 														prev?.focus();
 													}}
 													className="scale-75 pointer-events-auto"
@@ -432,7 +439,7 @@ function LeftLocal() {
 						<Button
 							onClick={(e) => {
 								if (currentPreset == -1) {
-									let prev = e.currentTarget.previousElementSibling as HTMLButtonElement;
+									const prev = e.currentTarget.previousElementSibling as HTMLButtonElement;
 									prev?.click();
 								} else {
 									updatePreset(currentPreset, presets[currentPreset].name, true);

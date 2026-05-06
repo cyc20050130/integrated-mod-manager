@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.2.0 - 2026-04-27
+
+### Added
+- Added GitHub Actions CI for lint, frontend tests, frontend build, and Rust library tests on Windows.
+- Added shared `sanitizeHtml()` and `SafeHtml` helpers for external online content.
+
+### Improved
+- Sanitized online comments, GameBanana detail text, update notes, unified descriptions, and source notes before rendering.
+- Prevented production unified WW online reads from falling back to local dev fixture cache files.
+- Replaced the temporary duplicate-compare placeholder with an explicit unsupported error.
+- Narrowed Tauri asset, filesystem, opener, and devtools permissions for release builds.
+
+### Fixed
+- Added `noreferrer noopener` protection to external browser links.
+- Ignored generated local analysis, preview, output, fixture, and nested-copy directories.
+
 ## 3.1.9 - 2026-04-10
 
 ### Fixed

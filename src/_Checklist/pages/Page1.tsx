@@ -27,7 +27,7 @@ function Page1({ setPage }: { setPage: (page: number) => void }) {
 				loadTime ? Math.max(0, 1500 - (Date.now() - loadTime)) : 1500
 			);
 		}
-	}, [savedLang,mainFuncStatus]);
+	}, [mainFuncStatus, savedLang, setPage]);
 	useEffect(() => {
 		loadTime = Date.now();
 		interval = setInterval(() => {
@@ -40,7 +40,7 @@ function Page1({ setPage }: { setPage: (page: number) => void }) {
 				interval = null;
 			}
 		};
-	}, []);
+	}, [languageKeys.length]);
 	useEffect(() => {
 		const handleKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Escape") return;

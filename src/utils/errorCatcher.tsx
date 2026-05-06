@@ -20,8 +20,12 @@ type State = {
 	info?: React.ErrorInfo | null;
 };
 
-export default class ErrorBoundary extends React.Component<React.PropsWithChildren<{}>, State> {
-	constructor(props: any) {
+type ErrorBoundaryProps = {
+	children?: React.ReactNode;
+};
+
+export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, State> {
+	constructor(props: ErrorBoundaryProps) {
 		super(props);
 		this.state = { hasError: false, error: null, info: null };
 	}
@@ -39,7 +43,7 @@ export default class ErrorBoundary extends React.Component<React.PropsWithChildr
 		// Keep this synchronous and safe.
 		try {
 			error("Uncaught error:", err, info);
-		} catch (e) {
+		} catch {
 			// ignore
 		}
 	}
@@ -47,16 +51,16 @@ export default class ErrorBoundary extends React.Component<React.PropsWithChildr
 	reload = () => {
 		try {
 			window.location.reload();
-		} catch (e) {
+		} catch {
 			// fallback
-			window.location.href = window.location.href;
+			window.location.assign(window.location.href);
 		}
 	};
 
 	openDiscord = () => {
 		try {
-			window.open(DISCORD_LINK, "_blank");
-		} catch (e) {
+			window.open(DISCORD_LINK, "_blank", "noopener,noreferrer");
+		} catch {
 			// ignore
 		}
 	};
@@ -75,13 +79,13 @@ export default class ErrorBoundary extends React.Component<React.PropsWithChildr
 			await navigator.clipboard.writeText(text);
 			// provide a small visual hint by temporarily changing title? keep simple
 			// We don't show toast here to avoid adding new dependencies.
-		} catch (e) {
+		} catch {
 			// ignore
 		}
 	};
 	importer = async (error: string) => {
 		try {
-			const dialogOptions: any = {
+			const dialogOptions: NonNullable<Parameters<typeof open>[0]> = {
 				title: "Import Config",
 				filters: [
 					{
@@ -102,7 +106,7 @@ export default class ErrorBoundary extends React.Component<React.PropsWithChildr
 					window.location.reload();
 				}
 			}
-		} catch (error) {
+		} catch {
 			addToast({ type: "error", message: "Error importing config" });
 		}
 	};
@@ -182,6 +186,7 @@ export default class ErrorBoundary extends React.Component<React.PropsWithChildr
 						<a
 							href={BANANA_LINK}
 							target="_blank"
+							rel="noreferrer noopener"
 							className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
 						>
 							{" "}
@@ -191,6 +196,7 @@ export default class ErrorBoundary extends React.Component<React.PropsWithChildr
 						<a
 							href={DISCORD_LINK}
 							target="_blank"
+							rel="noreferrer noopener"
 							className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
 						>
 							{" "}

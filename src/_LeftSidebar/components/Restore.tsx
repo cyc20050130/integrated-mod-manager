@@ -18,12 +18,25 @@ import { useEffect, useState } from "react";
 function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boolean; disabled?: boolean }) {
 	const textData = useAtomValue(TEXT_DATA);
 	const [dialogOpen, setDialogOpen] = useState(false);
-	const setRemoveOpen = useSetAtom(REMOVE_OPEN)
+	const setRemoveOpen = useSetAtom(REMOVE_OPEN);
 	const [restorePoints, setRestorePoints] = useState<string[]>([]);
 	const [selectedRestorePoint, setSelectedRestorePoint] = useState<number>(-1);
 	const [alertOpen, setAlertOpen] = useState(false);
 	const [data, setData] = useState<Mod[]>([]);
 	const game = useAtomValue(GAME);
+
+	function resetPreviewState() {
+		setSelectedRestorePoint(-1);
+		setData([]);
+	}
+
+	function handleDialogOpenChange(open: boolean) {
+		setDialogOpen(open);
+		if (!open) {
+			resetPreviewState();
+		}
+	}
+
 	useEffect(() => {
 		const abortController = new AbortController();
 		if (dialogOpen) {
@@ -32,9 +45,6 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 					setRestorePoints(r);
 				}
 			});
-		} else {
-			setSelectedRestorePoint(-1);
-			setData([]);
 		}
 		return () => {
 			abortController.abort();
@@ -42,14 +52,14 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 	}, [dialogOpen]);
 	useEffect(() => {
 		if (restorePoints[selectedRestorePoint]) {
-			let index = selectedRestorePoint;
+			const index = selectedRestorePoint;
 			previewRestorePoint(restorePoints[selectedRestorePoint]).then((r) => {
 				if (index === selectedRestorePoint) setData(r);
 			});
 		}
-	}, [selectedRestorePoint]);
+	}, [restorePoints, selectedRestorePoint]);
 	return (
-		<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+		<Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
 			<DialogTrigger asChild>
 				<Button
 					className="w-38.75 text-ellipsis h-12 overflow-hidden"
@@ -84,11 +94,10 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 									)
 										return;
 									if (await deleteRestorePoint(restorePoints[selectedRestorePoint])) {
-										let newRPs = [...restorePoints];
+										const newRPs = [...restorePoints];
 										newRPs.splice(selectedRestorePoint, 1);
 										setRestorePoints(newRPs);
-										setSelectedRestorePoint(-1);
-										setData([]);
+										resetPreviewState();
 									}
 									setAlertOpen(false);
 								}}
@@ -109,6 +118,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 								<div className="data-wuwa:gap-0 data-wuwa:border data-wuwa:pr-0 flex flex-col w-full h-full gap-2 pr-1 overflow-x-hidden overflow-y-auto text-gray-300 border-0 border-b-0 rounded-sm rounded-b-none">
 									{restorePoints.map((item, index) => (
 										<Button
+											key={item}
 											onClick={() => {
 												setSelectedRestorePoint(index);
 											}}
@@ -164,6 +174,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 						<div className="flex flex-col w-full h-full overflow-x-hidden overflow-y-auto text-gray-300 border rounded-sm">
 							{data.map((item, index) => (
 								<div
+									key={item.path}
 									className={"w-full flex  flex-col"}
 									style={{
 										backgroundColor: index % 2 == 0 ? "#1b1b1b50" : "#31313150",
@@ -196,6 +207,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 									<div className="flex flex-col items-center w-full pl-4">
 										{item.children?.map((child, index2) => (
 											<div
+												key={child.path || `${item.path}-${child.name}-${index2}`}
 												className={"w-full h-10 border-l flex gap-2 items-center px-2 "}
 												style={{
 													backgroundColor: index2 % 2 == 0 ? "#1b1b1b50" : "#31313150",
@@ -216,11 +228,11 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 					<Button
 						className="w-28"
 						variant="destructive"
-						onClick={()=>{
-							setTimeout(()=>{
+						onClick={() => {
+							setTimeout(() => {
 								setRemoveOpen(true);
-							},0)
-							setDialogOpen(false)
+							}, 0);
+							setDialogOpen(false);
 						}}
 					>
 						{textData._LeftSideBar._components._RemoveIMM.RemoveIMM}

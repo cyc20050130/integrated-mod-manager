@@ -3,7 +3,9 @@ import { Carousel as CarouselCN, CarouselContent, CarouselItem } from "@/compone
 // import { OnlineModImage } from "@/utils/types";
 import type { EmblaCarouselType } from "embla-carousel";
 
-function Carousel({ data, big }: { data: any[]; big?: boolean }) {
+type PreviewImageLike = { _sBaseUrl: string; _sFile: string };
+
+function Carousel({ data, big }: { data: PreviewImageLike[]; big?: boolean }) {
 	big = big || false;
 	const w = big ? "45rem" : "12.5rem";
 	const [current, setCurrent] = useState(0);
@@ -49,6 +51,7 @@ function Carousel({ data, big }: { data: any[]; big?: boolean }) {
 			>
 				{data?.map((_, index) => (
 					<div
+						key={`preview-dot-${index}`}
 						className={
 							"h-1/3 min-h-2.5 aspect-square pointer-events-auto rounded-full border duration-200 " +
 							(index == current ? "bg-accent bgaccent   border-accent" : " hover:bg-border")

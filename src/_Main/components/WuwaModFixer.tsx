@@ -162,7 +162,7 @@ function WuwaModFixer() {
 
 	useEffect(() => {
 		if (!open || activeGame !== "WW") return;
-		void refresh();
+		void Promise.resolve().then(refresh);
 	}, [open, activeGame]);
 
 	if (activeGame !== "WW") return null;

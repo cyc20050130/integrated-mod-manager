@@ -69,7 +69,11 @@ function Decorations() {
 					<Button
 						onClick={(e) => {
 							e.stopPropagation();
-							online ? setRightSlideOverOpen((prev: boolean) => !prev) : setRightSidebarOpen((prev: boolean) => !prev);
+							if (online) {
+								setRightSlideOverOpen((prev: boolean) => !prev);
+							} else {
+								setRightSidebarOpen((prev: boolean) => !prev);
+							}
 						}}
 						className="flex h-4 w-4 items-center justify-center gap-0 pointer-events-auto"
 					>

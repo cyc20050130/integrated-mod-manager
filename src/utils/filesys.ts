@@ -1,15 +1,5 @@
 import defConfig from "../default.json";
-import {
-	copyFile,
-	exists,
-	mkdir,
-	readDir,
-	readTextFile,
-	remove,
-	rename,
-	writeFile,
-	writeTextFile,
-} from "@tauri-apps/plugin-fs";
+import { exists, mkdir, readDir, readTextFile, rename, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import {
 	exts,
 	IGNORE,
@@ -50,6 +40,7 @@ import {
 	Category,
 	ChangeInfo,
 	DirEntry,
+	DownloadItem,
 	DownloadList,
 	GameConfig,
 	GlobalSettings,
@@ -101,7 +92,7 @@ const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "bas
 const sp = [UNCATEGORIZED, IGNORE, OLD_RESTORE];
 let recentlyDownloaded: string[] = [];
 store.sub(DOWNLOAD_LIST, () => {
-	recentlyDownloaded = store.get(DOWNLOAD_LIST).completed.map((item: any) => item.path);
+	recentlyDownloaded = store.get(DOWNLOAD_LIST).completed.map((item) => item.path).filter((path): path is string => Boolean(path));
 });
 let src = "";
 let rootReplace = "";
@@ -120,7 +111,7 @@ store.sub(TARGET, () => {
 	tgt = store.get(TARGET);
 });
 let catDB: MiniSearch | null = null;
-store.sub(CATEGORIES, () => {
+	store.sub(CATEGORIES, () => {
 	try {
 		const categories = store.get(CATEGORIES) || [];
 		catDB = new MiniSearch({
@@ -133,13 +124,12 @@ store.sub(CATEGORIES, () => {
 			},
 		});
 		catDB.addAll([...categories, { _sName: UNCATEGORIZED, _sIconUrl: "" }]);
-		console.log("Building category search index...", categories);
-		console.log("test", catDB.search("sword", { prefix: true, fuzzy: 0.2 }));
-	} catch (e) {
-		console.error("Error building category search index:", e);
+		info("[IMM] Rebuilt category search index:", categories.length);
+	} catch (indexError) {
+		error("[IMM] Error building category search index:", indexError);
 	}
 });
-export async function setConfig(config: any) {
+export async function setConfig(config: Partial<GameConfig> & { version?: string; game?: string }) {
 	info("[IMM] Setting config...");
 	if (!config) return;
 	if (config.version && compareVersions(config.version, "2.1.0") < 0) {
@@ -149,7 +139,7 @@ export async function setConfig(config: any) {
 		main();
 		return;
 	}
-	let { gameConfig: curConfig } = getConfig(store.get(SETTINGS));
+	const { gameConfig: curConfig } = getConfig(store.get(SETTINGS));
 	info("[IMM] Current config:", { ...curConfig });
 	info("[IMM] New config:", config);
 	if (!curConfig.game || !config.game || curConfig.game !== config.game) {
@@ -216,12 +206,7 @@ async function persistConfigs(snapshot: RuntimeStateSnapshot = {}, skip = false)
 }
 export async function saveConfigs(skip = false, settings = store.get(SETTINGS)) {
 	info("[IMM] Saving configs...");
-	try {
-		await persistConfigs({ settings }, skip);
-	} catch (error) {
-		//console.error("Error saving configs:", error);
-		throw error;
-	}
+	await persistConfigs({ settings }, skip);
 }
 export async function flushRuntimeState(reason = "manual", snapshot: RuntimeStateSnapshot = {}) {
 	info(`[IMM] Flushing runtime state (${reason})...`);
@@ -247,6 +232,62 @@ export async function selectPath(
 }
 export function folderSelector(path = "", title: string | undefined = undefined) {
 	return selectPath({ directory: true, ...(path ? { defaultPath: path } : {}), ...(title ? { title } : {}) });
+}
+type GuardedPathOptions = {
+	allowedRoots?: string[];
+	includeDefaultRoots?: boolean;
+	recursive?: boolean;
+};
+function getGuardedFileRoots(extraRoots: string[] = [], includeDefaultRoots = true) {
+	const defaultRoots = includeDefaultRoots ? [src, modRoot, tgt] : [];
+	const roots = [...defaultRoots, ...extraRoots]
+		.map((root) => String(root || "").trim())
+		.filter(Boolean);
+	return Array.from(new Set(roots));
+}
+export async function guardedRemove(path: string, options: GuardedPathOptions = {}) {
+	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
+	return invoke<void>("guarded_remove_path", {
+		path,
+		allowedRoots,
+		recursive: Boolean(options.recursive),
+	});
+}
+export async function guardedRename(
+	from: string,
+	to: string,
+	options: Pick<GuardedPathOptions, "allowedRoots" | "includeDefaultRoots"> = {}
+) {
+	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
+	return invoke<void>("guarded_rename_path", {
+		from,
+		to,
+		allowedRoots,
+	});
+}
+export async function guardedCopyFile(
+	from: string,
+	to: string,
+	options: Pick<GuardedPathOptions, "allowedRoots" | "includeDefaultRoots"> = {}
+) {
+	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
+	return invoke<void>("guarded_copy_file_path", {
+		from,
+		to,
+		allowedRoots,
+	});
+}
+export async function guardedImportFile(
+	from: string,
+	to: string,
+	options: Pick<GuardedPathOptions, "allowedRoots" | "includeDefaultRoots"> = {}
+) {
+	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
+	return invoke<void>("guarded_import_file_path", {
+		from,
+		to,
+		allowedRoots,
+	});
 }
 function replaceDisabled(name: string) {
 	return name.replace("DISABLED_", "").replace("DISABLED", "").trim();
@@ -309,7 +350,7 @@ async function copyDir(src: string, dest: string, withProgress = false) {
 			const srcPath = `${src}/${entry.name}`;
 			const destPath = `${dest}/${entry.name}`;
 			if (!entry.isDirectory) {
-				await copyFile(srcPath, destPath);
+				await guardedCopyFile(srcPath, destPath);
 				if (withProgress) {
 					completedFiles++;
 					if (progressBar && progressPerct && progressMessage) {
@@ -335,10 +376,10 @@ async function copyDir(src: string, dest: string, withProgress = false) {
 }
 
 async function countFilesInDir(path: string) {
-	let entries = (await readDir(join(path, ""))).filter(
+	const entries = (await readDir(join(path, ""))).filter(
 		(item) => item.name != RESTORE && item.name != IGNORE && item.name != PREFS
 	);
-	for (let entry of entries) {
+	for (const entry of entries) {
 		if (entry.isDirectory) {
 			await countFilesInDir(join(path, entry.name));
 		} else {
@@ -364,50 +405,53 @@ export async function getRestorePoints(): Promise<string[]> {
 			.map((item) => item.name)
 			.sort()
 			.reverse();
-	} catch (error) {
-		//console.error("Error getting restore points:", error);
+	} catch {
 		return [];
 	}
 }
 export async function resetWithBackup() {
 	info("[IMM] Resetting with backup...");
 	const configs = ["", "WW", "ZZ", "GI", "SR", "EF"];
-	for (let cfg of configs) {
+	for (const cfg of configs) {
 		try {
 			await rename(`config${cfg}.json`, `backups/MAN_${Date.now()}_config${cfg}.json.bak`);
-		} catch {}
+		} catch (backupError) {
+			warn(`[IMM] Skipping missing or locked config backup for ${cfg || "default"}:`, backupError);
+		}
 	}
 	window.location.reload();
 }
 export async function previewRestorePoint(point: string) {
 	info("[IMM] Previewing restore point:", point);
-	let path = join(modRoot, RESTORE, point);
+	const path = join(modRoot, RESTORE, point);
 	if (!(await exists(path))) return [];
-	let entries = await readDirRecr(path, "", 2);
-	let categories = store.get(CATEGORIES) || [];
+	const entries = await readDirRecr(path, "", 2);
+	const categories = store.get(CATEGORIES) || [];
 	//info(entries);
 	return entries.map((entry: Mod) => {
-		let category = categories.find((cat) => cat._sName == entry.name);
+		const category = categories.find((cat) => cat._sName === entry.name);
 		if (category && entry.isDir) entry.icon = category._sIconUrl;
 		return entry;
 	});
 }
 export async function sourceBatchPreview(newCategory = "" as string) {
 	info("[IMM] Previewing source batch...");
-	let path = src;
+	const path = src;
 	if (!(await exists(path))) return [];
-	let categories = store.get(CATEGORIES) || [];
+	const categories = store.get(CATEGORIES) || [];
 	try {
 		if (newCategory) {
 			await mkdir(join(modRoot, newCategory), { recursive: true });
 		}
-	} catch {}
-	let entries = (await readDirRecr(path, "", 2)).map((entry: Mod) => {
+	} catch (mkdirError) {
+		warn("[IMM] Unable to prepare batch preview category:", mkdirError);
+	}
+	const entries = (await readDirRecr(path, "", 2)).map((entry: Mod) => {
 		if (entry.name === managedSRC) {
 			// entry.icon = "IMM2.png";
 
 			entry.children.map((child: Mod) => {
-				let category = categories.find((cat) => cat._sName == child.name);
+				const category = categories.find((cat) => cat._sName === child.name);
 				if (category && child.isDir) child.icon = category._sIconUrl;
 				return child;
 			});
@@ -423,7 +467,7 @@ export async function addToBatchPreview(opath: string) {
 	info("[IMM] Adding to source batch preview:", opath);
 	const path = join(src, opath);
 	if (!(await exists(path))) return [];
-	let entries = await readDirRecr(path, "", 0);
+	const entries = await readDirRecr(path, "", 0);
 	info("[WWW]", path, " -> ", entries);
 	return entries.map((entry: Mod) => {
 		entry.path = join(opath, entry.path);
@@ -433,7 +477,7 @@ export async function addToBatchPreview(opath: string) {
 }
 export async function restoreFromPoint(point: string) {
 	info("[IMM] Restoring from point:", point);
-	let path = join(modRoot, RESTORE, point);
+	const path = join(modRoot, RESTORE, point);
 	if (!(await exists(path))) return null;
 	store.set(PROGRESS_OVERLAY, {
 		title: "Restoring from " + name,
@@ -452,11 +496,13 @@ export async function restoreFromPoint(point: string) {
 		progressPerct = progressPerct || document.querySelector("#restore-progress-percentage");
 	}
 	progressMessage.innerText = textMSG.rem;
-	let entries = (await readDir(modRoot)).filter((item) => item.name != RESTORE);
-	for (let entry of entries) {
+	const entries = (await readDir(modRoot)).filter((item) => item.name != RESTORE);
+	for (const entry of entries) {
 		try {
-			await remove(join(modRoot, entry.name), { recursive: true });
-		} catch {}
+			await guardedRemove(join(modRoot, entry.name), { recursive: true });
+		} catch (cleanupError) {
+			warn("[IMM] Failed to clear restore target entry:", cleanupError);
+		}
 	}
 	progressMessage.innerText = textMSG.disc;
 	completedFiles = 0;
@@ -503,35 +549,39 @@ export async function createRestorePoint(prefix = "") {
 	canceled = false;
 	try {
 		await mkdir(join(modRoot, RESTORE), { recursive: true });
-	} catch (e) {}
+	} catch (mkdirError) {
+		warn("[IMM] Restore root already exists or could not be created:", mkdirError);
+	}
 
-	let restorePointName = prefix + "RESTORE-" + formatDateTime();
+	const restorePointName = prefix + "RESTORE-" + formatDateTime();
 	const root = !prefix ? modRoot : src;
 	rootReplace = root;
 	await countFilesInDir(root);
 	try {
 		await mkdir(join(modRoot, RESTORE, restorePointName));
-	} catch (e) {
+	} catch {
 		return false;
 	}
 	result = "Ok";
 	await copyDir(root, join(modRoot, RESTORE, restorePointName), true);
 	if (canceled) {
-		if (result == "Ok") result = "Operation Cancelled";
-		await remove(join(modRoot, RESTORE, restorePointName), { recursive: true });
+		if (result === "Ok") result = "Operation Cancelled";
+		await guardedRemove(join(modRoot, RESTORE, restorePointName), { recursive: true });
 		try {
-			await remove(join(modRoot, RESTORE));
-			await remove(join(modRoot));
-		} catch (e) {}
+			await guardedRemove(join(modRoot, RESTORE));
+			await guardedRemove(join(modRoot), { allowedRoots: [src], includeDefaultRoots: false });
+		} catch (cleanupError) {
+			warn("[IMM] Failed to clean canceled restore point directories:", cleanupError);
+		}
 	}
 	store.set(PROGRESS_OVERLAY, (prev) => ({
-		title: result == "Ok" ? "Restore Point Created" : result,
+		title: result === "Ok" ? "Restore Point Created" : result,
 		button: "Close",
 		finished: true,
 		open: prev.open,
 		name: prefix,
 	}));
-	return result == "Ok";
+	return result === "Ok";
 }
 export async function checkOldVerDirs(src: string) {
 	try {
@@ -543,8 +593,7 @@ export async function checkOldVerDirs(src: string) {
 			}
 		}
 		return checkFolders === 3;
-	} catch (error) {
-		//console.error("Error checking old version directories:", error);
+	} catch {
 		return false;
 	}
 }
@@ -552,12 +601,13 @@ export async function checkOldVerDirs(src: string) {
 export async function categorizeDir(src: string, modifyIni = false) {
 	info("[IMM] Categorizing directory:", src, "Skip restore:", modifyIni);
 	const d3dx_path = join(...tgt.split("\\").slice(0, -1), "d3dx_user.ini");
-	let d3dx = "" as any;
+	let d3dx = "";
 	try {
 		info("[IMM] Reading d3dx_user.ini...", await exists(d3dx_path));
-		const backupPath = join(...tgt.split("\\").slice(0, -1), `d3dx_user_pre_imm.ini.bak`);
+		const targetParent = join(...tgt.split("\\").slice(0, -1));
+		const backupPath = join(targetParent, `d3dx_user_pre_imm.ini.bak`);
 		if (!(await exists(backupPath))) {
-			await copyFile(d3dx_path, backupPath);
+			await guardedCopyFile(d3dx_path, backupPath, { allowedRoots: [targetParent], includeDefaultRoots: false });
 		}
 		if (modifyIni) d3dx = await readTextFile(d3dx_path);
 	} catch {
@@ -570,15 +620,15 @@ export async function categorizeDir(src: string, modifyIni = false) {
 		const reqCategories: Record<string, Array<{ name: string; isDirectory: boolean }>> = {};
 		const entries = await readDir(src);
 		const ignore = [IGNORE, managedSRC, managedTGT, RESTORE, PREFS];
-		let fullDirectoryRenames: string[] = []; // First pass: categorize items
+		const fullDirectoryRenames: string[] = []; // First pass: categorize items
 		for (const item of entries) {
 			if (item.isDirectory && ignore.includes(item.name)) continue;
 			if (item.name === OLD_RESTORE) {
 				if (modifyIni) continue;
 				try {
-					await rename(join(src, OLD_RESTORE), join(src, RESTORE));
-				} catch (error) {
-					//console.error("Error renaming OLD_RESTORE:", error);
+					await guardedRename(join(src, OLD_RESTORE), join(src, RESTORE));
+				} catch {
+					warn("[IMM] Unable to rename legacy restore directory, continuing.");
 				}
 				continue;
 			}
@@ -616,9 +666,9 @@ export async function categorizeDir(src: string, modifyIni = false) {
 		// Move items to categories
 		const renamePromises: Promise<void>[] = [];
 		const changesToD3dx: Record<string, string> = {};
-		async function renameWithTry(key: string, name: string) {
+		const renameWithTry = async (key: string, name: string) => {
 			try {
-				await rename(join(src, name), join(src, key, name));
+				await guardedRename(join(src, name), join(src, key, name));
 				const oldPath = join(src, name);
 				const newPath = join(src, key, name);
 				info("[IMM] Renamed:", oldPath, "->", newPath);
@@ -626,10 +676,9 @@ export async function categorizeDir(src: string, modifyIni = false) {
 			} catch (error) {
 				warn("Error renaming:", key, "\\", name, error);
 			}
-			return;
-		}
+		};
 		// console.log("Full directory renames:", fullDirectoryRenames);
-		(await Promise.all(fullDirectoryRenames.map((dir) => readDirRecr(src, dir, 0)))).flat().forEach((entry: any) => {
+		(await Promise.all(fullDirectoryRenames.map((dir) => readDirRecr(src, dir, 0)))).flat().forEach((entry) => {
 			const oldPath = join(src, entry.path);
 			const newPath = join(tgt, entry.path);
 			changesToD3dx[oldPath] = newPath;
@@ -642,7 +691,7 @@ export async function categorizeDir(src: string, modifyIni = false) {
 		}
 		await Promise.all(renamePromises);
 		if (modifyIni && d3dx) {
-			d3dx = d3dx.split("\n");
+			const d3dxLines = d3dx.split("\n");
 			for (const [oldPath, newPath] of Object.entries(changesToD3dx)) {
 				const op = join("$\\mods", oldPath.replaceAll(tgt, "").replaceAll("/", "\\")).toLowerCase();
 				const np = join(
@@ -651,13 +700,15 @@ export async function categorizeDir(src: string, modifyIni = false) {
 					replaceDisabled(newPath).replaceAll(tgt, "").replaceAll("/", "\\")
 				).toLowerCase();
 				info("[IMM] Updating d3dx_user.ini:", op, "->", np);
-				d3dx = d3dx.map((line: string) => (line.startsWith(op) ? line.replace(op, np) : line));
+				for (let i = 0; i < d3dxLines.length; i++) {
+					d3dxLines[i] = d3dxLines[i].startsWith(op) ? d3dxLines[i].replace(op, np) : d3dxLines[i];
+				}
 			}
-			await writeTextFile(d3dx_path, d3dx.join("\n"));
+			await writeTextFile(d3dx_path, d3dxLines.join("\n"));
 		}
-	} catch (error) {
-		//console.error("Error categorizing directory:", error);
-		throw error;
+	} catch (categorizeError) {
+		error("[IMM] Error categorizing directory:", categorizeError);
+		throw categorizeError;
 	}
 }
 export async function verifyDirStruct() {
@@ -677,7 +728,7 @@ export async function verifyDirStruct() {
 			const oldTgtPath = join(tgt, OLD_managedTGT);
 			const newTgtPath = join(tgt, managedTGT);
 			if (await exists(oldTgtPath)) {
-				await rename(oldTgtPath, newTgtPath);
+				await guardedRename(oldTgtPath, newTgtPath);
 				//add code to read the file d3dx_user.ini in the parent folder of oldTgtPath, and replace all instances of OLD_managedTGT with managedTGT
 				const parentDir = tgt.split("\\").slice(0, -1).join("\\");
 				const iniPath = join(parentDir, "d3dx_user.ini");
@@ -685,7 +736,7 @@ export async function verifyDirStruct() {
 
 				try {
 					if (await exists(iniPath)) {
-						let iniContent = await readTextFile(iniPath);
+						const iniContent = await readTextFile(iniPath);
 						const updatedContent = iniContent.split(OLD_managedTGT.toLowerCase()).join(managedTGT.toLowerCase());
 						await writeTextFile(iniPath, updatedContent);
 					}
@@ -696,12 +747,12 @@ export async function verifyDirStruct() {
 			const oldSrcPath = join(src, OLD_managedSRC);
 			const newSrcPath = join(src, managedSRC);
 			if (await exists(oldSrcPath)) {
-				await rename(oldSrcPath, newSrcPath);
+				await guardedRename(oldSrcPath, newSrcPath);
 				const targetEntries = (await readDirRecr(newTgtPath, "", 2)).flatMap((x) => x.children || []);
 				info("[IMM] Fixing symlinks in target directory. Broken: ", targetEntries);
 				for (const entry of targetEntries) {
 					const linkPath = join(newTgtPath, entry.path);
-					await remove(linkPath);
+					await guardedRemove(linkPath);
 					await mkdir(join(newTgtPath, entry.parent), { recursive: true });
 					try {
 						await invoke("create_symlink", {
@@ -714,11 +765,12 @@ export async function verifyDirStruct() {
 					}
 				}
 			}
-		} catch (e: any) {
-			if (e.startsWith("failed to rename old path")) {
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			if (message.startsWith("failed to rename old path")) {
 				store.set(ERR, textData["v2.1.2Warning"]);
 			} else {
-				store.set(ERR, e.toString());
+				store.set(ERR, message);
 			}
 		}
 		const modDir = join(src, managedSRC);
@@ -766,14 +818,18 @@ export async function verifyDirStruct() {
 		];
 
 		// Batch read directories for items that need it
-		const readPromises: Promise<{ item: any; entries: any[] }>[] = [];
+		const readPromises: Promise<{ item: DirEntry; entries: DirEntry[]; category: Pick<Category, "_sName" | "_sIconUrl"> }>[] = [];
 		for (const item of before) {
-			console.log("Processing item:", item.name, catDB?.search(item.name, { prefix: true, fuzzy: 0.2 }));
+			info("[IMM] Processing directory structure item:", item.name);
+			const searchResult = catDB?.search(item.name, { prefix: true, fuzzy: 0.2 })[0] as
+				| { _sName?: string; _sIconUrl?: string }
+				| undefined;
 			const category =
-				catDB?.search(item.name, { prefix: true, fuzzy: 0.2 })[0] ||
-				(item.name === RESTORE || item.name === OLD_RESTORE
-					? { _sName: RESTORE, _sIconUrl: "" }
-					: { _sName: UNCATEGORIZED, _sIconUrl: "" });
+				searchResult && searchResult._sName
+					? { _sName: searchResult._sName, _sIconUrl: searchResult._sIconUrl || "" }
+					: item.name === RESTORE || item.name === OLD_RESTORE
+						? { _sName: RESTORE, _sIconUrl: "" }
+						: { _sName: UNCATEGORIZED, _sIconUrl: "" };
 
 			if ((item.isDirectory && item.name === category._sName) || item.name === OLD_RESTORE) {
 				readPromises.push(
@@ -800,7 +856,7 @@ export async function verifyDirStruct() {
 
 		// Process all read operations in parallel
 		const readResults = await Promise.all(readPromises);
-		for (const { entries, category } of readResults as any) {
+		for (const { entries, category } of readResults) {
 			if (!reqCategories[category._sName]) {
 				reqCategories[category._sName] = {
 					name: category._sName,
@@ -821,7 +877,7 @@ export async function verifyDirStruct() {
 		if (modDirExists) {
 			try {
 				const modDirEntries = await readDir(modDir);
-				const modDirReadPromises: Promise<{ category: any; entries: DirEntry[] }>[] = [];
+				const modDirReadPromises: Promise<{ category: Pick<Category, "_sName" | "_sIconUrl">; entries: DirEntry[] }>[] = [];
 
 				for (const item of modDirEntries) {
 					if (!item.isDirectory) continue;
@@ -829,7 +885,14 @@ export async function verifyDirStruct() {
 					const category =
 						item.name === RESTORE
 							? { _sName: RESTORE, _sIconUrl: "" }
-							: catDB?.search(item.name, { prefix: true, fuzzy: 0.2 })[0] || { _sName: UNCATEGORIZED, _sIconUrl: "" };
+							: (() => {
+									const searchResult = catDB?.search(item.name, { prefix: true, fuzzy: 0.2 })[0] as
+										| { _sName?: string; _sIconUrl?: string }
+										| undefined;
+									return searchResult && searchResult._sName
+										? { _sName: searchResult._sName, _sIconUrl: searchResult._sIconUrl || "" }
+										: { _sName: UNCATEGORIZED, _sIconUrl: "" };
+								})();
 
 					if (category) {
 						modDirReadPromises.push(
@@ -857,8 +920,8 @@ export async function verifyDirStruct() {
 						...entries.map((i) => ({ name: i.name, isDirectory: i.isDirectory }))
 					);
 				}
-			} catch (error) {
-				//console.error("Error processing modDir:", error);
+			} catch {
+				warn("[IMM] Error processing managed mod directory entry.");
 			}
 		}
 		for (const key of Object.keys(reqCategories)) {
@@ -871,10 +934,9 @@ export async function verifyDirStruct() {
 		status.after.sort(sortMods);
 	} catch (e) {
 		info("[ERR] ", e);
-	} finally {
-		info("[IMM] Directory structure verified:", status);
-		return status;
 	}
+	info("[IMM] Directory structure verified:", status);
+	return status;
 }
 export async function createManagedDir() {
 	info("[IMM] Creating managed directories...");
@@ -894,17 +956,17 @@ export async function applyChanges(isMigration = false) {
 	try {
 		if (!src || !tgt) return false;
 
-		let map: Record<string, DirEntry> = {};
+		const map: Record<string, DirEntry> = {};
 		info("[IMM] Verifying directory structure before applying changes...");
 		const target = join(tgt, managedTGT);
 		if (!target) return true;
 		info("[IMM] Target exists, creating managed directories...");
 		await mkdir(join(src, managedSRC), { recursive: true });
 		await mkdir(join(tgt, managedTGT), { recursive: true });
-		console.log("[IMM] Managed directories created. Processing source directory...");
+		info("[IMM] Managed directories created. Processing source directory...");
 		await categorizeDir(src, true);
 
-		const entries = true ? (await readDir(src)).map((item) => item.name) : Object.keys(map);
+		const entries = (await readDir(src)).map((item) => item.name);
 
 		info("[IMM] Processing entries:", entries);
 		// Batch process entries
@@ -913,12 +975,12 @@ export async function applyChanges(isMigration = false) {
 
 			if (key === RESTORE || key === OLD_RESTORE) {
 				try {
-					await rename(join(src, OLD_RESTORE), join(src, managedSRC, RESTORE));
-				} catch (e) {
+					await guardedRename(join(src, OLD_RESTORE), join(src, managedSRC, RESTORE));
+				} catch {
 					try {
 						await copyDir(join(src, RESTORE), join(src, managedSRC, RESTORE));
-					} catch (e) {
-						//console.error(`Error handling RESTORE directory:`, e);
+					} catch (restoreCopyError) {
+						warn("[IMM] Error handling RESTORE directory:", restoreCopyError);
 					}
 				}
 				continue;
@@ -926,7 +988,7 @@ export async function applyChanges(isMigration = false) {
 
 			try {
 				info(`[IMM] Renaming ${key} to managedSRC...`);
-				await rename(join(src, key), join(src, managedSRC, key));
+				await guardedRename(join(src, key), join(src, managedSRC, key));
 			} catch (err) {
 				error(`Error renaming ${key}:`, err);
 				continue;
@@ -934,7 +996,7 @@ export async function applyChanges(isMigration = false) {
 
 			await mkdir(join(target, key), { recursive: true });
 
-			const dirEntries = (true ? await readDir(join(src, managedSRC, key)) : map[key].children) || [];
+			const dirEntries = (await readDir(join(src, managedSRC, key))) || map[key].children || [];
 			// Batch process directory entries
 			const itemOperations: Promise<void>[] = [];
 			for (const item of dirEntries) {
@@ -942,7 +1004,7 @@ export async function applyChanges(isMigration = false) {
 				const name = replaceDisabled(item.name);
 				if (isDisabled) {
 					itemOperations.push(
-						rename(join(src, managedSRC, key, item.name), join(src, managedSRC, key, name)).catch(() => {
+						guardedRename(join(src, managedSRC, key, item.name), join(src, managedSRC, key, name)).catch(() => {
 							//console.error(`Error renaming disabled item ${item.name}:`, error);
 						})
 					);
@@ -1052,7 +1114,7 @@ export async function remMoveMods(categoryMode = true, enable = 0) {
 			finalTgt = tgtPath + `_${counter}`;
 			counter++;
 		}
-		await rename(srcPath, join(tgt, finalTgt));
+		await guardedRename(srcPath, join(tgt, finalTgt));
 		if (enabled.has(entry.path)) {
 			iniChanges[join("$\\mods", managedTGT, entry.path).toLowerCase()] = join("$\\mods", finalTgt).toLowerCase();
 		}
@@ -1072,23 +1134,33 @@ export async function remMoveMods(categoryMode = true, enable = 0) {
 		error("Error updating d3dx_user.ini:", e);
 	}
 	try {
-		await remove(join(tgt, managedTGT), { recursive: true });
-	} catch {}
+		await guardedRemove(join(tgt, managedTGT), { recursive: true });
+	} catch (removeTargetError) {
+		warn("[IMM] Failed to remove managed target root after move:", removeTargetError);
+	}
 	const removeSrcPromises = allEntries.map(async (entry) => {
 		try {
-			await remove(join(src, managedSRC, entry.path));
-		} catch {}
+			await guardedRemove(join(src, managedSRC, entry.path));
+		} catch (removeSourceError) {
+			warn("[IMM] Failed to remove migrated source entry:", removeSourceError);
+		}
 	});
 	await Promise.all(removeSrcPromises);
 	try {
-		await remove(join(src, managedSRC, RESTORE));
-	} catch {}
+		await guardedRemove(join(src, managedSRC, RESTORE));
+	} catch (removeRestoreError) {
+		warn("[IMM] Failed to remove managed restore directory:", removeRestoreError);
+	}
 	try {
-		await remove(join(src, managedSRC, PREFS));
-	} catch {}
+		await guardedRemove(join(src, managedSRC, PREFS));
+	} catch (removePrefsError) {
+		warn("[IMM] Failed to remove managed prefs directory:", removePrefsError);
+	}
 	try {
-		await remove(join(src, managedSRC));
-	} catch {}
+		await guardedRemove(join(src, managedSRC), { allowedRoots: [src], includeDefaultRoots: false });
+	} catch (removeManagedRootError) {
+		warn("[IMM] Failed to remove managed source root:", removeManagedRootError);
+	}
 }
 async function detectHotkeys(
 	entries: Mod[],
@@ -1096,20 +1168,23 @@ async function detectHotkeys(
 	src: string,
 	depth = 0,
 	def = true
-): Promise<[Mod[], any, ModHotKeys[], string, any]> {
+): Promise<[Mod[], Set<string>, ModHotKeys[], string, Record<string, string>]> {
 	let namespace = "";
 	let namespaces = {} as Record<string, string>;
 	const entryPromises = entries.map(async (entry) => {
 		let hkData: ModHotKeys[] = [];
-		let hashes = new Set() as any;
+		let hashes = new Set<string>();
 		try {
 			// // Apply stored data to entry
 			if (data[entry.path]) {
 				for (const key of Object.keys(data[entry.path])) {
-					// @ts-ignore
-					entry[key as "source" | "updatedAt" | "note"] =
-						data[entry.path as keyof typeof data][key as "source" | "updatedAt" | "note"] ||
-						(key === "updatedAt" ? 0 : "");
+					const writableKey = key as "source" | "updatedAt" | "note";
+					const nextValue = data[entry.path]?.[writableKey] || (writableKey === "updatedAt" ? 0 : "");
+					if (writableKey === "updatedAt") {
+						entry.updatedAt = Number(nextValue || 0);
+					} else {
+						entry[writableKey] = String(nextValue || "");
+					}
 				}
 			}
 
@@ -1127,10 +1202,10 @@ async function detectHotkeys(
 					let tempVal = "";
 					let section = "";
 					let fileNamespace = "";
-					let globalVars: Record<string, ModHotKeys> = {};
-					let fileData: Record<string, ModHotKeys> = {};
-					for (let line of lines) {
-						let ln = line
+					const globalVars: Record<string, ModHotKeys> = {};
+					const fileData: Record<string, ModHotKeys> = {};
+					for (const line of lines) {
+						const ln = line
 							.trim()
 							.replaceAll(/[\r\n]+/g, "")
 							.replaceAll(" ", "");
@@ -1153,9 +1228,9 @@ async function detectHotkeys(
 									.split("$")[1]
 									.split("=")
 									.map((part) => part.trim());
-								if (fileData.hasOwnProperty(tempKey)) {
+								if (Object.prototype.hasOwnProperty.call(fileData, tempKey)) {
 									fileData[tempKey].default = tempVal;
-								} else if (!globalVars.hasOwnProperty(tempKey))
+								} else if (!Object.prototype.hasOwnProperty.call(globalVars, tempKey))
 									globalVars[tempKey] = {
 										target: tempKey,
 										file: entry.path.split("\\").slice(2).join("\\").toLowerCase(),
@@ -1168,7 +1243,9 @@ async function detectHotkeys(
 										type: "",
 										values: ["unknown"],
 									};
-							} catch {}
+							} catch (globalParseError) {
+								warn("[IMM] Failed to parse global constant mapping:", globalParseError);
+							}
 						}
 						if (ln.startsWith("hash=")) {
 							const val = line.split("=")[1]?.trim() || "";
@@ -1198,7 +1275,7 @@ async function detectHotkeys(
 							[target, values] = line.split("=").map((part) => part.trim());
 							target = target?.slice(1) || "";
 							counter = 0;
-							if (!fileData.hasOwnProperty(target))
+							if (!Object.prototype.hasOwnProperty.call(fileData, target))
 								fileData[target] = {
 									...(globalVars[target] || {
 										target,
@@ -1222,7 +1299,7 @@ async function detectHotkeys(
 					}
 
 					hkData.push(...Object.values(fileData), ...Object.values(globalVars));
-				} catch (iniError) {
+				} catch {
 					//console.error(`Error parsing .ini file ${entry.name}:`, iniError);
 				}
 			}
@@ -1268,7 +1345,7 @@ async function detectHotkeys(
 				entry.keys = hkData;
 				entry.hashes = Array.from(hashes);
 			}
-		} catch (entryError) {
+		} catch {
 			//console.error(`Error processing entry ${entry.name}:`, entryError);
 		}
 		return { entry, hkData, hashes };
@@ -1283,7 +1360,7 @@ async function detectHotkeys(
 export async function getModDetails(relPath: string) {
 	const [category, modName] = relPath.split("\\");
 	const modSrc = join(src, managedSRC);
-	console.log("Getting mod details for:", relPath, "at", modSrc);
+	info("[IMM] Getting mod details for:", relPath, modSrc);
 	try {
 		const entries = await readDirRecr(modSrc, relPath, 5, 0, false);
 		const new_entries = (
@@ -1336,7 +1413,7 @@ export async function getModDetails(relPath: string) {
 }
 export async function refreshModList() {
 	info("[IMM] Refreshing mod list...");
-	let before = Date.now();
+	const before = Date.now();
 	try {
 		const data = store.get(DATA);
 		const modSrc = join(src, managedSRC);
@@ -1397,7 +1474,7 @@ export async function refreshModList() {
 		// 			? entry.children.map((entry) => {
 		// 					if (data[entry.path]) {
 		// 						for (const key of Object.keys(data[entry.path])) {
-		// 							// @ts-ignore
+		// 							// ts-ignore-removed
 		// 							entry[key as "source" | "updatedAt" | "note"] =
 		// 								data[entry.path as keyof typeof data][key as "source" | "updatedAt" | "note"] ||
 		// 								(key === "updatedAt" ? 0 : "");
@@ -1424,7 +1501,7 @@ export async function refreshModList() {
 				const newPath = join(entry.parent, newName);
 
 				renameOperations.push(
-					rename(join(modSrc, entry.path), join(modSrc, newPath))
+					guardedRename(join(modSrc, entry.path), join(modSrc, newPath))
 						.then(() => {
 							entry.name = newName;
 							entry.path = newPath;
@@ -1522,7 +1599,7 @@ export async function validateModDownload(path: string, skip = false) {
 		const entries = await readDir(path);
 		// const previewCount = entries.filter((entry) => entry.name.startsWith("preview.") && !entry.isDirectory).length;
 		const txtCount = entries.filter((entry) => entry.name.endsWith(".txt") && !entry.isDirectory).length;
-		const imgCount = entries.filter((entry: any) => {
+		const imgCount = entries.filter((entry) => {
 			const ext = entry.name.split(".").slice(-1)[0].toLowerCase();
 			return exts.includes(ext) && !entry.isDirectory;
 		}).length;
@@ -1541,9 +1618,9 @@ export async function validateModDownload(path: string, skip = false) {
 				const dirPath = path + "\\" + dirs[0];
 
 				try {
-					await rename(dirPath, tempPath);
+					await guardedRename(dirPath, tempPath);
 					await copyDir(tempPath, path);
-					await remove(tempPath, { recursive: true });
+					await guardedRemove(tempPath, { recursive: true });
 				} catch (err) {
 					error("[IMM] Error flattening mod directory structure:", err);
 				}
@@ -1558,12 +1635,12 @@ export async function validateModDownload(path: string, skip = false) {
 			const ele = list.find((mod) => mod.path === relPath);
 			if (ele) {
 				const keys = ele.keys || [];
-				const files = {} as any;
+				const files: Record<string, Record<string, string>> = {};
 				for (const hk of keys) {
 					if (!files[hk.file]) files[hk.file] = {};
 					if (hk.default) files[hk.file][hk.target] = hk.default;
 				}
-				const promises = [] as Promise<any>[];
+				const promises: Promise<boolean>[] = [];
 				Object.keys(files).forEach((file) => {
 					if (Object.keys(files[file]).length > 0) {
 						promises.push(updateIniVars(join(relPath, file), files[file]));
@@ -1600,7 +1677,7 @@ export async function cleanCancelledDownload(path: string) {
 				entry.name.endsWith(".part")
 		).length;
 		if (entries.length === hasPreview + hasArchive && hasArchive <= 1 && hasPreview <= 1) {
-			await remove(path, { recursive: true });
+			await guardedRemove(path, { recursive: true });
 		}
 	} catch (err) {
 		error("[IMM] Error cleaning cancelled download:", err);
@@ -1610,7 +1687,7 @@ export async function changeModName(path: string, newPath: string, add = false) 
 	try {
 		const enabled = add || (await toggleMod(path, false));
 		await mkdir(join(src, managedSRC, ...newPath.split("\\").slice(0, -1)), { recursive: true });
-		await rename(add ? join(src, path) : join(src, managedSRC, path), join(src, managedSRC, newPath));
+		await guardedRename(add ? join(src, path) : join(src, managedSRC, path), join(src, managedSRC, newPath));
 		store.set(DATA, (prev) => {
 			if (prev[path]) {
 				prev[newPath] = { ...prev[path] };
@@ -1628,7 +1705,7 @@ export async function changeModName(path: string, newPath: string, add = false) 
 			return prev;
 		});
 		saveConfigs();
-		console.log("Mod name changed from", path, "to", newPath);
+		info("[IMM] Mod name changed from", path, "to", newPath);
 		await updatePrefsIniFromData(newPath, path);
 		if (enabled) await toggleMod(newPath, true);
 		return newPath;
@@ -1641,7 +1718,7 @@ export async function deleteCategory(cat: string) {
 	const path = join(src, managedSRC, cat);
 	if (!(await exists(path))) return true;
 	try {
-		await remove(path);
+		await guardedRemove(path);
 		return true;
 	} catch (err) {
 		error("[IMM] Error deleting category:", err);
@@ -1651,7 +1728,7 @@ export async function deleteCategory(cat: string) {
 export async function deleteRestorePoint(point: string) {
 	try {
 		const path = join(modRoot, RESTORE, point);
-		await remove(path, { recursive: true });
+		await guardedRemove(path, { recursive: true });
 		addToast({ type: "success", message: textData._Toasts.Deleted });
 		return true;
 	} catch (err) {
@@ -1665,13 +1742,13 @@ export async function deleteMod(path: string) {
 	const modTgt = join(tgt, managedTGT, path);
 
 	try {
-		await remove(modTgt);
+		await guardedRemove(modTgt);
 	} catch (err) {
 		error("[IMM] Error removing mod target:", err);
 	}
 
 	try {
-		await remove(modSrc, { recursive: true });
+		await guardedRemove(modSrc, { recursive: true });
 		addToast({ type: "success", message: textData._Toasts.Deleted });
 	} catch (err) {
 		error("[IMM] Error removing mod source:", err);
@@ -1706,7 +1783,7 @@ export async function syncIniStateFromD3DXIni(
 	if (!root || !(await exists(root))) return [] as string[];
 	if (options.clearPrefsBeforeSync) {
 		await Promise.all(
-			mods.map((modPath) => remove(join(tgt, managedTGT, PREFS, modPath + ".ini")).catch(() => undefined))
+			mods.map((modPath) => guardedRemove(join(tgt, managedTGT, PREFS, modPath + ".ini")).catch(() => undefined))
 		);
 	}
 	const rawIni = await readTextFile(root);
@@ -1734,15 +1811,15 @@ export async function updatePrefsIniFromData(modPath: string, oldPath = "") {
 		const oldRoot = join(tgt, managedTGT, PREFS, oldPath);
 		if (!(await exists(oldRoot))) return;
 		await writeTextFile(root, (await readTextFile(oldRoot)).split(oldPath.toLowerCase()).join(modPath.toLowerCase()));
-		remove(oldRoot);
+		await guardedRemove(oldRoot);
 	} else {
 		const lines = {} as Record<string, string>;
-		for (let key of Object.keys(data.vars)) {
-			for (let Var of Object.keys(data.vars[key])) {
-				const x = data.vars[key][Var];
+		for (const key of Object.keys(data.vars)) {
+			for (const Var of Object.keys(data.vars[key])) {
+				const x = data.vars[key][Var] as { pref?: string; state?: string };
 				const line =
 					`$\\${key == "namespace" ? data.namespace : `mods\\${managedTGT}\\${modPath}\\${key}`}\\${Var}`.toLowerCase();
-				lines[line] = x.pref ?? x.state;
+				lines[line] = x.pref ?? x.state ?? "";
 				if (lines[line] === undefined || lines[line] === null || lines[line] === "") delete lines[line];
 				else info(`[IMM] Updating Mod: ${modPath} | File: ${key} | Added Line: ${line}`);
 			}
@@ -1760,16 +1837,16 @@ export async function updatePrefsIniFromData(modPath: string, oldPath = "") {
 }
 export async function updateIniVars(relPath: string, keyVals: Record<string, string>) {
 	const path = join(modRoot, relPath);
-	console.log("Updating ini vars for:", relPath, "at", path, "with keyVals:", keyVals);
+	info("[IMM] Updating ini vars for:", relPath, path);
 	if (!(await exists(path + ".bak"))) {
-		await copyFile(path, path + ".bak");
+		await guardedCopyFile(path, path + ".bak");
 	}
 	const file = await readTextFile(path);
 	const lines = file.split("\n");
 	try {
 		let section = "";
 		for (let i = 0; i < lines.length; i++) {
-			let ln = lines[i]
+			const ln = lines[i]
 				.trim()
 				.replaceAll(/[\r\n]+/g, "")
 				.replaceAll(" ", "");
@@ -1778,7 +1855,7 @@ export async function updateIniVars(relPath: string, keyVals: Record<string, str
 			}
 			if (section === "constants" && ln.includes("$") && ln.includes("=")) {
 				const modKey = ln.split("$")[1].split("=")[0].trim().toLowerCase();
-				if (keyVals.hasOwnProperty(modKey)) {
+				if (Object.prototype.hasOwnProperty.call(keyVals, modKey)) {
 					lines[i] = `${lines[i].split("=")[0]}= ${keyVals[modKey]}`;
 					info(`[IMM] Updating Mod: ${path} | Line${i}: ${lines[i]}`);
 				}
@@ -1823,7 +1900,7 @@ export async function toggleMod(path: string, enabled: boolean, forced = false):
 				clearPrefsBeforeSync: true,
 			});
 			try {
-				await remove(modTgt);
+				await guardedRemove(modTgt);
 			} catch (err) {
 				error("[IMM] Error removing mod:", err);
 				return false;
@@ -1833,15 +1910,15 @@ export async function toggleMod(path: string, enabled: boolean, forced = false):
 		error("[IMM] Error toggling mod:", err);
 		return false;
 	}
-	console.log(`Success Mod ${enabled ? "enabled" : "disabled"}:`, path);
+	info(`[IMM] Success mod ${enabled ? "enabled" : "disabled"}:`, path);
 	return true;
 }
-export async function savePreviewImageFromData(relPath: string, type: string, data: any) {
+export async function savePreviewImageFromData(relPath: string, type: string, data: Uint8Array) {
 	const path = join(src, managedSRC, relPath);
 	const previewPath = join(path, "preview." + type);
-	console.log("Saving preview image for:", path, "at", previewPath);
+	info("[IMM] Saving preview image for:", path, previewPath);
 	const removePromises = exts.map((ext) =>
-		remove(path + "\\" + "preview." + ext).catch(() => {
+		guardedRemove(path + "\\" + "preview." + ext).catch(() => {
 			// Ignore errors if file doesn't exist
 		})
 	);
@@ -1879,7 +1956,7 @@ export async function savePreviewImage(path: string) {
 		// Remove existing preview images in parallel
 
 		const removePromises = exts.map((ext) =>
-			remove(path + "\\" + "preview." + ext).catch(() => {
+			guardedRemove(path + "\\" + "preview." + ext).catch(() => {
 				// Ignore errors if file doesn't exist
 			})
 		);
@@ -1887,14 +1964,13 @@ export async function savePreviewImage(path: string) {
 
 		// Copy new preview image
 		const fileExt = file.split(".").pop();
-		await copyFile(file, path + "\\" + "preview." + fileExt);
+		await guardedImportFile(file, path + "\\" + "preview." + fileExt);
 		store.set(LAST_UPDATED, Date.now());
 		addToast({ type: "success", message: textData._Toasts.ImgSaved });
-	} catch (err) {
+	} catch {
 		//console.error("Error saving preview image:", error);
 		addToast({ type: "error", message: textData._Toasts.ErrOcc });
 		return false;
-		throw error;
 	}
 	return true;
 }
@@ -1903,7 +1979,7 @@ export async function applyPreset(data: string[], name = "") {
 		const entries = (await readDirRecr(join(tgt, managedTGT), "", 2)).flatMap((x) => x.children || []);
 		const disablePromises: Promise<boolean>[] = entries.map((entry) => toggleMod(entry.path, false));
 		await Promise.all(disablePromises);
-		await remove(join(tgt, managedTGT), { recursive: true });
+		await guardedRemove(join(tgt, managedTGT), { recursive: true });
 		await mkdir(join(tgt, managedTGT), { recursive: true });
 
 		// Apply mods in parallel batches to improve performance
@@ -1924,7 +2000,7 @@ export async function applyPreset(data: string[], name = "") {
 	} catch (err) {
 		error("[IMM] Error applying preset:", err);
 		if (name) addToast({ type: "error", message: textData._Toasts.ErrOcc });
-		throw error;
+		throw err;
 	}
 }
 
@@ -1933,7 +2009,8 @@ export async function installFromArchives(archives: string[]) {
 	let success = 0;
 	async function extractArchive(archive: string) {
 		if (!archive) return;
-		const [name] = archive.split("\\").pop()!.split(".");
+		const archiveName = archive.split("\\").pop() || "";
+		const [name] = archiveName.split(".");
 		const root = join(src, managedSRC, UNCATEGORIZED);
 		await mkdir(root, { recursive: true });
 		let counter = 0;
@@ -1953,18 +2030,18 @@ export async function installFromArchives(archives: string[]) {
 				path: UNCATEGORIZED + "\\" + finalName,
 				source: "",
 				file: archive,
-				fname: archive.split("\\").pop()!,
+				fname: archiveName,
 				category: UNCATEGORIZED,
 				updated: 0,
 				updatedAt: 0,
 				dlPath: dest,
-				key: `${finalName}_${archive.split("\\").pop()!}_${finalName}_0`,
-			} as any;
+				key: `${finalName}_${archiveName}_${finalName}_0`,
+			} as DownloadItem;
 			store.set(DOWNLOAD_LIST, (prev) => {
 				prev.extracting.push(element);
 				return { ...prev };
 			});
-			addToExtracts(element.key, element);
+			if (element.key) addToExtracts(element.key, element);
 			await invoke("extract_archive", {
 				filePath: archive,
 				savePath: dest,

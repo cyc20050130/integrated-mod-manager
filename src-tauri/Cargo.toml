@@ -1,6 +1,6 @@
 [package]
 name = "integrated-mod-manager"
-version = "3.1.9"
+version = "3.2.0"
 description = "A desktop mod manager for xxmi built with Tauri"
 authors = ["YourBadLuck"]
 edition = "2021"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [ "tray-icon", "protocol-asset", "devtools", "image-ico", "image-png"] }
+tauri = { version = "2", features = [ "tray-icon", "protocol-asset", "image-ico", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-fs = { version = "2", features = ["watch"] }

@@ -75,7 +75,7 @@ function ensureVarNode(nextData: ModDataObj, modPath: string, fileKey: string, v
 	nextData[modPath].vars = nextData[modPath].vars || {};
 	nextData[modPath].vars[fileKey] = nextData[modPath].vars[fileKey] || {};
 	nextData[modPath].vars[fileKey][variable] = nextData[modPath].vars[fileKey][variable] || {};
-	return nextData[modPath].vars[fileKey][variable];
+	return nextData[modPath].vars[fileKey][variable] as { state?: string };
 }
 
 export function syncIniStateFromText(

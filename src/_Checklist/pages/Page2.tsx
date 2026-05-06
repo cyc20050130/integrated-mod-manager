@@ -3,24 +3,24 @@ import { getPrevGame, initGame, main } from "@/utils/init";
 import { Games } from "@/utils/types";
 import { GAME,  SETTINGS, TEXT_DATA } from "@/utils/vars";
 import { useAtom, useAtomValue } from "jotai";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 function Page2({ setPage }: { setPage: (page: number) => void }) {
 	const text = useAtomValue(TEXT_DATA);
 	const game = useAtomValue(GAME);
 	const [selected,setSelected] = useState("")
 	const [settings] = useAtom(SETTINGS);
-	async function switchGame(gameCode: Games) {
+	const switchGame = useCallback(async (gameCode: Games) => {
 		setSelected(gameCode);
 		await main(gameCode);
 		setTimeout(() => {
 			setSelected("");
 		}, 10);
 		setPage(2)
-	}
+	}, [setPage]);
 	useEffect(() => {
 		if (game) setPage(2);
-	}, [game]);
+	}, [game, setPage, switchGame]);
 	useEffect(() => {
 		function checkEscape(event: KeyboardEvent) {
 			if (event.key === "Escape") {
@@ -32,7 +32,7 @@ function Page2({ setPage }: { setPage: (page: number) => void }) {
 		}
 		window.addEventListener("keydown", checkEscape);
 		return () => window.removeEventListener("keydown", checkEscape);
-	}, []);
+	}, [game, switchGame]);
 	return (
 		<div className="text-muted-foreground mt-6 fixed flex flex-col items-center justify-center w-screen h-screen gap-4">
 			<div className="mb-2 text-3xl">

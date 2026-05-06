@@ -36,7 +36,7 @@ function Page3({ setPage }: { setPage: (page: number) => void }) {
 				if (name) setUser(name as string);
 			});
 		}
-	}, [src, tgt]);
+	}, [setChanges, setPage, src, tgt]);
 	return (
 		<div className="text-muted-foreground fixed flex flex-col items-center justify-center w-screen h-screen">
 			<div className="fixed z-20 flex flex-col items-center justify-center w-full h-full duration-200">
@@ -89,6 +89,7 @@ function Page3({ setPage }: { setPage: (page: number) => void }) {
 									className=" hover:opacity-100 flex items-center duration-200 opacity-50"
 									href="https://github.com/SpectrumQT/XXMI-Launcher"
 									target="_blank"
+									rel="noreferrer noopener"
 								>
 									<ArrowUpRightFromSquareIcon className="inline w-4 h-4 mb-1" /> {textData._Checklist.WhatIsXXMI}
 								</a>
@@ -96,7 +97,7 @@ function Page3({ setPage }: { setPage: (page: number) => void }) {
 							<AlertDialogContent>
 								<AlertDialogCancel
 									className="top-3 text-destructive right-3 hover:opacity-100 absolute opacity-75"
-									variant="hidden"
+									variant="ghost"
 								>
 									<XIcon />
 								</AlertDialogCancel>

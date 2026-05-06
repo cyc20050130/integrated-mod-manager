@@ -6,7 +6,11 @@ import { Category } from "./types";
 import { SETTINGS, store } from "./vars";
 import GAME_DATA from "@/gameData.json";
 
-const GI_CHAR_MAP: any = {
+type HealthCheckResponse = {
+	client?: string;
+};
+
+const GI_CHAR_MAP: Record<string, string> = {
 	Aether: "PlayerBoy",
 	Alhaitham: "Alhatham",
 	Amber: "Ambor",
@@ -35,7 +39,7 @@ const GI_CHAR_MAP: any = {
 	Thoma: "Tohma",
 	Xianyun: "Liuyun",
 	Yae_Miko: "Yae",
-	Yanfei:"Feiyan",
+	Yanfei: "Feiyan",
 	Yumemizuki_Mizuki: "Mizuki",
 	Yun_Jin: "Yunjin",
 };
@@ -471,38 +475,39 @@ class ApiClient {
 		//info("Fetching categories...", await this.healthCheck());
 		this.healthCheck();
 		try {
-			const fetchWithRetry = async (timeouts: number[] = [2000, 5000]): Promise<any> => {
+			const fetchWithRetry = async (timeouts: number[] = [2000, 5000]): Promise<Category[]> => {
 				for (let i = 0; i < timeouts.length; i++) {
 					try {
 						const controller = new AbortController();
 						const timeoutId = setTimeout(() => controller.abort(), timeouts[i]);
 						//info(`Fetching categories (attempt ${i + 1})...`, timeouts[i]);
-						const response = await this.makeRequest(
+						const response = (await this.makeRequest(
 							`Mod/Categories?_idCategoryRow=${this.id.categories}&_sSort=a_to_z&_bShowEmpty=true`,
 							{ signal: controller.signal }
-						);
+						)) as Category[];
 						clearTimeout(timeoutId);
 						if (!response) {
-							throw new Error(`HTTP ${response.status}`);
+							throw new Error("Empty category response");
 						}
-						return await response;
+						return response;
 					} catch (error) {
 						if (i === timeouts.length - 1) {
 							throw error;
 						}
 					}
 				}
+				throw new Error("Category fetch exhausted retries");
 			};
 			const response = await fetchWithRetry();
 			this.categoryList = [
 				...response
-					.filter((x: any) => x._idRow !== 31838)
-					.map((cat: any) =>
-						this.GAME == "GI"
+					.filter((x: Category) => x._idRow !== 31838)
+					.map((cat: Category) =>
+						this.GAME === "GI"
 							? {
 									...cat,
 									_sIconUrl: cat._sIconUrl || getCharIconURL(cat._sName.replaceAll(/ /g, "_") || ""),
-							  }
+								}
 							: cat
 					),
 				...this.generic.categories,
@@ -535,46 +540,19 @@ class ApiClient {
 	}
 
 	async mod(mod = "Mod/0", signal?: AbortSignal) {
-		try {
-			const response = await this.makeRequest(`${mod}/ProfilePage`, signal && { signal });
-			return response;
-		} catch (error) {
-			//console.error("Failed to fetch categories:", error);
-			throw error;
-		}
+		return this.makeRequest(`${mod}/ProfilePage`, signal ? { signal } : undefined);
 	}
 
 	async updates(mod = "Mod/0", signal?: AbortSignal) {
-		try {
-			const response = await this.makeRequest(`${mod}/Updates?_nPage=1&_nPerpage=5`, signal && { signal });
-			return response;
-		} catch (error) {
-			//console.error("Failed to fetch categories:", error);
-			throw error;
-		}
+		return this.makeRequest(`${mod}/Updates?_nPage=1&_nPerpage=5`, signal ? { signal } : undefined);
 	}
 	async comments(mod = "Mod/0", page = 1, signal?: AbortSignal) {
 		// https://gamebanana.com/apiv11/Mod/651401/Posts?_nPage=1&_nPerpage=15&_sSort=popular
-		try{
-			const response = await this.makeRequest(`${mod}/Posts?_nPage=${page}&_nPerpage=15&_sSort=popular`, signal && { signal });
-			return response;
-		}
-		catch (error) {
-			//console.error("Failed to fetch comments:", error);
-			throw error;
-		}
+		return this.makeRequest(`${mod}/Posts?_nPage=${page}&_nPerpage=15&_sSort=popular`, signal ? { signal } : undefined);
 	}
 	async nestedcomments(postId = "0", signal?: AbortSignal) {
 		//https://gamebanana.com/apiv11/Post/13272284/Posts?_nPage=1&_nPerpage=20
-		try{
-			const response = await this.makeRequest(`Post/${postId}/Posts?_nPage=1&_nPerpage=15`, signal && { signal });
-			return response;
-		}
-		catch (error) {
-			//console.error("Failed to fetch nested comments:", error);
-			throw error;
-		}
-
+		return this.makeRequest(`Post/${postId}/Posts?_nPage=1&_nPerpage=15`, signal ? { signal } : undefined);
 	}
 	search({ term = "", page = 1, type = "" }) {
 		return `${API_BASE_URL}Util/Search/Results?_sModelName=${type}&_sOrder=best_match&_idGameRow=${
@@ -592,10 +570,13 @@ class ApiClient {
 			else {
 				fetch(`${base}/_${Date.now()}`)
 					.then((res) => res.json())
-					.then((data) => {
+					.then((data: HealthCheckResponse) => {
 						if (data.client) {
 							this.CLIENT = data.client;
-							store.set(SETTINGS, (prev) => ({ ...prev, global: { ...prev.global, clientDate: data.client } }));
+							store.set(SETTINGS, (prev) => ({
+								...prev,
+								global: { ...prev.global, clientDate: data.client || prev.global.clientDate || "" },
+							}));
 							saveConfigs();
 							// config.settings.clientDate = data.client;
 							// store.set(settingsDataAtom, config.settings as Settings);
@@ -603,7 +584,7 @@ class ApiClient {
 						}
 					});
 			}
-		} catch (error) {
+		} catch {
 			//console.error("Health check failed:", error);
 		}
 	}

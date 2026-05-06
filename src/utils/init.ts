@@ -44,12 +44,86 @@ import TEXT from "@/textData.json";
 import { unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { compareVersions, safeLoadJson, sanitizeGlobalSettings, setImageServer } from "./utils";
 import { addToast } from "@/_Toaster/ToastProvider";
-import { Category, Games, Preset, Settings } from "./types";
+import { Category, DownloadList, GameSettings, Games, GlobalSettings, ModDataObj, Preset, Settings } from "./types";
 import { toResumableDownloadList, withNormalizedDownloadSettings } from "./downloads";
 import { resetPageCounts } from "@/_Main/MainOnline";
 import { info } from "@/lib/logger";
 import { syncIniStateOnce } from "./iniStateSync";
 // import { v2_0_4_migration } from "./filesys";
+
+type RuntimeGlobalConfig = GlobalSettings & { version?: string; updatedAt?: string; notice?: number };
+type RuntimeGameConfig = {
+	version: string;
+	game: Games;
+	custom: 0 | 1;
+	sourceDir: string;
+	targetDir: string;
+	settings: GameSettings;
+	data: ModDataObj;
+	downloads: DownloadList;
+	presets: Preset[];
+	categories: Category[];
+	updatedAt: number | string;
+};
+type RuntimeGame = Exclude<Games, "">;
+type LegacySettings = {
+	opacity?: number;
+	type?: number;
+	bgType?: number;
+	nsfw?: number;
+	toggle?: number;
+	clientDate?: string;
+	lang?: string;
+	launch?: number;
+	hotReload?: number;
+	onlineType?: string;
+};
+type LegacyConfig = {
+	version?: string;
+	settings?: LegacySettings;
+	data?: Record<string, unknown>;
+	presets?: Preset[];
+};
+type XXMIImporter = {
+	Importer: {
+		importer_folder?: string;
+		run_pre_launch: string;
+		run_post_load: string;
+	};
+};
+type XXMIConfig = {
+	Importers: Record<string, XXMIImporter | undefined>;
+};
+type UpdateNotice = {
+	heading?: string;
+	subheading?: string;
+	ignoreable?: number;
+	timer?: number;
+	ver?: string;
+	id?: number;
+};
+type UpdateBodyContent = {
+	notice?: UpdateNotice;
+	[key: string]: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readJsonText<T>(jsonText: string): T {
+	return JSON.parse(jsonText) as T;
+}
+
+function normalizeUpdateBodyEntry(value: unknown): UpdateBodyContent {
+	return isRecord(value) ? (value as UpdateBodyContent) : {};
+}
+
+function getErrorMessage(error: unknown) {
+	if (error instanceof Error) return error.message;
+	return String(error || "Update check failed");
+}
+
 let paths = {
 	"": "",
 	exe: "",
@@ -72,16 +146,16 @@ let isInPrePostLaunch = {
 export function getPaths() {
 	return paths;
 }
-let config: any = { ...defConfig };
-let configXX: any = { ...defConfigXX };
+let config: RuntimeGlobalConfig = sanitizeGlobalSettings({ ...defConfig }) as RuntimeGlobalConfig;
+let configXX: RuntimeGameConfig = { ...defConfigXX } as RuntimeGameConfig;
 let dataDir = "";
 let appData = "";
 let prevGame = "";
 let categories: Category[] = [];
 let isInitialized = false;
-async function getXXMIConfig(path = store.get(XXMI_DIR)) {
+async function getXXMIConfig(path = store.get(XXMI_DIR)): Promise<XXMIConfig | null> {
 	try {
-		return JSON.parse(await readTextFile(join(path, "XXMI Launcher Config.json")));
+		return readJsonText<XXMIConfig>(await readTextFile(join(path, "XXMI Launcher Config.json")));
 	} catch (e) {
 		info("[IMM] Failed to read XXMI Launcher config:", e);
 		return null;
@@ -90,25 +164,26 @@ async function getXXMIConfig(path = store.get(XXMI_DIR)) {
 export async function setPrePostLaunch(game: Games, value: boolean) {
 	const data = await getXXMIConfig();
 	if (!data) return;
-	if (!data.Importers[game + "MI"]) return;
+	const importer = data.Importers[game + "MI"];
+	if (!importer) return;
 	const cmd = `start imm://mode/${game.toLowerCase()}`;
 	if (value) {
-		if (!data.Importers[game + "MI"].Importer.run_pre_launch.includes(cmd))
-			data.Importers[game + "MI"].Importer.run_pre_launch = [
+		if (!importer.Importer.run_pre_launch.includes(cmd))
+			importer.Importer.run_pre_launch = [
 				cmd,
-				...data.Importers[game + "MI"].Importer.run_pre_launch.split(" && "),
+				...importer.Importer.run_pre_launch.split(" && "),
 			]
 				.filter((x: string) => x.trim() !== "")
 				.join(" && ");
 	} else {
-		if (data.Importers[game + "MI"].Importer.run_pre_launch.includes(cmd)) {
-			data.Importers[game + "MI"].Importer.run_pre_launch = data.Importers[game + "MI"].Importer.run_pre_launch
+		if (importer.Importer.run_pre_launch.includes(cmd)) {
+			importer.Importer.run_pre_launch = importer.Importer.run_pre_launch
 				.split(" && ")
 				.filter((x: string) => x.trim() !== cmd)
 				.join(" && ");
 		}
-		if (data.Importers[game + "MI"].Importer.run_post_load.includes(cmd)) {
-			data.Importers[game + "MI"].Importer.run_post_load = data.Importers[game + "MI"].Importer.run_post_load
+		if (importer.Importer.run_post_load.includes(cmd)) {
+			importer.Importer.run_post_load = importer.Importer.run_post_load
 				.split(" && ")
 				.filter((x: string) => x.trim() !== cmd)
 				.join(" && ");
@@ -140,15 +215,13 @@ export async function readXXMIConfig(path: string) {
 		if (!data) return;
 		info("[IMM] Loaded XXMI Launcher config:", data);
 		GAMES.forEach((game) => {
-			if (data.Importers[game + "MI"]) {
-				const xxPath = (data.Importers[game + "MI"].Importer.importer_folder || "").replace(/\\/g, "/");
+			const importer = data.Importers[game + "MI"];
+			if (importer) {
+				const xxPath = (importer.Importer.importer_folder || "").replace(/\\/g, "/");
 				info(`[IMM] Resolved ${game}MI path:`, xxPath);
 				paths[game as Games] = xxPath == `${game}MI/` ? join(path, `${game}MI`) : join(...xxPath.split("/"));
 				const startCmd = `start imm://mode/${game.toLowerCase()}`;
-				if (
-					data.Importers[game + "MI"].Importer?.run_pre_launch.includes(startCmd) ||
-					data.Importers[game + "MI"].Importer?.run_post_load.includes(startCmd)
-				)
+				if (importer.Importer.run_pre_launch.includes(startCmd) || importer.Importer.run_post_load.includes(startCmd))
 					isInPrePostLaunch[game as Games] = true;
 			}
 		});
@@ -191,36 +264,43 @@ export async function setWindowType(type: number) {
 invoke<string>("get_image_server_url").then((url) => {
 	setImageServer(url + "/preview");
 });
-export async function updateConfig(oconfig = null as any) {
-	if (!oconfig) oconfig = JSON.parse(await readTextFile("config.json"));
+export async function updateConfig(oconfig: LegacyConfig | null = null): Promise<RuntimeGlobalConfig> {
+	if (!oconfig) oconfig = readJsonText<LegacyConfig>(await readTextFile("config.json"));
 	info("[IMM] Updating config from:", oconfig);
-	if (compareVersions(oconfig.version || "0.0.0", "2.1.0") >= 0) return oconfig;
-	let config = {
+	if (compareVersions(oconfig.version || "0.0.0", "2.1.0") >= 0) {
+		return sanitizeGlobalSettings(oconfig as RuntimeGlobalConfig) as RuntimeGlobalConfig;
+	}
+	const legacySettings = oconfig.settings || {};
+	const config: RuntimeGlobalConfig = {
 		version: VERSION,
 		updatedAt: new Date().toISOString(),
-		bgOpacity: oconfig.settings.opacity || 1,
+		bgOpacity: legacySettings.opacity || 1,
 		winOpacity: 1,
-		winType: oconfig.settings.type || 0,
-		bgType: oconfig.settings.bgType || 2,
+		winType: (legacySettings.type || 0) as 0 | 1 | 2,
+		bgType: (legacySettings.bgType || 2) as 0 | 1 | 2,
 		listType: 0,
-		nsfw: oconfig.settings.nsfw || 1,
-		toggleClick: oconfig.settings.toggle || 2,
+		nsfw: (legacySettings.nsfw || 1) as 0 | 1 | 2,
+		toggleClick: (legacySettings.toggle || 2) as 0 | 2,
 		ignore: "",
-		clientDate: oconfig.settings.clientDate || "",
+		clientDate: legacySettings.clientDate || "",
 		XXMI: "",
-		lang: oconfig.settings.lang || "",
-		game: "",
+		lang: (legacySettings.lang || "") as RuntimeGlobalConfig["lang"],
+		game: "" as Games,
+		preReleases: false,
+		chkModUpdates: true,
+		onlineBlacklist: [],
+		wuwaModFixer: { ...defConfig.wuwaModFixer },
 	};
-	let data = oconfig.data || {};
-	let keys = Object.keys(data);
-	for (let key of keys) {
+	const data = { ...(oconfig.data || {}) } as Record<string, unknown>;
+	const keys = Object.keys(data);
+	for (const key of keys) {
 		if (key.startsWith("\\")) {
 			data[key.substring(1)] = data[key];
 			delete data[key];
 		}
 	}
-	let presets = oconfig.presets.map((preset: Preset) => {
-		let newPreset: Preset = { name: preset.name || "Preset", data: [], hotkey: preset?.hotkey || "" };
+	const presets = (oconfig.presets || []).map((preset: Preset) => {
+		const newPreset: Preset = { name: preset.name || "Preset", data: [], hotkey: preset?.hotkey || "" };
 		if (preset.data && Array.isArray(preset.data)) {
 			newPreset.data = preset.data.map((item: string) => (item.startsWith("\\") ? item.substring(1) : item));
 		}
@@ -233,13 +313,13 @@ export async function updateConfig(oconfig = null as any) {
 				version: VERSION,
 				categories: [],
 				settings: {
-					launch: oconfig.settings.launch || 0,
-					hotReload: oconfig.settings.hotReload || 1,
-					onlineType: oconfig.settings.onlineType || "Mod",
+					launch: (legacySettings.launch || 0) as 0 | 1 | 2,
+					hotReload: (legacySettings.hotReload || 1) as 0 | 1 | 2,
+					onlineType: legacySettings.onlineType || "Mod",
 					customCategories: {},
 					download: { ...defConfigXX.settings.download },
 				},
-				data: oconfig.data || {},
+				data,
 				presets: presets || [],
 				downloads: {
 					queue: [],
@@ -279,32 +359,38 @@ export async function verifyGameDir(game: Games) {
 	}
 	return dirs;
 }
-export async function initGame(game: Games, status = true) {
+export async function initGame(game: RuntimeGame, status = true) {
 	info(`[IMM] Initializing game: ${game}...`);
 	store.set(ONLINE_DATA, {});
-	if (await exists(`config${game}.json`)) {
-		configXX = JSON.parse(await readTextFile(`config${game}.json`));
-	} else configXX = { ...defConfigXX };
-	const defKeys = Object.keys(defConfigXX);
-	defKeys.forEach((key) => {
-		if (!(key in configXX)) {
-			(configXX as any)[key] = (defConfigXX as any)[key];
-		}
-	});
-	configXX.settings = withNormalizedDownloadSettings({
+	const savedConfig = (await exists(`config${game}.json`))
+		? readJsonText<Partial<RuntimeGameConfig>>(await readTextFile(`config${game}.json`))
+		: {};
+	const mergedSettings = {
 		...defConfigXX.settings,
-		...configXX.settings,
+		...(savedConfig.settings || {}),
 		customCategories: {
 			...defConfigXX.settings.customCategories,
-			...(configXX.settings?.customCategories || {}),
+			...(savedConfig.settings?.customCategories || {}),
 		},
 		download: {
 			...defConfigXX.settings.download,
-			...(configXX.settings?.download || {}),
+			...(savedConfig.settings?.download || {}),
 		},
-	});
-	configXX.downloads = toResumableDownloadList(configXX.downloads);
-	configXX.game = game;
+	} as GameSettings;
+	configXX = {
+		...defConfigXX,
+		...savedConfig,
+		game,
+		settings: withNormalizedDownloadSettings(mergedSettings),
+		data: (savedConfig.data || {}) as ModDataObj,
+		downloads: toResumableDownloadList(savedConfig.downloads || defConfigXX.downloads),
+		presets: savedConfig.presets || [],
+		categories: savedConfig.categories || [],
+		custom: (savedConfig.custom ?? defConfigXX.custom) as 0 | 1,
+		sourceDir: savedConfig.sourceDir || defConfigXX.sourceDir,
+		targetDir: savedConfig.targetDir || defConfigXX.targetDir,
+		updatedAt: savedConfig.updatedAt || defConfigXX.updatedAt,
+	};
 	if (configXX.settings.launch === 2 && !isInPrePostLaunch[game]) configXX.settings.launch = 0;
 	else if (isInPrePostLaunch[game]) configXX.settings.launch = 2;
 	switchGameTheme(game);
@@ -315,23 +401,23 @@ export async function initGame(game: Games, status = true) {
 		dataDir = configXX.targetDir;
 	}
 	await writeTextFile(`config${game}.json`, JSON.stringify(configXX, null, 2));
-	apiClient.setGame(game as any);
+	apiClient.setGame(game);
 	await setCategories(game, status);
 	invoke("set_window_icon", { game });
 	// Validate source and target dirs
 	if (configXX.sourceDir && !(await exists(join(configXX.sourceDir)))) configXX.sourceDir = "";
 	if (configXX.targetDir && !(await exists(configXX.targetDir))) configXX.targetDir = "";
-	status && store.set(MAIN_FUNC_STATUS, "Validating source and target directories");
+	if (status) store.set(MAIN_FUNC_STATUS, "Validating source and target directories");
 	info("[IMM] Validating source and target directories...", configXX.sourceDir, configXX.targetDir);
 	store.set(SOURCE, configXX.sourceDir || "");
 	store.set(TARGET, configXX.targetDir || "");
-	store.set(XXMI_MODE, configXX.custom || 0);
+	store.set(XXMI_MODE, (configXX.custom || 0) as 0 | 1);
 	store.set(
 		SETTINGS,
 		(prev) => ({ global: { ...prev.global, game }, game: { ...prev.game, ...configXX.settings } }) as Settings
 	);
 	store.set(TYPES, apiClient.generic.types);
-	store.set(DATA, configXX.data || {});
+	store.set(DATA, configXX.data || ({} as ModDataObj));
 	store.set(PRESETS, configXX.presets || []);
 	store.set(DOWNLOAD_LIST, toResumableDownloadList(configXX.downloads));
 	return configXX;
@@ -371,32 +457,31 @@ export async function setCategories(game = prevGame, status = true) {
 	if (!game) return;
 	prevGame = game;
 	try {
-		status && store.set(MAIN_FUNC_STATUS, "Fetching game categories from Gamebanana");
+		if (status) store.set(MAIN_FUNC_STATUS, "Fetching game categories from Gamebanana");
 		categories = await apiClient.categories();
 		//info("Fetched categories:", categories);
 		if (!categories || categories.length == 0) throw "No categories found, please verify the directories again";
 	} catch (e) {
-		status && store.set(MAIN_FUNC_STATUS, "Unable to reach Gamebanana");
+		if (status) store.set(MAIN_FUNC_STATUS, "Unable to reach Gamebanana");
 		info("[IMM] Failed to fetch categories from API, using local config if available.", e);
 		categories =
 			configXX.categories && configXX.categories.length > 0
 				? configXX.categories
 				: [...apiClient.categoryList, ...apiClient.generic.categories];
-	} finally {
-		//info("Using categories:", categories,apiClient.categoryList,configXX.categories);
-		if (!categories || categories.length == 0) return;
-		info("[IMM] Finalized categories:", categories);
-		const catObj: { [key: string]: Category } = {};
-		categories.forEach((cat) => {
-			catObj[cat._sName] = cat;
-		});
-		const customCats = configXX.settings.customCategories || {};
-		for (let key of Object.keys(customCats)) {
-			catObj[key] = { ...catObj[key], _sName: key, ...customCats[key] };
-		}
-		categories = Object.values(catObj).map((cat) => ({ ...cat, _sIconUrl: cat._sIconUrl || "/who.jpg" }));
-		store.set(CATEGORIES, categories);
 	}
+	//info("Using categories:", categories,apiClient.categoryList,configXX.categories);
+	if (!categories || categories.length == 0) return;
+	info("[IMM] Finalized categories:", categories);
+	const catObj: { [key: string]: Category } = {};
+	categories.forEach((cat) => {
+		catObj[cat._sName] = cat;
+	});
+	const customCats = (configXX.settings.customCategories || {}) as Record<string, Partial<Category>>;
+	for (const key of Object.keys(customCats)) {
+		catObj[key] = { ...(catObj[key] || ({} as Category)), _sName: key, ...customCats[key] };
+	}
+	categories = Object.values(catObj).map((cat) => ({ ...cat, _sIconUrl: cat._sIconUrl || "/who.jpg" }));
+	store.set(CATEGORIES, categories);
 }
 function removeHelpers() {
 	stopWindowMonitoring();
@@ -418,7 +503,7 @@ export async function launchGame() {
 }
 async function initHelpers() {
 	info("[IMM] Initializing helpers...");
-	if (configXX.settings.launch == 1 && GAMES.includes(config.game)) {
+	if (configXX.settings.launch == 1 && GAMES.includes(config.game as RuntimeGame)) {
 		launchGame();
 	}
 	setHotreload(configXX.settings.hotReload as 0 | 1 | 2, config.game, configXX.targetDir);
@@ -448,15 +533,13 @@ export async function maintainBackups() {
 				delete data.categories;
 				if (await exists(backupPath + file + ".bak")) {
 					try {
-						const backupData = JSON.parse(await readTextFile(backupPath + file + ".bak"));
+						const backupData = readJsonText<Record<string, unknown>>(await readTextFile(backupPath + file + ".bak"));
 						if (
 							backupData.updatedAt &&
-							new Date().getTime() - new Date(backupData.updatedAt).getTime() > 24 * 60 * 60 * 1000
+							new Date().getTime() - new Date(String(backupData.updatedAt)).getTime() > 24 * 60 * 60 * 1000
 						) {
 							info(`[IMM] Creating backup for: ${file}...`);
-							try {
-								remove(backupPath + file + ".bak.bak");
-							} catch {}
+							await remove(backupPath + file + ".bak.bak").catch(() => undefined);
 							await writeTextFile(backupPath + file + ".bak.bak", await readTextFile(backupPath + file + ".bak"));
 							await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 						}
@@ -468,19 +551,21 @@ export async function maintainBackups() {
 					info(`[IMM] Creating initial backup for: ${file}...`);
 					await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 				}
-			} catch (e) {
+			} catch {
 				info(`[IMM] Detected corrupted config file: ${file}, restoring from backup...`);
 				store.set(MAIN_FUNC_STATUS, `Config file corrupted, restoring from backup`);
 				if (await exists(backupPath + file + ".bak")) {
 					try {
-						const backupData = JSON.parse(await readTextFile(backupPath + file + ".bak"));
+						const backupData = readJsonText<Record<string, unknown>>(await readTextFile(backupPath + file + ".bak"));
 						await writeTextFile(file, JSON.stringify(backupData, null, 2));
 						info(`[IMM] Successfully restored backup for: ${file}`);
-					} catch (e) {
+					} catch {
 						info(`[IMM] Detected corrupted backup config file: ${file}.bak, restoring from secondary backup...`);
 						if (await exists(backupPath + file + ".bak.bak")) {
 							try {
-								const backupData2 = JSON.parse(await readTextFile(backupPath + file + ".bak.bak"));
+								const backupData2 = readJsonText<Record<string, unknown>>(
+									await readTextFile(backupPath + file + ".bak.bak")
+								);
 								await writeTextFile(file, JSON.stringify(backupData2, null, 2));
 								await writeTextFile(backupPath + file + ".bak", JSON.stringify(backupData2, null, 2));
 								info(`[IMM] Successfully restored secondary backup for: ${file}`);
@@ -530,8 +615,9 @@ async function readRuntimeDataDir() {
 function parseUpdateBody(update: Update | null, lang: string) {
 	if (!update?.body) return {};
 	try {
-		const parsed = JSON.parse(update.body);
-		return parsed[lang as keyof typeof parsed] || parsed;
+		const parsed = readJsonText<unknown>(update.body);
+		if (!isRecord(parsed)) return {};
+		return normalizeUpdateBodyEntry(parsed[lang] ?? parsed);
 	} catch {
 		return {};
 	}
@@ -561,13 +647,13 @@ export async function refreshAppUpdateCheck(openUpdater = false) {
 		}
 
 		const lang = config.lang || "en";
-		const parsedBody: any = parseUpdateBody(update, lang);
+		const parsedBody = parseUpdateBody(update, lang);
 		const notice = parsedBody.notice || {};
 		const lastConfig = config.notice || 0;
 		let noticeOpen = false;
-		if (notice.id > 0 && compareVersions(notice.ver || "0.0.0", VERSION) > 0) {
-			store.set(NOTICE, (prev: any) => ({ ...prev, ...notice }));
-			if (notice.id !== lastConfig || notice.ignoreable == 0) {
+		if ((notice.id ?? 0) > 0 && compareVersions(notice.ver || "0.0.0", VERSION) > 0) {
+			store.set(NOTICE, (prev) => ({ ...prev, ...notice }));
+			if ((notice.id ?? 0) !== lastConfig || notice.ignoreable == 0) {
 				noticeOpen = true;
 				store.set(NOTICE_OPEN, true);
 			}
@@ -592,14 +678,14 @@ export async function refreshAppUpdateCheck(openUpdater = false) {
 			}),
 		}));
 		return update;
-	} catch (error: any) {
+	} catch (error: unknown) {
 		store.set(IMM_UPDATE, {
 			version: VERSION,
 			date: "",
 			body: "{}",
 			status: "error",
 			raw: null,
-			error: error?.message || String(error || "Update check failed"),
+			error: getErrorMessage(error),
 		});
 		if (openUpdater) store.set(UPDATER_OPEN, true);
 		return null;
@@ -621,7 +707,7 @@ export async function main(useGame = "" as Games) {
 		await writeTextFile("config.json", JSON.stringify(defConfig, null, 2));
 	}
 	await maintainBackups();
-	const rawConfig = JSON.parse(await readTextFile("config.json"));
+	const rawConfig = readJsonText<Record<string, unknown>>(await readTextFile("config.json"));
 	config = sanitizeGlobalSettings(safeLoadJson(structuredClone(defConfig), rawConfig));
 	if (compareVersions(config.version || "0.0.0", "2.2.0") < 0) {
 		config.chkModUpdates = true;
@@ -655,7 +741,7 @@ export async function main(useGame = "" as Games) {
 		config.game = GAMES.includes(config.game) ? config.game : "";
 		sessionStorage.removeItem("imm-deep-link-game");
 	}
-	if (config.game) apiClient.setGame(config.game);
+		if (config.game) apiClient.setGame(config.game as RuntimeGame);
 	if (compareVersions(config.version || "0.0.0", "2.1.0") < 0) {
 		config = await updateConfig();
 	}
@@ -664,7 +750,7 @@ export async function main(useGame = "" as Games) {
 	await readXXMIConfig(config.XXMI || "");
 	store.set(MAIN_FUNC_STATUS, "Initializing game");
 	info("[IMM] Initializing game...");
-	if (config.game) configXX = await initGame(config.game);
+	if (config.game) configXX = await initGame(config.game as RuntimeGame);
 	info("[IMM] Setting window type...");
 	if (config.winType > 1) setWindowType(config.winType);
 	const bg = document.querySelector("body");

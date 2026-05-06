@@ -19,16 +19,42 @@ import {
 	ProgressData,
 	Settings,
 } from "./types";
+
 interface UpdateInfo {
 	version: string;
 	status: "checking" | "up_to_date" | "available" | "downloading" | "installing" | "relaunching" | "error";
 	date: string;
 	body: string;
-	raw: any | null;
+	raw: UpdateHandle | null;
 	error?: string;
 }
+interface UpdateDownloadEvent {
+	event: string;
+	data?: {
+		contentLength?: number;
+		chunkLength?: number;
+	};
+}
+interface UpdateHandle {
+	download(callback?: (event: UpdateDownloadEvent) => void, options?: unknown): Promise<void>;
+	install(): Promise<void>;
+}
+interface ToastInfo {
+	id: number;
+	type: "success" | "error" | "info" | "warning";
+	message: string;
+	onClick: null | (() => void);
+}
+interface NoticeInfo {
+	heading: string;
+	subheading: string;
+	ignoreable: number;
+	timer: number;
+	ver: string;
+	id: number;
+}
 const INIT_DONE = atom(false);
-const MAIN_FUNC_STATUS = atom("" as String);
+const MAIN_FUNC_STATUS = atom<string>("");
 const FIRST_LOAD = atom(false);
 const GAME = atom<Games>("");
 const LANG = atom<Language>("en");
@@ -98,11 +124,12 @@ const CATEGORY = atom(DEFAULTS.CATEGORY);
 const SEARCH = atom(DEFAULTS.SEARCH);
 const INSTALLED_ITEMS = atom<InstalledItem[]>(DEFAULTS.INSTALLED_ITEMS);
 const ONLINE_DATA = atom<OnlineData>(DEFAULTS.ONLINE_DATA);
+const ONLINE_SOURCE = atom(DEFAULTS.ONLINE_SOURCE);
 const ONLINE_TYPE = atom(DEFAULTS.ONLINE_TYPE);
 const ONLINE_SORT = atom(DEFAULTS.ONLINE_SORT);
 const ONLINE_PATH = atom(DEFAULTS.ONLINE_PATH);
 const ONLINE_SELECTED = atom(DEFAULTS.ONLINE_SELECTED);
-const TOASTS = atom([] as any[]);
+const TOASTS = atom<ToastInfo[]>([]);
 const CHANGES = atom<ChangeInfo>({
 	before: [],
 	after: [],
@@ -115,14 +142,14 @@ const PROGRESS_OVERLAY = atom<ProgressData>({ title: "", open: false, finished: 
 const IMM_UPDATE = atom(null as UpdateInfo | null);
 const UPDATER_OPEN = atom(false);
 const WUWA_MOD_FIXER_OPEN = atom(false);
-const NOTICE = atom({
+const NOTICE = atom<NoticeInfo>({
 	heading: "",
 	subheading: "",
 	ignoreable: 2,
 	timer: 10,
 	ver: VERSION,
 	id: 0,
-} as any);
+});
 const HELP_OPEN = atom(false);
 const TUTORIAL_OPEN = atom(false);
 const NOTICE_OPEN = atom(false);
@@ -146,42 +173,38 @@ const LINK_AUDIT_REPORT = atom<LinkAuditReport | null>(DEFAULTS.LINK_AUDIT_REPOR
 const LINK_AUDIT_RUNNING = atom<boolean>(DEFAULTS.LINK_AUDIT_RUNNING);
 const PREVIEW_BACKFILL_STATE = atom<PreviewBackfillState>(DEFAULTS.PREVIEW_BACKFILL_STATE);
 export function resetAtoms() {
-	const atoms = {
-		INIT_DONE,
-		LANG,
-		GAME,
-		SETTINGS,
-		SOURCE,
-		TARGET,
-		DATA,
-		PRESETS,
-		CATEGORIES,
-		TYPES,
-		CHANGES,
-		ONLINE,
-		DOWNLOAD_LIST,
-		CURRENT_PRESET,
-		MOD_LIST,
-		SELECTED,
-		FILTER,
-		CATEGORY,
-		SEARCH,
-		SORT,
-		INSTALLED_ITEMS,
-		ONLINE_DATA,
-		ONLINE_TYPE,
-		ONLINE_PATH,
-		ONLINE_SORT,
-		ONLINE_SELECTED,
-		XXMI_MODE,
-		LINK_AUDIT_REPORT,
-		LINK_AUDIT_RUNNING,
-		PREVIEW_BACKFILL_STATE,
-	};
 	store.set(FILE_TO_DL, "");
-	Object.keys(atoms).forEach((atom) =>
-		store.set(atoms[atom as keyof typeof atoms] as any, DEFAULTS[atom as keyof typeof DEFAULTS])
-	);
+	store.set(INIT_DONE, DEFAULTS.INIT_DONE);
+	store.set(LANG, DEFAULTS.LANG);
+	store.set(GAME, DEFAULTS.GAME);
+	store.set(SETTINGS, DEFAULTS.SETTINGS);
+	store.set(SOURCE, DEFAULTS.SOURCE);
+	store.set(TARGET, DEFAULTS.TARGET);
+	store.set(DATA, DEFAULTS.DATA);
+	store.set(PRESETS, DEFAULTS.PRESETS);
+	store.set(CATEGORIES, DEFAULTS.CATEGORIES);
+	store.set(TYPES, DEFAULTS.TYPES);
+	store.set(CHANGES, DEFAULTS.CHANGES);
+	store.set(ONLINE, DEFAULTS.ONLINE);
+	store.set(DOWNLOAD_LIST, DEFAULTS.DOWNLOAD_LIST);
+	store.set(CURRENT_PRESET, DEFAULTS.CURRENT_PRESET);
+	store.set(MOD_LIST, DEFAULTS.MOD_LIST);
+	store.set(SELECTED, DEFAULTS.SELECTED);
+	store.set(FILTER, DEFAULTS.FILTER);
+	store.set(CATEGORY, DEFAULTS.CATEGORY);
+	store.set(SEARCH, DEFAULTS.SEARCH);
+	store.set(SORT, DEFAULTS.SORT);
+	store.set(INSTALLED_ITEMS, DEFAULTS.INSTALLED_ITEMS);
+	store.set(ONLINE_DATA, DEFAULTS.ONLINE_DATA);
+	store.set(ONLINE_SOURCE, DEFAULTS.ONLINE_SOURCE);
+	store.set(ONLINE_TYPE, DEFAULTS.ONLINE_TYPE);
+	store.set(ONLINE_PATH, DEFAULTS.ONLINE_PATH);
+	store.set(ONLINE_SORT, DEFAULTS.ONLINE_SORT);
+	store.set(ONLINE_SELECTED, DEFAULTS.ONLINE_SELECTED);
+	store.set(XXMI_MODE, DEFAULTS.XXMI_MODE);
+	store.set(LINK_AUDIT_REPORT, DEFAULTS.LINK_AUDIT_REPORT);
+	store.set(LINK_AUDIT_RUNNING, DEFAULTS.LINK_AUDIT_RUNNING);
+	store.set(PREVIEW_BACKFILL_STATE, DEFAULTS.PREVIEW_BACKFILL_STATE);
 }
 const ERR = atom("");
 export {
@@ -212,6 +235,7 @@ export {
 	DOWNLOAD_LIST,
 	TYPES,
 	ONLINE_DATA,
+	ONLINE_SOURCE,
 	ONLINE_TYPE,
 	ONLINE_PATH,
 	ONLINE_SORT,

@@ -72,7 +72,7 @@ function LeftOnline() {
 				>
 					{types.map((category) => {
 						return (
-							<div className="flex items-center justify-center w-full">
+							<div key={category._sName} className="flex items-center justify-center w-full">
 								<Button
 									key={"filter" + category._sName}
 									id={"type " + category._sName}
@@ -169,10 +169,13 @@ function LeftOnline() {
 									>
 										{leftSidebarOpen ? (
 											<div className="fade-in flex items-center w-full gap-1 pl-2 pointer-events-none">
-												{[
-													<EyeIcon className="min-h-4 max-h-4 min-w-4 " />,
-													<UploadIcon className="min-h-4 max-h-4 min-w-4 " />,
-												][item.modStatus - 1] || <FolderCheckIcon className="min-h-4 max-h-4 min-w-4" />}
+												{item.modStatus === 1 ? (
+													<EyeIcon className="min-h-4 max-h-4 min-w-4 " />
+												) : item.modStatus === 2 ? (
+													<UploadIcon className="min-h-4 max-h-4 min-w-4 " />
+												) : (
+													<FolderCheckIcon className="min-h-4 max-h-4 min-w-4" />
+												)}
 												<Label className="min-w-69 w-69 pointer-events-none">
 													{item.name.split("\\").slice(-1)[0]}
 												</Label>

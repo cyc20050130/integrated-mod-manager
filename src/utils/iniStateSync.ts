@@ -63,7 +63,10 @@ function scheduleSync(reason: string) {
 	}, 300);
 }
 
-function isRelevantWatchEvent(event: any, iniPath: string) {
+function isRelevantWatchEvent(
+	event: { paths?: string[]; type?: unknown },
+	iniPath: string
+) {
 	const normalizedIniPath = normalizePath(iniPath);
 	const touched = Array.isArray(event?.paths)
 		? event.paths.some((path: string) => normalizePath(path) === normalizedIniPath)
@@ -71,12 +74,12 @@ function isRelevantWatchEvent(event: any, iniPath: string) {
 	if (!touched) return false;
 	const type = event?.type;
 	if (type === "any" || type === "other") return true;
-	if (type?.modify) {
-		const kind = type.modify.kind;
+	if (typeof type === "object" && type && "modify" in type && type.modify) {
+		const kind = (type.modify as { kind?: string }).kind;
 		return kind === "any" || kind === "data" || kind === "rename" || kind === "other";
 	}
-	if (type?.create) return true;
-	if (type?.remove) return true;
+	if (typeof type === "object" && type && "create" in type && type.create) return true;
+	if (typeof type === "object" && type && "remove" in type && type.remove) return true;
 	return false;
 }
 

@@ -23,6 +23,8 @@ import {
 	LinkAuditReport,
 	LinkAuditSuggestion,
 	ModData,
+	OnlineMod,
+	Preset,
 	PreviewBackfillState,
 } from "./types";
 import { join } from "./hotreload";
@@ -384,7 +386,7 @@ export async function applyLinkAuditSuggestions(
 		if (!scope.includes(gameReport.game)) continue;
 		if (!(await exists(gameReport.configPath))) continue;
 
-		let parsed: any;
+		let parsed: { data?: Record<string, ModData>; presets?: Preset[] } | null = null;
 		try {
 			parsed = JSON.parse(await readTextFile(gameReport.configPath));
 		} catch {
@@ -393,7 +395,7 @@ export async function applyLinkAuditSuggestions(
 
 		const nextData = { ...((parsed?.data || {}) as Record<string, ModData>) };
 		const nextPresets = Array.isArray(parsed?.presets)
-			? parsed.presets.map((preset: any) => ({
+			? parsed.presets.map((preset) => ({
 					...preset,
 					data: Array.isArray(preset?.data) ? [...preset.data] : [],
 				}))
@@ -433,7 +435,7 @@ export async function applyLinkAuditSuggestions(
 			changed = true;
 		}
 
-		if (!changed) continue;
+		if (!changed || !parsed) continue;
 
 		parsed.data = nextData;
 		parsed.presets = nextPresets;
@@ -484,7 +486,7 @@ async function fetchPreviewUrl(source: string) {
 	const route = sourceToModRoute(source);
 	if (!route) return "";
 	try {
-		const mod = (await apiClient.mod(route)) as any;
+		const mod = (await apiClient.mod(route)) as Pick<OnlineMod, "_aPreviewMedia">;
 		const image = mod?._aPreviewMedia?._aImages?.[0];
 		if (!image?._sBaseUrl || !image?._sFile) return "";
 		return `${image._sBaseUrl}/${image._sFile}`;
@@ -592,7 +594,7 @@ export function startIntegrityMaintenanceOnLaunch() {
 			const report = await runLinkIntegrityScan();
 			void runPreviewBackfill(report);
 		} catch {
-			const textData = store.get(TEXT_DATA) as any;
+			const textData = store.get(TEXT_DATA) as { _Toasts?: { ErrOcc?: string } };
 			addToast({
 				type: "error",
 				message: textData?._Toasts?.ErrOcc || "Link integrity maintenance failed",

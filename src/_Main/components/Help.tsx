@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { GAME, HELP_OPEN, TEXT_DATA } from "@/utils/vars";
 import { useAtom, useAtomValue } from "jotai";
 import { ChevronLeft, ChevronRight, HelpCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import CarouselTut from "./CarouselTut";
 import { AnimatePresence, motion } from "motion/react";
 import {Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -15,9 +15,6 @@ function Help() {
 	const [helpOpen, setHelpOpen] = useAtom(HELP_OPEN);
 	const [selectedItem, setSelectedItem] = useState(-1);
 	const [subIndex, setSubIndex] = useState(0);
-	useEffect(() => {
-		setSubIndex(0);
-	}, [selectedItem]);
 	const game = useAtomValue(GAME);
 	return (
 		<Dialog open={helpOpen} onOpenChange={setHelpOpen}>
@@ -42,7 +39,10 @@ function Help() {
 							{Object.keys(data).map((key, index) => (
 								<Button
 									key={key}
-									onClick={() => setSelectedItem((prev) => (prev === index ? -1 : index))}
+									onClick={() => {
+										setSelectedItem((prev) => (prev === index ? -1 : index));
+										setSubIndex(0);
+									}}
 									className={"w-full h-10 bgaccent text-muted-foreground"}
 									style={{
 										backgroundColor:

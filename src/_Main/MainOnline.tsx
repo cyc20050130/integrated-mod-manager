@@ -4,6 +4,7 @@ import {
 	INSTALLED_ITEMS,
 	ONLINE_DATA,
 	ONLINE_PATH,
+	ONLINE_SOURCE,
 	ONLINE_SELECTED,
 	ONLINE_SORT,
 	ONLINE_TYPE,
@@ -14,16 +15,18 @@ import {
 } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import CardOnline from "./components/CardOnline";
 
 import Carousel from "./components/Carousel";
 import { isRouteBlacklisted, normalizeModRoute, preventContextMenu } from "@/utils/utils";
 import { LoaderIcon } from "lucide-react";
-import { OnlineMod } from "@/utils/types";
+import { OnlineListItem, OnlineMod } from "@/utils/types";
 import { info } from "@/lib/logger";
+import { buildUnifiedOnlineCacheKey, listUnifiedWwCards, shouldUseUnifiedWwOnline } from "@/utils/unifiedOnlineBridge";
+import { resolveUnifiedOnlineList, type UnifiedOnlineCard } from "@/utils/unifiedOnline";
 
-const pageCount = {} as any;
+const pageCount: Record<string, number> = {};
 export function resetPageCounts() {
 	Object.keys(pageCount).forEach((key) => {
 		delete pageCount[key];
@@ -31,14 +34,27 @@ export function resetPageCounts() {
 }
 let max = 0;
 let prevLoaded = 0;
+
+function extractLegacyOnlineCards(items: OnlineListItem[] | undefined): OnlineMod[] {
+	return (items || []).filter((item) => item._sModelName !== "UnifiedCard") as OnlineMod[];
+}
+
+function getUnifiedSearchTerm(path: string): string | undefined {
+	if (!path.startsWith("search/")) return undefined;
+	const term = path.replace("search/", "").split("&_type=")[0]?.trim();
+	return term || undefined;
+}
+
 function MainOnline() {
-	const [initial, setInitial] = useState(true);
-	const containerRef = useRef(null as any);
-	const carouselRef = useRef(null as any);
+	const [isLoading, setIsLoading] = useState(false);
+	const containerRef = useRef<HTMLDivElement | null>(null);
+	const carouselRef = useRef<HTMLDivElement | null>(null);
+	const unifiedCardsRef = useRef<Record<string, UnifiedOnlineCard[]>>({});
 	const settings = useAtomValue(SETTINGS);
 	const nsfw = settings.global.nsfw;
 	const textData = useAtomValue(TEXT_DATA);
 	const [onlineData, setOnlineData] = useAtom(ONLINE_DATA);
+	const onlineSource = useAtomValue(ONLINE_SOURCE);
 	const onlineType = useAtomValue(ONLINE_TYPE);
 	const onlinePath = useAtomValue(ONLINE_PATH);
 	const onlineSort = useAtomValue(ONLINE_SORT);
@@ -47,12 +63,16 @@ function MainOnline() {
 	const types = useAtomValue(TYPES);
 	const [visibleRange, setVisibleRange] = useState({ start: -1, end: -1 });
 	const game = useAtomValue(GAME);
+	const onlineCacheKey = useMemo(
+		() => (shouldUseUnifiedWwOnline(game) ? buildUnifiedOnlineCacheKey(onlinePath, onlineSource) : onlinePath),
+		[game, onlinePath, onlineSource]
+	);
 	const installedItems = useAtomValue(INSTALLED_ITEMS);
 	const cardCopy = useMemo(
 		() => ({
 			installed: textData.Installed || "Installed",
 			update: textData.Update || "Update",
-			blacklisted: ((textData as Record<string, any>).Blacklisted as string) || "Blacklisted",
+			blacklisted: (textData as Record<string, unknown>).Blacklisted?.toString() || "Blacklisted",
 		}),
 		[textData]
 	);
@@ -74,60 +94,97 @@ function MainOnline() {
 		);
 	}, [settings.global.onlineBlacklist, game]);
 	const onModClick = useCallback(
-		(e: MouseEvent, mod: OnlineMod) => {
-			let targetTag = (e.target as HTMLElement).tagName.toLowerCase();
+		(e: ReactMouseEvent<HTMLDivElement>, mod: OnlineListItem) => {
+			const targetTag = (e.target as HTMLElement).tagName.toLowerCase();
 			if (targetTag !== "button") {
-				setSelected(mod ? `${mod._sModelName}/${mod._idRow}` : "");
+				const selectedRoute = mod ? `${mod._sModelName}/${mod._idRow}` : "";
+				if (mod?._sModelName === "UnifiedCard" && selectedRoute) {
+					setOnlineData((prev) => ({
+						...prev,
+						[selectedRoute]: mod,
+					}));
+				}
+				setSelected(selectedRoute);
 				setRightSlideOverOpen(true);
 			}
 		},
-		[setSelected]
+		[setOnlineData, setRightSlideOverOpen, setSelected]
 	);
-	const nextPage = useCallback(async (url: string, onlinePath: string) => {
+	const fetchUnifiedCards = useCallback(
+		async (cacheKey: string) => {
+			if (!shouldUseUnifiedWwOnline(game)) {
+				unifiedCardsRef.current[cacheKey] = [];
+				return [];
+			}
+
+			try {
+				const searchTerm = getUnifiedSearchTerm(onlinePath);
+				const unifiedCards = await listUnifiedWwCards({
+					path: onlinePath,
+					source: onlineSource,
+					...(searchTerm ? { searchTerm } : {}),
+					...(onlineSort ? { sort: onlineSort } : {}),
+				});
+				unifiedCardsRef.current[cacheKey] = unifiedCards;
+				return unifiedCards;
+			} catch (err) {
+				info("unified ww list fallback to legacy", err);
+				unifiedCardsRef.current[cacheKey] = [];
+				return [];
+			}
+		},
+		[game, onlinePath, onlineSort, onlineSource]
+	);
+	const nextPage = useCallback(async (url: string, cacheKey: string) => {
 		const res = await fetch(url);
 		const data = await res.json();
 		setOnlineData((prev) => {
-			prev[onlinePath] = [...(prev[onlinePath] as OnlineMod[]), ...data._aRecords];
+			const currentItems = (prev[cacheKey] as OnlineListItem[] | undefined) || [];
+			const legacyCards = shouldUseUnifiedWwOnline(game)
+				? extractLegacyOnlineCards(currentItems)
+				: ((currentItems as OnlineMod[]) || []);
+			const nextLegacyCards = [...legacyCards, ...data._aRecords];
 			return {
 				...prev,
+				[cacheKey]: shouldUseUnifiedWwOnline(game)
+					? resolveUnifiedOnlineList(unifiedCardsRef.current[cacheKey], nextLegacyCards)
+					: nextLegacyCards,
 			};
 		});
-		loadingRef.current = false;
-	}, []);
-	const loadingRef = useRef(false);
+	}, [game, setOnlineData]);
 
 	const checkLoadMore = useCallback(async () => {
-		if (!containerRef.current || loadingRef.current) return;
+		if (!containerRef.current || isLoading) return;
 
 		const container = containerRef.current;
 		const { scrollTop, scrollHeight, clientHeight } = container;
 
 		// Check if we're near the bottom (within 100px)
 		if (scrollHeight - scrollTop - clientHeight < 100) {
-			loadingRef.current = true;
-			pageCount[onlinePath]++;
+			pageCount[onlineCacheKey] = (pageCount[onlineCacheKey] || 0) + 1;
+			setIsLoading(true);
 
-			if (max > 0 && pageCount[onlinePath] - 1 > max) {
-				loadingRef.current = false;
+			if (max > 0 && pageCount[onlineCacheKey] - 1 > max) {
+				setIsLoading(false);
 				return;
 			}
-			prevLoaded = (pageCount[onlinePath] - 1) * 15;
+			prevLoaded = (pageCount[onlineCacheKey] - 1) * 15;
 			try {
 				if (onlinePath.startsWith("home")) {
-					await nextPage(apiClient.home({ page: pageCount[onlinePath], type: onlineType }), onlinePath);
+					await nextPage(apiClient.home({ page: pageCount[onlineCacheKey], type: onlineType }), onlineCacheKey);
 				} else if (onlinePath.startsWith("Skins") || onlinePath.startsWith("Other") || onlinePath.startsWith("UI")) {
-					let cat = onlinePath.split("&_sort=")[0];
-					await nextPage(apiClient.category({ cat, sort: onlineSort, page: pageCount[onlinePath] }), onlinePath);
+					const cat = onlinePath.split("&_sort=")[0];
+					await nextPage(apiClient.category({ cat, sort: onlineSort, page: pageCount[onlineCacheKey] }), onlineCacheKey);
 				} else if (onlinePath.startsWith("search/")) {
-					let term = onlinePath.replace("search/", "").split("&_type=")[0];
+					const term = onlinePath.replace("search/", "").split("&_type=")[0];
 					if (term.trim().length == 0) return;
-					await nextPage(apiClient.search({ term, type: onlineType, page: pageCount[onlinePath] }), onlinePath);
+					await nextPage(apiClient.search({ term, type: onlineType, page: pageCount[onlineCacheKey] }), onlineCacheKey);
 				}
 			} finally {
-				loadingRef.current = false;
+				setIsLoading(false);
 			}
 		}
-	}, [onlinePath, onlineType, onlineSort]);
+	}, [isLoading, nextPage, onlineCacheKey, onlinePath, onlineType, onlineSort]);
 
 	const scrollTimeoutRef = useRef<number | null>(null);
 	// const scrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -154,13 +211,9 @@ function MainOnline() {
 			}
 			return prev;
 		});
-	}, [containerRef.current, carouselRef.current]);
+	}, []);
 
 	const handleScroll = useCallback(() => {
-		// Debounce visibility calculations
-		if (initial) {
-			setInitial(false);
-		}
 		// if (!scrollIntervalRef.current) {
 		// 	scrollIntervalRef.current = setInterval(() => {
 		// 		updateVisibilityRange();
@@ -179,40 +232,48 @@ function MainOnline() {
 			// Check for infinite scroll using optimized method
 			checkLoadMore();
 		}, 50); // ~60fps
-	}, [updateVisibilityRange, checkLoadMore, containerRef.current, carouselRef.current, initial]);
-	function initialLoad(url: string, onlinePath: string, controller: AbortController) {
-		fetch(url, { signal: controller.signal })
-			.then((res) => res.json())
-			.then((data) => {
-				max = data._aMetadata._nRecordCount / (data?._aMetadata?._nPerPage || 15);
-				setOnlineData((prev) => {
-					prev[onlinePath] = data._aRecords;
-					return {
-						...prev,
-					};
-				});
-				setTimeout(() => {
-					checkLoadMore();
-				}, 100);
-				loadingRef.current = false;
+	}, [checkLoadMore, updateVisibilityRange]);
+	const initialLoad = useCallback(async (url: string, cacheKey: string, controller: AbortController) => {
+		setIsLoading(true);
+		try {
+			const [data, unifiedCards] = await Promise.all([
+				fetch(url, { signal: controller.signal }).then((res) => res.json()),
+				fetchUnifiedCards(cacheKey),
+			]);
+			max = data._aMetadata._nRecordCount / (data?._aMetadata?._nPerPage || 15);
+			setOnlineData((prev) => {
+				return {
+					...prev,
+					[cacheKey]: shouldUseUnifiedWwOnline(game)
+						? resolveUnifiedOnlineList(unifiedCards, data._aRecords)
+						: data._aRecords,
+				};
 			});
-	}
+			setTimeout(() => {
+				void checkLoadMore();
+			}, 100);
+		} finally {
+			setIsLoading(false);
+		}
+	}, [checkLoadMore, fetchUnifiedCards, game, setOnlineData]);
 	useEffect(() => {
 		const controller = new AbortController();
+		let initialLoadTimer: number | null = null;
 		if (containerRef.current) {
 			containerRef.current.scrollTo({ top: 0 });
 		}
-		setVisibleRange({ start: -1, end: -1 });
+		const resetVisibleRangeTimer = window.setTimeout(() => {
+			setVisibleRange({ start: -1, end: -1 });
+		}, 0);
+		max = 0;
 		prevLoaded = 0;
-		setInitial(true);
 		//info("fetching1", onlineData,onlinePath);
 		//info("fetching2");
 		//info("fetching3");
 		//info("fetching", onlinePath, types);
-		if (!onlineData[onlinePath]) {
+		if (!onlineData[onlineCacheKey]) {
 			info("fetching", onlinePath);
-			pageCount[onlinePath] = 1;
-			loadingRef.current = true;
+			pageCount[onlineCacheKey] = 1;
 			if (onlinePath.startsWith("home")) {
 				fetch(apiClient.banner(), { signal: controller.signal }).then((res) =>
 					res.json().then((data) => {
@@ -224,68 +285,57 @@ function MainOnline() {
 						});
 					})
 				);
-				initialLoad(apiClient.home({ type: onlineType }), onlinePath, controller);
+				initialLoadTimer = window.setTimeout(() => {
+					initialLoad(apiClient.home({ type: onlineType }), onlineCacheKey, controller);
+				}, 0);
 			} else if (types.some((t) => onlinePath.startsWith(t._sName) || onlinePath.startsWith("Skins"))) {
-				initialLoad(
-					apiClient.category({ cat: onlinePath.split("&_sort=")[0], sort: onlineSort, page: 1 }),
-					onlinePath,
-					controller
-				);
+				initialLoadTimer = window.setTimeout(() => {
+					initialLoad(
+						apiClient.category({ cat: onlinePath.split("&_sort=")[0], sort: onlineSort, page: 1 }),
+						onlineCacheKey,
+						controller
+					);
+				}, 0);
 			} else if (onlinePath.startsWith("search/")) {
-				let term = onlinePath.replace("search/", "").split("&_type=")[0];
+				const term = onlinePath.replace("search/", "").split("&_type=")[0];
 				if (term.trim().length > 0)
-					initialLoad(apiClient.search({ term, type: onlineType, page: 1 }), onlinePath, controller);
-				else loadingRef.current = false;
+					initialLoadTimer = window.setTimeout(() => {
+						initialLoad(apiClient.search({ term, type: onlineType, page: 1 }), onlineCacheKey, controller);
+					}, 0);
 			}
 		}
 		return () => {
+			clearTimeout(resetVisibleRangeTimer);
+			if (initialLoadTimer) clearTimeout(initialLoadTimer);
 			controller.abort();
 		};
-	}, [onlinePath, onlineType, game, types]);
+	}, [initialLoad, onlineCacheKey, onlineData, onlinePath, onlineSort, onlineType, setOnlineData, types]);
 
-	// Memoize the current timestamp to avoid recalculation on every render
-	const now = useMemo(() => Date.now() / 1000, [onlinePath]);
-	// Memoize filtered banner data
-	const filteredBannerData = useMemo(() => {
-		if (!onlineData?.banner) return [];
-		return (onlineData.banner as OnlineMod[]).filter(
-			(item) => (item._sModelName == "Mod" || onlineType == "") && (nsfw || item._sInitialVisibility != "hide")
-		);
-	}, [onlineData?.banner, onlineType, nsfw]);
-
-	// Memoize filtered online data
-	const filteredOnlineData = useMemo(() => {
-		if (!onlineData[onlinePath]) return [];
-		return (onlineData[onlinePath] as OnlineMod[]).filter((item) => nsfw || item._sInitialVisibility != "hide");
-	}, [onlineData, onlinePath, nsfw]);
-	// Memoize animation variants to prevent recreation on every render
-	const animationVariants = useMemo(
-		() => ({
-			hidden: { opacity: initial ? 0 : 1, y: 20 },
-			visible: { opacity: 1, y: 0 },
-			exit: { opacity: initial ? 0 : 1, y: -20 },
-		}),
-		[initial]
+	const [now] = useState(() => Date.now() / 1000);
+	const filteredBannerData = ((onlineData.banner as OnlineMod[] | undefined) || []).filter(
+		(item) => (item._sModelName == "Mod" || onlineType == "") && (nsfw || item._sInitialVisibility != "hide")
 	);
 
-	// Memoize transition config
-	const transitionConfig = useCallback(
-		(index: number) => ({
-			duration: 0.3,
-			ease: "easeOut" as const,
-			delay: initial ? 0.05 * index : 0,
-		}),
-		[]
+	const filteredOnlineData = ((onlineData[onlineCacheKey] as OnlineListItem[] | undefined) || []).filter(
+		(item) => nsfw || item._sInitialVisibility != "hide"
 	);
+	const animationVariants = {
+		hidden: { opacity: 0, y: 20 },
+		visible: { opacity: 1, y: 0 },
+		exit: { opacity: 0, y: -20 },
+	};
 
-	// Determine if item should be visible
-	const isItemVisible = useCallback(
-		(index: number) => {
-			const { start, end } = visibleRange;
-			return start === -1 || (index >= start && index <= end) ? 0 : index < start ? 2 : 1;
-		},
-		[visibleRange]
-	);
+	const transitionConfig = (index: number) => ({
+		duration: 0.3,
+		ease: "easeOut" as const,
+		delay: Math.max(0, 0.05 * index),
+	});
+
+	const isItemVisible = (index: number) => {
+		const { start, end } = visibleRange;
+		return start === -1 || (index >= start && index <= end) ? 0 : index < start ? 2 : 1;
+	};
+	const hasMorePages = (pageCount[onlineCacheKey] || 0) < max;
 	//info(selected);
 	return (
 		<div
@@ -316,7 +366,7 @@ function MainOnline() {
 				<motion.div
 					className="min-h-fit card-grid card-grid-online grid justify-center w-full py-4"
 					layout
-					key={"content" + onlinePath}
+					key={"content" + onlineCacheKey}
 					initial={{ opacity: 0 }}
 					animate={{ opacity: 1 }}
 					exit={{ opacity: 0 }}
@@ -337,7 +387,7 @@ function MainOnline() {
 								animate="visible"
 								exit="exit"
 								transition={transitionConfig(index - prevLoaded || 0)}
-								onMouseUp={(e: any) => onModClick(e, item)}
+								onMouseUp={(e: ReactMouseEvent<HTMLDivElement>) => onModClick(e, item)}
 								onContextMenu={preventContextMenu}
 							>
 								{isVisible ? (
@@ -360,7 +410,7 @@ function MainOnline() {
 						);
 					})}
 				</motion.div>
-				{(loadingRef.current || pageCount[onlinePath] < max) && (
+				{(isLoading || hasMorePages) && (
 					<motion.div
 						className="min-w-8 min-h-8 flex justify-center my-2"
 						initial={{ opacity: 0 }}

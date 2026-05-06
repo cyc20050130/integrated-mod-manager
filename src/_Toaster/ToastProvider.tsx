@@ -12,7 +12,7 @@ export function addToast({
 	onClick = null,
 }: {
 	id?: number;
-	type?: "success" | "error" | "info" | "warning";
+type?: "success" | "error" | "info" | "warning";
 	message: string;
 	duration?: number;
 	onClick?: null | (() => void);
@@ -30,7 +30,7 @@ function ToastProvider() {
 		<>
 			<div className="fixed z-99999 top-5 left-1/2 -translate-x-1/2 w-82 h-2 flex flex-col-reverse items-center justify-center pointer-events-none">
 				<AnimatePresence>
-					{toasts.map((toast: any, index: number) => (
+					{toasts.map((toast: { id: number; type?: "success" | "error" | "info" | "warning"; message: string; onClick?: null | (() => void) }, index: number) => (
 						<motion.div
 							key={toast.id}
 							initial={{ opacity: 0, y: -20 }}

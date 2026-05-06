@@ -1,13 +1,15 @@
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { info } from "@/lib/logger";
 import { openFile, saveConfigs, toggleMod, updateIniVars } from "@/utils/filesys";
 import { join, setChange } from "@/utils/hotreload";
-import { ModHotKeys } from "@/utils/types";
-
+import { Mod, ModDataObj, ModHotKeys } from "@/utils/types";
 import { DATA, MOD_LIST, TEXT_DATA } from "@/utils/vars";
-
+import { PopoverTrigger } from "@radix-ui/react-popover";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
 	ArrowUpRightFromSquareIcon,
@@ -17,120 +19,137 @@ import {
 	InfoIcon,
 	IterationCcwIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import { info } from "@/lib/logger";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Popover, PopoverContent } from "@/components/ui/popover";
-import { PopoverTrigger } from "@radix-ui/react-popover";
-let prevItemPath = "";
+import { useState } from "react";
+
 const pageLimit = 20;
-let lastKeyList: string = "";
-function ModPreferences({ item, details }: { item: any; details: any }) {
-	const setData = useSetAtom(DATA);
-	const setModList = useSetAtom(MOD_LIST);
-	const [keys, setKeys] = useState([] as any);
-	const [fileMode, setFileMode] = useState(false);
-	const [selectedFile, setSelectedFile] = useState("");
-	const [selectedFileData, setSelectedFileData] = useState([] as any);
-	const [popoverOpen, setPopoverOpen] = useState(false);
-	const [pageNo, setPageNo] = useState(0);
-	const textData = useAtomValue(TEXT_DATA);
-	const [forceKeyUpdate, setForceKeyUpdate] = useState(0);
-	useEffect(() => {
-		if (prevItemPath !== item?.path || (!details?.files?.hasOwnProperty(selectedFile) && selectedFile)) {
-			setSelectedFile("");
-			setPageNo(0);
-			prevItemPath = item?.path;
-		}
-	}, [item, details, selectedFile]);
-	useEffect(() => {
-		setPageNo(0);
-		setSelectedFileData([] as any);
-	}, [selectedFile]);
-	useEffect(() => {
-		// console.log(pageNo, selectedFileData[pageNo]);
-		let source = (fileMode ? (selectedFileData.length && selectedFileData[pageNo]) || [] : details?.keys) || [];
-		const k = {} as any;
-		let keyListStr = [] as any;
-		source.forEach((keyConfig: ModHotKeys) => {
-			if (!keyConfig.default) return;
-			if (!k[keyConfig.file]) {
-				k[keyConfig.file] = [];
-			}
-			k[keyConfig.file].push(keyConfig);
-			keyListStr.push(`${keyConfig.file}|${keyConfig.target}`);
-		});
-		setKeys(
-			Object.keys(k).map((key) => {
-				return { file: key, keys: k[key] };
-			})
-		);
-		keyListStr = keyListStr.join(",");
-		if (lastKeyList !== keyListStr) {
-			setForceKeyUpdate((prev) => prev + 1);
-		}
-		lastKeyList = keyListStr;
-	}, [details, fileMode, selectedFileData, pageNo]);
-	useEffect(() => {
-		if (!selectedFile && details?.files && Object.keys(details.files).length == 1) {
-			const onlyFile = Object.keys(details.files)[0];
-			setSelectedFile(onlyFile);
+
+type PreferenceValueType = "pref" | "reset" | "name";
+type PreferenceValue = string | null;
+type PreferenceFileVars = Record<string, Partial<Record<PreferenceValueType, PreferenceValue>>>;
+type PreferenceVars = Record<string, PreferenceFileVars>;
+type PreferenceKey = ModHotKeys & { state?: string | null };
+type PreferenceGroup = { file: string; keys: PreferenceKey[] };
+type PreferenceDetails = {
+	keys?: PreferenceKey[];
+	files?: Record<string, PreferenceKey[]>;
+};
+type PreferenceItem = Pick<Mod, "path" | "enabled">;
+
+function paginateKeys(fileData: PreferenceKey[]): PreferenceKey[][] {
+	const paginatedData: PreferenceKey[][] = [];
+	for (let i = 0; i < fileData.length; i += pageLimit) {
+		paginatedData.push(fileData.slice(i, i + pageLimit));
+	}
+	return paginatedData;
+}
+
+function buildPreferenceGroups(source: PreferenceKey[]): { groups: PreferenceGroup[]; signature: string } {
+	const groupsByFile: Record<string, PreferenceKey[]> = {};
+	const keyListStr: string[] = [];
+
+	source.forEach((keyConfig) => {
+		if (!keyConfig.default) {
 			return;
 		}
-		if (fileMode && details?.files && details.files[selectedFile]) {
-			const fileData = details.files[selectedFile] || [];
-			const pagenatedData = [] as any;
-			for (let i = 0; i < fileData.length; i += pageLimit) {
-				pagenatedData.push(fileData.slice(i, i + pageLimit));
-			}
-			setSelectedFileData(pagenatedData);
+		if (!groupsByFile[keyConfig.file]) {
+			groupsByFile[keyConfig.file] = [];
 		}
-	}, [details, fileMode, selectedFile]);
-	console.log(item);
+		groupsByFile[keyConfig.file].push(keyConfig);
+		keyListStr.push(`${keyConfig.file}|${keyConfig.target}`);
+	});
+
+	return {
+		groups: Object.keys(groupsByFile).map((file) => ({
+			file,
+			keys: groupsByFile[file],
+		})),
+		signature: keyListStr.join(","),
+	};
+}
+
+function ModPreferences({ item, details }: { item: PreferenceItem; details: PreferenceDetails }) {
+	const setData = useSetAtom(DATA);
+	const setModList = useSetAtom(MOD_LIST);
+	const [fileMode, setFileMode] = useState(false);
+	const [selectedFileState, setSelectedFileState] = useState("");
+	const [popoverOpen, setPopoverOpen] = useState(false);
+	const [pageNoState, setPageNoState] = useState(0);
+	const textData = useAtomValue(TEXT_DATA);
+
+	const availableFiles = Object.keys(details.files ?? {});
+	const selectedFile =
+		availableFiles.length === 1 && !selectedFileState
+			? availableFiles[0]
+			: availableFiles.includes(selectedFileState)
+				? selectedFileState
+				: "";
+	const selectedFilePages = selectedFile ? paginateKeys(details.files?.[selectedFile] ?? []) : [];
+	const totalPages = selectedFile
+		? Math.max(1, Math.ceil((details.files?.[selectedFile]?.length ?? 0) / pageLimit))
+		: 1;
+	const pageNo = Math.min(pageNoState, totalPages - 1);
+	const source = fileMode ? selectedFilePages[pageNo] ?? [] : (details.keys ?? []);
+	const { groups: keys, signature: keyListSignature } = buildPreferenceGroups(source);
+
 	async function refreshMod(path: string) {
 		await toggleMod(path, true, true);
 		setChange();
 	}
-	const setVal = useCallback(
-		(type = "pref" as "pref" | "reset" | "name", file: string, target: string, value: any) => {
-			setData((prev: any) => {
-				prev = prev || {};
-				prev[item.path] = prev[item.path] || {};
-				prev[item.path].vars = prev[item.path].vars || {};
-				prev[item.path].vars[file] = prev[item.path].vars[file] || {};
-				prev[item.path].vars[file][target] = prev[item.path].vars[file][target] || {};
-				prev[item.path].vars[file][target][type] = value;
-				if (!value) {
-					delete prev[item.path].vars[file][target][type];
-					if (Object.keys(prev[item.path].vars[file][target]).length === 0) {
-						delete prev[item.path].vars[file][target];
-						if (Object.keys(prev[item.path].vars[file]).length === 0) {
-							delete prev[item.path].vars[file];
-							if (Object.keys(prev[item.path].vars).length === 0) {
-								delete prev[item.path].vars;
-								if (Object.keys(prev[item.path]).length === 0) {
-									delete prev[item.path];
-								}
-							}
-						}
+
+	function setVal(type: PreferenceValueType, file: string, target: string, value: PreferenceValue) {
+		setData((prev) => {
+			const nextData: ModDataObj = { ...(prev ?? {}) };
+			const currentItem = { ...(nextData[item.path] ?? {}) };
+			const currentVars: PreferenceVars = { ...((currentItem.vars as PreferenceVars | undefined) ?? {}) };
+			const fileVars: PreferenceFileVars = { ...(currentVars[file] ?? {}) };
+			const targetVars = { ...(fileVars[target] ?? {}) };
+
+			if (value) {
+				targetVars[type] = value;
+				fileVars[target] = targetVars;
+				currentVars[file] = fileVars;
+				currentItem.vars = currentVars;
+				nextData[item.path] = currentItem;
+			} else {
+				delete targetVars[type];
+				if (Object.keys(targetVars).length > 0) {
+					fileVars[target] = targetVars;
+				} else {
+					delete fileVars[target];
+				}
+
+				if (Object.keys(fileVars).length > 0) {
+					currentVars[file] = fileVars;
+				} else {
+					delete currentVars[file];
+				}
+
+				if (Object.keys(currentVars).length > 0) {
+					currentItem.vars = currentVars;
+					nextData[item.path] = currentItem;
+				} else {
+					delete currentItem.vars;
+					if (Object.keys(currentItem).length > 0) {
+						nextData[item.path] = currentItem;
+					} else {
+						delete nextData[item.path];
 					}
 				}
-				return {
-					...prev,
-				};
-			});
-			saveConfigs();
-			if (item?.enabled) {
-				refreshMod(item.path);
 			}
-		},
-		[item, setData]
-	);
+
+			return nextData;
+		});
+		saveConfigs();
+		if (item.enabled) {
+			void refreshMod(item.path);
+		}
+	}
+
 	return (
 		<DialogContent className="min-w-250">
 			<Tooltip>
-				<TooltipTrigger></TooltipTrigger>
-				<TooltipContent className="opacity-0"></TooltipContent>
+				<TooltipTrigger />
+				<TooltipContent className="opacity-0" />
 			</Tooltip>
 
 			<div className="min-h-fit text-accent my-6 text-3xl">
@@ -139,7 +158,7 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 			</div>
 
 			<div className="text-sm flex items-center gap-2">
-				<Checkbox checked={fileMode} onCheckedChange={(checked) => setFileMode(!!checked)} />{" "}
+				<Checkbox checked={fileMode} onCheckedChange={(checked) => setFileMode(Boolean(checked))} />{" "}
 				{textData._RightSideBar._components._ModPreferences.ShowVars}
 			</div>
 			<div
@@ -153,12 +172,7 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 				}}
 				className="flex items-center duration-300 overflow-hidden w-full gap-2"
 			>
-				<Popover
-					open={popoverOpen}
-					onOpenChange={(open) => {
-						setPopoverOpen(open);
-					}}
-				>
+				<Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
 					<PopoverTrigger>
 						<div className="min-w-179 button-like zzz-border w-full hover:brightness-150 bg-sidebar cursor-pointerx flex items-center justify-center h-full gap-1 p-2 text-xs duration-300 rounded-md select-none">
 							{selectedFile ? (
@@ -179,32 +193,25 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 							});
 						}}
 					>
-						{details?.files &&
-							Object.keys(details.files).map((file: string, index: number) => (
-								<div
-									key={index}
-									className="cursor-pointer hover:bg-background/50 px-4 py-2 text-sm"
-									onClick={() => {
-										setSelectedFile(file);
-										const fileData = details.files[file] || [];
-										const pagenatedData = [] as any;
-										for (let i = 0; i < fileData.length; i += pageLimit) {
-											pagenatedData.push(fileData.slice(i, i + pageLimit));
-										}
-										setSelectedFileData(pagenatedData);
-										setPageNo(0);
-										setPopoverOpen(false);
-									}}
-								>
-									{file}
-								</div>
-							))}
+						{availableFiles.map((file) => (
+							<div
+								key={file}
+								className="cursor-pointer hover:bg-background/50 px-4 py-2 text-sm"
+								onClick={() => {
+									setSelectedFileState(file);
+									setPageNoState(0);
+									setPopoverOpen(false);
+								}}
+							>
+								{file}
+							</div>
+						))}
 					</PopoverContent>
 				</Popover>
 				<div className="flex w-full gap-2">
 					<Button
 						onClick={() => {
-							setPageNo((prev) => Math.max(prev - 1, 0));
+							setPageNoState((prev) => Math.max(prev - 1, 0));
 						}}
 					>
 						<ChevronLeftIcon className="w-3 h-3" />
@@ -216,27 +223,19 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 							defaultValue={pageNo + 1}
 							onBlur={(e) => {
 								const val = Number(e.currentTarget.value);
-								if (isNaN(val) || val - 1 >= details.files[selectedFile]?.length / pageLimit) {
+								if (isNaN(val) || val < 1 || val > totalPages) {
 									e.currentTarget.value = String(pageNo + 1);
 									return;
 								}
-								setPageNo(val - 1);
+								setPageNoState(val - 1);
 							}}
 							className="text-center w-12 mx-2 p-1"
 						/>
-						{textData._RightSideBar._components._ModPreferences.Of}{" "}
-						{details.files[selectedFile]?.length ? Math.ceil(details.files[selectedFile].length / pageLimit) : 1}
+						{textData._RightSideBar._components._ModPreferences.Of} {totalPages}
 					</div>
 					<Button
 						onClick={() => {
-							setPageNo((prev) =>
-								Math.min(
-									prev + 1,
-									details.files[selectedFile]?.length
-										? Math.ceil(details.files[selectedFile].length / pageLimit) - 1
-										: 0
-								)
-							);
+							setPageNoState((prev) => Math.min(prev + 1, totalPages - 1));
 						}}
 					>
 						<ChevronRightIcon className="w-3 h-3" />
@@ -276,14 +275,8 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 				|
 				<Tooltip>
 					<TooltipTrigger className="text-accent flex items-center justify-center w-full gap-2 -mr-4">
-						{/* <InfoIcon className="text-accent/70 cursor-help inline-block w-4 h-4 ml-1" /> */}
 						{textData._RightSideBar._components._ModPreferences.Expected}
 					</TooltipTrigger>
-					{/* <TooltipContent className="w-48 px-1 text-center">
-							{
-								"Shows the current key-binding for this variable. Future versions of IMM may allow changing key-bindings here."
-							}
-						</TooltipContent> */}
 				</Tooltip>
 			</div>
 			<label className="text-xs text-accent/50 -my-3">
@@ -291,11 +284,11 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 			</label>
 			<div
 				className="max-h-90 min-h-90 flex flex-col w-full h-full p-2 pt-0 overflow-x-hidden overflow-y-scroll text-gray-300 rounded-sm"
-				key={"" + fileMode + pageNo + selectedFile + keys.length + forceKeyUpdate}
+				key={`${fileMode}-${pageNo}-${selectedFile}-${keys.length}-${keyListSignature}`}
 			>
-				{keys.map((file: any, index: number) => (
+				{keys.map((file, index) => (
 					<div
-						key={index}
+						key={file.file}
 						className="min-h-fit flex flex-col w-full px-4 py-2 mt-2 border rounded-md"
 						style={{
 							marginTop: index === 0 ? "0px" : "",
@@ -312,13 +305,13 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 							</Button>
 							{file.file}
 						</div>
-						{file.keys.map((keyConfig: any, index: number) => {
-							const nameDefault = keyConfig.name == keyConfig.target;
+						{file.keys.map((keyConfig, index) => {
+							const nameDefault = keyConfig.name === keyConfig.target;
 							const defDefault = keyConfig.reset === null || keyConfig.reset === undefined;
 							const prefDefault = keyConfig.pref === null || keyConfig.pref === undefined;
 							return (
 								<div
-									key={index}
+									key={`${keyConfig.file}-${keyConfig.target}-${index}`}
 									className="odd:bg-background/50 even:bg-background/30 text-border flex w-full gap-4 px-5 py-2 rounded-md"
 								>
 									<div className="w-full min-w-[24.5%] flex items-center">
@@ -330,7 +323,7 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 											}}
 											onBlur={(e) => {
 												const val = e.currentTarget.value;
-												if (val == keyConfig.name || (!val && !keyConfig.name)) {
+												if (val === keyConfig.name || (!val && !keyConfig.name)) {
 													return;
 												}
 												if (val === keyConfig.target) {
@@ -370,7 +363,7 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 											defaultValue={keyConfig.default}
 											onBlur={(e) => {
 												const val = e.currentTarget.value;
-												if (val == keyConfig.default || (!val && !keyConfig.default)) {
+												if (val === keyConfig.default || (!val && !keyConfig.default)) {
 													return;
 												}
 												if (!val) {
@@ -391,24 +384,21 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 													[keyConfig.target.toLowerCase()]: val,
 												}).then((success) => {
 													if (success) {
-														setModList((prev: any) => {
-															const newList = prev.map((mod: any) => {
-																if (mod.path === item.path) {
-																	mod.keys = mod.keys.map((k: any) => {
-																		if (k.file === keyConfig.file && k.target === keyConfig.target) {
-																			k.default = val;
-																		}
-																		return k;
-																	});
-																	return {
-																		...mod,
-																	};
+														setModList((prev) =>
+															prev.map((mod) => {
+																if (mod.path !== item.path) {
+																	return mod;
 																}
-																return mod;
-															});
-															return newList;
-														});
-													} else {
+																return {
+																	...mod,
+																	keys: mod.keys.map((k) =>
+																		k.file === keyConfig.file && k.target === keyConfig.target
+																			? { ...k, default: val }
+																			: k
+																	),
+																};
+															})
+														);
 													}
 												});
 											}}
@@ -424,7 +414,7 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 												const prev = e.currentTarget.previousElementSibling as HTMLInputElement;
 												if (prev) {
 													prev.focus();
-													prev.value = keyConfig.reset;
+													prev.value = keyConfig.reset ?? "";
 													prev.blur();
 												}
 											}}
@@ -439,10 +429,10 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 												textAlign: isNaN(Number(keyConfig.pref ?? keyConfig.default)) ? "left" : "right",
 												paddingRight: prefDefault ? "" : "2rem",
 											}}
-											defaultValue={keyConfig.pref}
+											defaultValue={keyConfig.pref ?? ""}
 											onBlur={(e) => {
 												const val = e.currentTarget.value;
-												if (val == keyConfig.pref || (!val && !keyConfig.pref)) {
+												if (val === keyConfig.pref || (!val && !keyConfig.pref)) {
 													return;
 												}
 												setVal("pref", keyConfig.namespace ? "namespace" : keyConfig.file, keyConfig.target, val);
@@ -474,7 +464,7 @@ function ModPreferences({ item, details }: { item: any; details: any }) {
 										</Button>
 									</div>
 									<div className="text-muted-foreground flex items-center justify-center w-full min-w-[24.5%]">
-										{(keyConfig.values.toSorted().join(" , ") || "unknown").replace(
+										{([...(keyConfig.values || [])].sort().join(" , ") || "unknown").replace(
 											"unknown",
 											textData._RightSideBar._components._ModPreferences.Unknown
 										)}

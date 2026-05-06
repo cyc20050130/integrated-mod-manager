@@ -3,17 +3,10 @@ import { GAME, store } from "./vars";
 import { GAME_ID_MAP } from "./consts";
 
 export async function executeWithArgs(exePath: string, args: string[]): Promise<string> {
-	try {
-		const result = await invoke<string>("execute_with_args", { 
-			exePath: exePath, 
-			args: args 
-		});
-		//logger.log(`Successfully executed: ${exePath} with args:`, args);
-		return result;
-	} catch (error) {
-		// logger.error(`Failed to execute ${exePath}:`, error);
-		throw error;
-	}
+	return await invoke<string>("execute_with_args", { 
+		exePath: exePath, 
+		args: args 
+	});
 }
 export async function executeXXMI(
 	exePath: string, 
@@ -39,7 +32,7 @@ export async function isGameProcessRunning(game = "WW"): Promise<boolean> {
 		const isRunning = await invoke<boolean>("is_game_process_running", { gameId: GAME_ID_MAP[game] });
 		//logger.log(`Game process running: ${isRunning}`);
 		return isRunning;
-	} catch (error) {
+	} catch {
 		// logger.error("Failed to check if game process is running:", error);
 		return false;
 	}

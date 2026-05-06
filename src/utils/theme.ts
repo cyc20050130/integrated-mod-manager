@@ -36,11 +36,9 @@ export function switchGameTheme(theme: Games): void {
  */
 export function switchLanguage(): void {
 	const language = getCurrentLanguage();
-	console.log(`[IMM] Switching language to ${language.toUpperCase()}...`);
 	const root = document.documentElement;
 	// Set the language data attribute
 	root.setAttribute("data-lang", language);
-	console.log(`Switched to ${language.toUpperCase()} language`);
 }
 
 store.sub(LANG, () => {

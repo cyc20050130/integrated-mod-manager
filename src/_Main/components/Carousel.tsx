@@ -8,7 +8,7 @@ import type { EmblaCarouselType } from "embla-carousel";
 import Blur from "./Filter";
 import { OnlineMod } from "@/utils/types";
 
-let dict = {
+const dict = {
 	today: "the Day",
 	yesterday: "Yesterday",
 	week: "the Week",
@@ -24,7 +24,7 @@ function Carousel({
 	blur = true,
 }: {
 	data?: OnlineMod[];
-	onModClick?: (e: any, data: OnlineMod) => void;
+	onModClick?: (e: React.MouseEvent<HTMLDivElement>, data: OnlineMod) => void;
 	blur?: boolean;
 }) {
 	const [api, setApi] = useState<EmblaCarouselType | undefined>();
@@ -56,7 +56,6 @@ function Carousel({
 									if (e.target != e.currentTarget) return;
 									if (onModClick) {
 										onModClick(e, item);
-									} else {
 									}
 								}}
 								className=" aspect-video flex flex-col items-center justify-between overflow-hidden border rounded-lg"
@@ -100,6 +99,7 @@ function Carousel({
 			<div className="flex items-center justify-center w-full h-8 gap-1 rounded-lg">
 				{data?.map((_, index) => (
 					<div
+						key={`carousel-dot-${index}`}
 						className={
 							"h-1/3 aspect-square rounded-full border duration-200 " +
 							(index == current ? "bg-accent bgaccent   border-accent" : " hover:bg-border")

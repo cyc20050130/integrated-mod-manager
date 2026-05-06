@@ -13,20 +13,28 @@ import { CircleAlert, DownloadIcon, Loader2Icon, RotateCcwIcon, UploadIcon } fro
 import { useMemo, useState } from "react";
 import Credits from "./Credits";
 
+type ParsedUpdateBody = {
+	major?: string[];
+	minor?: string[];
+	patch?: string[];
+};
+
 function Updater() {
 	const textData = useAtomValue(TEXT_DATA);
 	const [update, setUpdate] = useAtom(IMM_UPDATE);
 	const [updaterOpen, setUpdaterOpen] = useAtom(UPDATER_OPEN);
 	const [progress, setProgress] = useState(0);
+	const [renderedAtSeconds] = useState(() => Date.now() / 1000);
+	const updateBody = update?.body;
 
-	const parsedBody = useMemo(() => {
-		if (!update?.body) return {};
+	const parsedBody = useMemo<ParsedUpdateBody>(() => {
+		if (!updateBody) return {};
 		try {
-			return JSON.parse(update.body);
+			return JSON.parse(updateBody) as ParsedUpdateBody;
 		} catch {
 			return {};
 		}
-	}, [update?.body]);
+	}, [updateBody]);
 
 	const major = parsedBody.major || [];
 	const minor = parsedBody.minor || [];
@@ -51,15 +59,15 @@ function Updater() {
 			await flushRuntimeState("before-update-install");
 			setProgress(0);
 			setUpdate((prev) => (prev ? { ...prev, status: "downloading", error: "" } : prev));
-			await update.raw.download((event: any) => {
+			await update.raw.download((event) => {
 				switch (event.event) {
 					case "Started":
-						contentLength = Number(event.data.contentLength || 0);
+						contentLength = Number(event.data?.contentLength || 0);
 						downloaded = 0;
 						setProgress(0);
 						break;
 					case "Progress":
-						downloaded += Number(event.data.chunkLength || 0);
+						downloaded += Number(event.data?.chunkLength || 0);
 						if (contentLength > 0) {
 							setProgress(Math.max(0, Math.min(100, Math.floor((downloaded / contentLength) * 100))));
 						}
@@ -73,22 +81,23 @@ function Updater() {
 			await update.raw.install();
 			setUpdate((prev) => (prev ? { ...prev, status: "relaunching" } : prev));
 			await invoke("request_app_restart");
-		} catch (error: any) {
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error || "Update install failed");
 			setUpdate((prev) =>
 				prev
 					? {
 							...prev,
 							status: "error",
-							error: error?.message || String(error || "Update install failed"),
-					  }
+							error: message,
+						}
 					: {
 							version: VERSION,
 							date: "",
 							body: "{}",
 							status: "error",
 							raw: null,
-							error: error?.message || String(error || "Update install failed"),
-					  }
+							error: message,
+						}
 			);
 		}
 	}
@@ -151,7 +160,7 @@ function Updater() {
 						<div className="min-h-2 text-accent w-full text-xl">
 							Version {update.version}{" "}
 							<span className="text-muted-foreground text-base">
-								({getTimeDifference(Date.now() / 1000, new Date(update.date || Date.now()).getTime() / 1000)}{" "}
+								({getTimeDifference(renderedAtSeconds, new Date(update.date || renderedAtSeconds * 1000).getTime() / 1000)}{" "}
 								{textData._Main._components._Updater.ago})
 							</span>
 						</div>
@@ -200,11 +209,11 @@ function Updater() {
 							<div className="mt-124 absolute flex items-center gap-2">
 								<label className="opacity-40">{textData.BFR}</label>
 								<label>:</label>
-								<a href={BANANA_LINK} target="_blank" className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50">
+								<a href={BANANA_LINK} target="_blank" rel="noreferrer noopener" className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50">
 									<img className="h-4" src="/GBLogo.png" /> <img className="h-3" src="/GBTitle.png" />
 								</a>
 								|
-								<a href={DISCORD_LINK} target="_blank" className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50">
+								<a href={DISCORD_LINK} target="_blank" rel="noreferrer noopener" className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50">
 									<img className="h-6" src="/DCLogoTitle.svg" />
 								</a>
 							</div>

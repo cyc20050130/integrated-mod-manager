@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { syncIniStateFromText } from "../src/utils/iniStateSyncCore.js";
+import { syncIniStateFromText } from "../src/utils/iniStateSyncCore.ts";
 
 test("syncIniStateFromText writes file and namespace states back to config data", () => {
 	const data = {

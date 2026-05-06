@@ -122,6 +122,7 @@ function Help({ setPage }: { setPage: (page: number) => void }) {
 						<a
 							href={BANANA_LINK}
 							target="_blank"
+							rel="noreferrer noopener"
 							className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
 						>
 							{" "}
@@ -132,6 +133,7 @@ function Help({ setPage }: { setPage: (page: number) => void }) {
 						<a
 							href={DISCORD_LINK}
 							target="_blank"
+							rel="noreferrer noopener"
 							className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
 						>
 							{" "}

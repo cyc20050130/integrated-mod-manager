@@ -43,7 +43,7 @@ function Changes({ afterInit }: { afterInit: () => Promise<void> }) {
 				} as ChangeInfo);
 			}, 1000);
 		});
-	}, [changes.skip]);
+	}, [afterInit, changes, changes.skip, firstLoad, setChanges, setHelpOpen, setInitDone]);
 	return changes.before.length ? (
 		<motion.div
 			key="changes"

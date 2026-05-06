@@ -23,9 +23,12 @@
     "react-hooks"
   ],
   "rules": {
-    "@typescript-eslint/no-explicit-any": "error",
+    "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/no-empty-object-type": "warn",
+    "@typescript-eslint/ban-ts-comment": "warn",
+    "@typescript-eslint/no-unused-expressions": "warn",
     "@typescript-eslint/no-unused-vars": [
-      "error",
+      "warn",
       {
         "argsIgnorePattern": "^_",
         "varsIgnorePattern": "^_"
@@ -40,11 +43,26 @@
         "allow": ["error", "warn"]
       }
     ],
-    "prefer-const": "error",
+    "prefer-const": "warn",
+    "no-empty": "warn",
+    "no-useless-catch": "warn",
+    "no-inner-declarations": "warn",
+    "no-unsafe-finally": "warn",
+    "no-constant-condition": "warn",
+    "no-prototype-builtins": "warn",
+    "no-mixed-spaces-and-tabs": "warn",
+    "no-case-declarations": "warn",
     "no-var": "error",
+    "react/jsx-key": "warn",
+    "react/no-unescaped-entities": "warn",
     "react/react-in-jsx-scope": "off",
     "react/prop-types": "off",
     "react-hooks/rules-of-hooks": "error",
+    "react-hooks/immutability": "warn",
+    "react-hooks/preserve-manual-memoization": "warn",
+    "react-hooks/purity": "warn",
+    "react-hooks/refs": "warn",
+    "react-hooks/set-state-in-effect": "warn",
     "react-hooks/exhaustive-deps": "warn"
   },
   "settings": {

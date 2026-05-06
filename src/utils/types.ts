@@ -1,3 +1,5 @@
+import type { UnifiedOnlineListCard } from "./unifiedOnline";
+
 export type Games = "WW" | "ZZ" | "GI" | "SR" | "EF" | ""; //| "GI" ;
 export type Language = "en" | "cn" | "ru" | "jp" | "kr" | "";
 export interface WuwaModFixerState {
@@ -84,8 +86,8 @@ export interface ModData {
 	tags?: string[];
 	note?: string;
 	namespace?: string;
-	// state?: { [key: string]: any };
-	vars?: { [key: string]: any };
+	// state?: Record<string, unknown>;
+	vars?: Record<string, Record<string, unknown>>;
 	crop?: {
 		scale?: number;
 		x?: number;
@@ -153,6 +155,7 @@ export interface ModHotKeys {
 	namespace: string;
 	pref: string | null;
 	reset: string | null;
+	state?: string | null;
 }
 export interface Mod {
 	isDir: boolean;
@@ -237,8 +240,8 @@ export interface OnlineMod {
 	_tsDateModified?: number;
 	_tsDateUpdated?: number;
 	_bHasFiles?: boolean;
-	_aTags?: any[];
-	_aFiles?: any[];
+	_aTags?: unknown[];
+	_aFiles?: unknown[];
 	_aPreviewMedia?: OnlineModPreviewMedia;
 	_aSubmitter: OnlineModSubmitter;
 	_aRootCategory: OnlineModCategory;
@@ -252,11 +255,12 @@ export interface OnlineMod {
 	_nViewCount?: number;
 	_bIsOwnedByAccessor?: boolean;
 	_sImageUrl?: string;
-	_aComments?: any[];
+	_aComments?: unknown[];
 	_sPeriod?: "today" | "yesterday" | "week" | "month" | "3month" | "6month" | "year" | "alltime";
 }
+export type OnlineListItem = OnlineMod | UnifiedOnlineListCard;
 export interface OnlineData {
-	[key: string]: OnlineMod[] | OnlineMod;
+	[key: string]: OnlineListItem[] | OnlineListItem;
 }
 export interface ChangeInfo {
 	before: DirEntry[];

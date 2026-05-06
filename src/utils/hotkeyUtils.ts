@@ -127,7 +127,8 @@ export async function registerGlobalHotkeys(): Promise<void> {
 	const currentPresets = store.get(PRESETS);
 	const validHotkeys = currentPresets
 		.filter((preset) => preset?.hotkey && preset?.hotkey.trim() !== "")
-		.map((preset) => preset?.hotkey);
+		.map((preset) => preset?.hotkey)
+		.filter((hotkey): hotkey is string => Boolean(hotkey));
 	//info("Valid hotkeys to register:", validHotkeys);
 	if (validHotkeys.length === 0) {
 		//logger.log("No valid hotkeys found to register");
@@ -135,7 +136,7 @@ export async function registerGlobalHotkeys(): Promise<void> {
 	}
 
 	//logger.log("Registering hotkeys:", validHotkeys);
-	await register(validHotkeys as any, (event) => {
+	await register(validHotkeys, (event) => {
 		//logger.log("Hotkey pressed:", event);
 		if (event.state === "Pressed") {
 			const freshPresets = store.get(PRESETS).filter((preset) => preset?.hotkey && preset?.hotkey.trim() !== "");
@@ -169,7 +170,7 @@ export async function registerGlobalHotkeys(): Promise<void> {
 
 						invoke("focus_mod_manager_send_f10_return_to_game");
 						//logger.log("Preset applied successfully:", matchedPreset.name);
-					} catch (error) {
+					} catch {
 						// logger.error("Error applying preset:", error);
 					}
 				})();

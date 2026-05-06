@@ -10,7 +10,7 @@ function CarouselTut({
 	setSubIndex,
 }: {
 	title: string;
-	data: any[];
+	data: string[];
 	subIndex: number;
 	setSubIndex: (index: number) => void;
 }) {
@@ -24,7 +24,7 @@ function CarouselTut({
 		return () => {
 			api.off("select", onSelect);
 		};
-	}, [api]);
+	}, [api, setSubIndex]);
 	useEffect(() => {
 		if (api && subIndex >= 0) {
 			api.scrollTo(subIndex);
@@ -63,6 +63,7 @@ function CarouselTut({
 				{data.length > 1 &&
 					data.map((_, index) => (
 						<div
+							key={`tut-dot-${title}-${index}`}
 							className={
 								"h-1/3 min-h-2.5 aspect-square z-100 pointer-events-auto rounded-full border duration-200 " +
 								(index == subIndex ? "bg-accent bgaccent   border-accent" : " hover:bg-border")

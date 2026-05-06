@@ -192,18 +192,20 @@ export async function openWuwaModFixerFolder() {
 	return openPath(baseDir);
 }
 
-export function getWuwaModFixerWarning(textData: any) {
+type WuwaModFixerText = { _Main?: { _components?: { _WuwaModFixer?: { Warning?: string; Missing?: string; LaunchFailed?: string } } } };
+
+export function getWuwaModFixerWarning(textData: WuwaModFixerText) {
 	return (
 		textData?._Main?._components?._WuwaModFixer?.Warning ||
 		"If you already used a different fixer version on the same mod, restore that mod from backup before repairing again."
 	);
 }
 
-export function getWuwaModFixerMissingMessage(textData: any) {
+export function getWuwaModFixerMissingMessage(textData: WuwaModFixerText) {
 	return textData?._Main?._components?._WuwaModFixer?.Missing || `${FIXER_LABEL} is not ready yet.`;
 }
 
-export function showWuwaModFixerLaunchError(error: unknown, textData: any) {
+export function showWuwaModFixerLaunchError(error: unknown, textData: WuwaModFixerText) {
 	const message = error instanceof Error ? error.message : String(error || "Unknown error");
 	addToast({
 		type: "error",

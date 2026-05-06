@@ -30,6 +30,35 @@ type ProgressSnapshot = {
 	text: string;
 };
 
+type DownloadDataEntry = {
+	source?: string;
+	updatedAt?: number;
+	viewedAt?: number;
+};
+
+type DownloadProgressEventPayload = {
+	key?: string;
+	total?: number | string;
+	downloaded?: number | string;
+	speed?: string;
+	eta?: string;
+};
+
+type DownloadExtEventPayload = {
+	key?: string;
+};
+
+type DownloadFinishEventPayload = {
+	key?: string;
+	type?: string;
+};
+
+type DownloadErrorEventPayload = {
+	key?: string;
+	message?: string;
+	stage?: string;
+};
+
 const EMPTY_PROGRESS: ProgressSnapshot = {
 	percent: 0,
 	text: " - ",
@@ -48,6 +77,15 @@ const Icons = {
 let extracts: Record<string, DownloadItem> = {};
 export function addToExtracts(key: string, element: DownloadItem) {
 	extracts[key] = element;
+}
+function removeFromExtracts(key: string) {
+	delete extracts[key];
+}
+function getFromExtracts(key: string) {
+	return extracts[key];
+}
+function resetExtracts() {
+	extracts = {};
 }
 
 function sameDownload(a: DownloadItem, b: DownloadItem) {
@@ -78,7 +116,7 @@ function splitModPath(path: string, fallbackCategory: string) {
 function toComparableName(value: string) {
 	return String(value || "").replaceAll("DISABLED_", "").trim().toLowerCase();
 }
-function findBestLinkedEntry(item: DownloadItem, data: Record<string, any>, fallbackCategory: string) {
+function findBestLinkedEntry(item: DownloadItem, data: Record<string, DownloadDataEntry>, fallbackCategory: string) {
 	if (!item.source) return null;
 	const preferredPath = String(item.path || "").trim();
 	const preferredName = toComparableName(item.displayName || item.name);
@@ -169,6 +207,7 @@ function Downloads() {
 	const startedKeysRef = useRef<Set<string>>(new Set());
 	const cancelRequestedRef = useRef<Set<string>>(new Set());
 	const progressRef = useRef<Record<string, ProgressSnapshot>>({});
+	const [progressSnapshot, setProgressSnapshot] = useState<Record<string, ProgressSnapshot>>({});
 	const [progressTick, setProgressTick] = useState(0);
 	const [queueWakeTick, setQueueWakeTick] = useState(0);
 
@@ -188,6 +227,7 @@ function Downloads() {
 			const now = performance.now();
 			if (forceImmediate && now - lastProgressFlushRef.current >= PROGRESS_REFRESH_INTERVAL_MS) {
 				lastProgressFlushRef.current = now;
+				setProgressSnapshot({ ...progressRef.current });
 				setProgressTick((tick) => tick + 1);
 				return;
 			}
@@ -197,6 +237,7 @@ function Downloads() {
 				const current = performance.now();
 				if (current - lastProgressFlushRef.current < PROGRESS_REFRESH_INTERVAL_MS) return;
 				lastProgressFlushRef.current = current;
+				setProgressSnapshot({ ...progressRef.current });
 				setProgressTick((tick) => tick + 1);
 			});
 		},
@@ -246,8 +287,9 @@ function Downloads() {
 
 		const handleDownloadFailure = useCallback(
 			(itemKey: string, errorMessage: string, stage = "download") => {
-				delete extracts[itemKey];
+				removeFromExtracts(itemKey);
 				delete progressRef.current[itemKey];
+				setProgressSnapshot({ ...progressRef.current });
 				setDownloads((prev) => {
 				const activeFromDownloading = prev.downloading.find((x) => x.key === itemKey);
 				const activeFromExtracting = prev.extracting.find((x) => x.key === itemKey);
@@ -341,7 +383,7 @@ function Downloads() {
 					return persistedDownloads;
 				});
 
-				let persistedData = {} as Record<string, any>;
+				let persistedData: Record<string, DownloadDataEntry> = {};
 				setData((prevData) => {
 					if (runtimeItem.path) {
 						persistedData = {
@@ -465,6 +507,7 @@ function Downloads() {
 		downloads.queue,
 		enrichForDownload,
 		queueWakeTick,
+		scheduleProgressRefresh,
 		setDownloads,
 		startDownload,
 	]);
@@ -472,7 +515,7 @@ function Downloads() {
 	useEffect(() => {
 		const setupListeners = async () => {
 			const unlistenProgress = await listen("download-progress", (event) => {
-				const payload = event.payload as any;
+				const payload = event.payload as DownloadProgressEventPayload;
 				const key = String(payload.key || "");
 				if (!key) return;
 
@@ -500,15 +543,16 @@ function Downloads() {
 			});
 
 				const unlistenExt = await listen("ext", (event) => {
-					const payload = event.payload as any;
+					const payload = event.payload as DownloadExtEventPayload;
 					const key = String(payload.key || "");
 					if (!key) return;
 					delete progressRef.current[key];
+					setProgressSnapshot({ ...progressRef.current });
 
 					setDownloads((prev) => {
 					const finished = prev.downloading.find((item) => item.key === key);
 					if (!finished) return prev;
-					extracts[key] = finished;
+					addToExtracts(key, finished);
 					return {
 						...prev,
 						downloading: prev.downloading.filter((item) => item.key !== key),
@@ -518,15 +562,16 @@ function Downloads() {
 			});
 
 			const unlistenFin = await listen("fin", async (event) => {
-				const payload = event.payload as any;
+				const payload = event.payload as DownloadFinishEventPayload;
 				const key = String(payload.key || "");
 				const type = String(payload.type || "auto");
 				if (!key) return;
 
 				info("[IMM] Extraction finished for key:", key);
-				const finished = extracts[key] || downloadsRef.current.extracting.find((item) => item.key === key);
-				delete extracts[key];
+				const finished = getFromExtracts(key) || downloadsRef.current.extracting.find((item) => item.key === key);
+				removeFromExtracts(key);
 				delete progressRef.current[key];
+				setProgressSnapshot({ ...progressRef.current });
 
 				if (!finished) {
 					setDownloads((prev) => ({
@@ -538,7 +583,7 @@ function Downloads() {
 
 				if (type === "auto") {
 					await validateModDownload(finished.dlPath || "");
-					let persistedData = {} as Record<string, any>;
+					let persistedData: Record<string, DownloadDataEntry> = {};
 					setData((prev) => {
 						if (finished.path) {
 							persistedData = {
@@ -587,7 +632,7 @@ function Downloads() {
 			});
 
 			const unlistenError = await listen("download-error", (event) => {
-				const payload = event.payload as any;
+				const payload = event.payload as DownloadErrorEventPayload;
 				const key = String(payload.key || "");
 				if (!key) return;
 				const message = String(payload.message || "Unknown download error");
@@ -624,7 +669,8 @@ function Downloads() {
 
 	useEffect(() => {
 		progressRef.current = {};
-		extracts = {};
+		scheduleProgressRefresh(true);
+		resetExtracts();
 		cancelRequestedRef.current.clear();
 		startedKeysRef.current.clear();
 		setDownloads((prev) => ({
@@ -637,7 +683,7 @@ function Downloads() {
 				...prev.extracting.map((item) => ({ ...item, status: "pending" as const })),
 			],
 		}));
-	}, [game, setDownloads]);
+	}, [game, scheduleProgressRefresh, setDownloads]);
 
 	const clearCompleted = () => {
 		let persistedDownloads = downloadsRef.current;
@@ -692,8 +738,9 @@ function Downloads() {
 		const cancelItem = (item: DownloadRow) => {
 			if (item.status === "downloading" && item.key) {
 				cancelRequestedRef.current.add(item.key);
-				delete extracts[item.key];
+				removeFromExtracts(item.key);
 				delete progressRef.current[item.key];
+				setProgressSnapshot({ ...progressRef.current });
 				void invoke("cancel_download", { key: item.key }).catch(() => {});
 			if (item.dlPath) void cleanCancelledDownload(item.dlPath);
 			setDownloads((prev) => ({
@@ -757,7 +804,7 @@ function Downloads() {
 	}, [downloads.completed, downloads.downloading, downloads.extracting, downloads.failed, downloads.queue]);
 
 	const firstItem = downloadList[0];
-	const firstProgress = firstItem?.key ? progressRef.current[firstItem.key] || EMPTY_PROGRESS : EMPTY_PROGRESS;
+	const firstProgress = firstItem?.key ? progressSnapshot[firstItem.key] || EMPTY_PROGRESS : EMPTY_PROGRESS;
 	const firstDownloadingKey = downloads.downloading[0]?.key || "";
 	const done = downloads.completed.length + downloads.failed.length;
 	const downloadingCount = downloads.downloading.length;
@@ -870,7 +917,7 @@ function Downloads() {
 									></div>
 								</div>
 								{downloadList.map((item, index) => {
-									const itemProgress = item.key ? progressRef.current[item.key] || EMPTY_PROGRESS : EMPTY_PROGRESS;
+									const itemProgress = item.key ? progressSnapshot[item.key] || EMPTY_PROGRESS : EMPTY_PROGRESS;
 									return (
 										<div
 											key={(item.key || (item.displayName || item.name).replaceAll("DISABLED_", "")) + index}

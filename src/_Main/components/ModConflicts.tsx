@@ -8,7 +8,7 @@ import { CONFLICT_INDEX, CONFLICTS, MOD_LIST, TEXT_DATA } from "@/utils/vars";
 
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 function ModConflicts() {
 	const setModList = useSetAtom(MOD_LIST);
@@ -17,9 +17,6 @@ function ModConflicts() {
 	const [curSelected, setCurSelected] = useState(-1);
 	const [nextSide, setNextSide] = useState<"left" | "right">("right");
 	const textData = useAtomValue(TEXT_DATA);
-	useEffect(() => {
-		setCurSelected(-1);
-	}, [curIndex]);
 	return (
 		<DialogContent>
 			<Tooltip>
@@ -53,6 +50,7 @@ function ModConflicts() {
 						<div className="min-h-fit flex flex-row flex-wrap gap-10 justify-center w-full py-4">
 							{conflicts[curIndex]?.map((path, idx) => (
 								<div
+									key={`${path}-${idx}`}
 									onClick={(e) => {
 										e.preventDefault();
 										setCurSelected((prev) => (prev === idx ? -1 : idx));
@@ -118,7 +116,7 @@ function ModConflicts() {
 					disabled={curIndex <= 0}
 					onClick={() => {
 						if (curIndex > 0) {
-							let newIndex = curIndex - 1;
+							const newIndex = curIndex - 1;
 							setNextSide("left");
 							setTimeout(() => {
 								setCurIndex(newIndex);
@@ -152,24 +150,24 @@ function ModConflicts() {
 				<Button
 					disabled={curIndex >= conflicts.length - 1 && curSelected === -1}
 					onClick={async () => {
-						let toDisable: any =
-							curSelected < 0 ? [] : [...conflicts[curIndex]].filter((_, idx) => idx !== curSelected);
+						const toDisable = curSelected < 0 ? [] : [...conflicts[curIndex]].filter((_, idx) => idx !== curSelected);
 
-						if (toDisable.length > 0) {
+						if (Array.isArray(toDisable) && toDisable.length > 0) {
 							const promises = toDisable.map((path: string) => toggleMod(path, false));
 							await Promise.all(promises);
-							toDisable = new Set(toDisable);
+							const disabledSet = new Set(toDisable);
 							setNextSide("right");
 							setCurSelected(-1);
 							setModList((old) =>
 								old.map((mod) => ({
 									...mod,
-									enabled: toDisable.has(mod.path) ? false : mod.enabled,
+									enabled: disabledSet.has(mod.path) ? false : mod.enabled,
 								}))
 							);
 						} else if (curIndex < conflicts.length - 1) {
-							let newIndex = curIndex + 1;
+							const newIndex = curIndex + 1;
 							setNextSide("right");
+							setCurSelected(-1);
 							setTimeout(() => {
 								setCurIndex(newIndex);
 							}, 50);

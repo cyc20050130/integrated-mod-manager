@@ -33,7 +33,7 @@ function TooltipContent({
   children,
   hideArrow = false,
   ...props
-}:any) {
+}: React.ComponentProps<typeof TooltipPrimitive.Content> & { hideArrow?: boolean }) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content

@@ -12,7 +12,6 @@
     "core:webview:default",
     "core:webview:allow-create-webview",
     "core:webview:allow-create-webview-window",
-    "core:webview:allow-internal-toggle-devtools",
     "core:webview:allow-print",
     "core:webview:allow-reparent",
     "core:webview:allow-set-webview-focus",
@@ -118,7 +117,13 @@
     {
       "identifier": "fs:scope",
       "allow": [
-        "**/*"
+        "$APPLOCALDATA/**",
+        "$LOCALDATA/**",
+        "$RESOURCE/**",
+        "$DOCUMENT/**",
+        "$DOWNLOAD/**",
+        "$PICTURE/**",
+        "$VIDEO/**"
       ]
     },
     "deep-link:default",
@@ -127,7 +132,25 @@
       "identifier": "opener:allow-open-path",
       "allow": [
         {
-          "path": "**/*"
+          "path": "$APPLOCALDATA/**"
+        },
+        {
+          "path": "$LOCALDATA/**"
+        },
+        {
+          "path": "$RESOURCE/**"
+        },
+        {
+          "path": "$DOCUMENT/**"
+        },
+        {
+          "path": "$DOWNLOAD/**"
+        },
+        {
+          "path": "$PICTURE/**"
+        },
+        {
+          "path": "$VIDEO/**"
         }
       ]
     },

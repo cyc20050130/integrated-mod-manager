@@ -22,6 +22,7 @@ use tokio::time::{sleep, timeout};
 mod hotreload;
 mod image_server;
 mod logger_utils;
+mod ww_bridge;
 
 const PROGRESS_UPDATE_THRESHOLD: u64 = 1024;
 const BUFFER_SIZE: usize = 8192;
@@ -217,6 +218,355 @@ static DOWNLOAD_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::
 static CANCELLED_DOWNLOADS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static ACTIVE_EXTRACTIONS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_PREVIEW_DOWNLOADS: AtomicUsize = AtomicUsize::new(0);
+
+fn canonicalize_allowed_roots(allowed_roots: &[String]) -> Result<Vec<PathBuf>, String> {
+    if allowed_roots.is_empty() {
+        return Err("At least one allowed root is required".to_string());
+    }
+
+    let mut roots = Vec::new();
+    for root in allowed_roots {
+        if root.trim().is_empty() {
+            return Err("Allowed root cannot be empty".to_string());
+        }
+        let root_path = Path::new(root);
+        if !root_path.exists() {
+            continue;
+        }
+        let canonical = root_path
+            .canonicalize()
+            .map_err(|err| format!("Failed to canonicalize allowed root '{}': {}", root, err))?;
+        roots.push(canonical);
+    }
+
+    if roots.is_empty() {
+        return Err("At least one existing allowed root is required".to_string());
+    }
+
+    Ok(roots)
+}
+
+fn path_is_within_root(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
+}
+
+fn ensure_guarded_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|err| format!("Failed to canonicalize path '{}': {}", path.display(), err))?;
+
+    if allowed_roots
+        .iter()
+        .any(|root| path_is_within_root(&canonical, root))
+    {
+        Ok(canonical)
+    } else {
+        Err(format!(
+            "Path '{}' is outside the allowed roots",
+            canonical.display()
+        ))
+    }
+}
+
+fn ensure_guarded_new_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
+    if path.exists() {
+        return ensure_guarded_path(path, allowed_roots);
+    }
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Path '{}' has no parent", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("Path '{}' has no file name", path.display()))?;
+    let canonical_parent = ensure_guarded_path(parent, allowed_roots)?;
+    Ok(canonical_parent.join(file_name))
+}
+
+fn ensure_not_allowed_root(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), String> {
+    if allowed_roots.iter().any(|root| path == root) {
+        Err("Refusing to operate on an allowed root directly".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn guarded_remove_path(
+    path: String,
+    allowed_roots: Vec<String>,
+    recursive: bool,
+) -> Result<(), String> {
+    let roots = canonicalize_allowed_roots(&allowed_roots)?;
+    let target = ensure_guarded_path(Path::new(&path), &roots)?;
+    ensure_not_allowed_root(&target, &roots)?;
+
+    if target.is_dir() {
+        if recursive {
+            std::fs::remove_dir_all(&target)
+        } else {
+            std::fs::remove_dir(&target)
+        }
+    } else {
+        std::fs::remove_file(&target)
+    }
+    .map_err(|err| format!("Failed to remove '{}': {}", target.display(), err))
+}
+
+#[tauri::command]
+fn guarded_rename_path(
+    from: String,
+    to: String,
+    allowed_roots: Vec<String>,
+) -> Result<(), String> {
+    let roots = canonicalize_allowed_roots(&allowed_roots)?;
+    let from_path = ensure_guarded_path(Path::new(&from), &roots)?;
+    let to_path = ensure_guarded_new_path(Path::new(&to), &roots)?;
+    ensure_not_allowed_root(&from_path, &roots)?;
+
+    std::fs::rename(&from_path, &to_path).map_err(|err| {
+        format!(
+            "Failed to rename '{}' to '{}': {}",
+            from_path.display(),
+            to_path.display(),
+            err
+        )
+    })
+}
+
+#[tauri::command]
+fn guarded_copy_file_path(
+    from: String,
+    to: String,
+    allowed_roots: Vec<String>,
+) -> Result<(), String> {
+    let roots = canonicalize_allowed_roots(&allowed_roots)?;
+    let from_path = ensure_guarded_path(Path::new(&from), &roots)?;
+    let to_path = ensure_guarded_new_path(Path::new(&to), &roots)?;
+    if !from_path.is_file() {
+        return Err(format!("Source '{}' is not a file", from_path.display()));
+    }
+
+    std::fs::copy(&from_path, &to_path)
+        .map(|_| ())
+        .map_err(|err| {
+            format!(
+                "Failed to copy '{}' to '{}': {}",
+                from_path.display(),
+                to_path.display(),
+                err
+            )
+        })
+}
+
+#[tauri::command]
+fn guarded_import_file_path(
+    from: String,
+    to: String,
+    allowed_roots: Vec<String>,
+) -> Result<(), String> {
+    let roots = canonicalize_allowed_roots(&allowed_roots)?;
+    let from_path = Path::new(&from)
+        .canonicalize()
+        .map_err(|err| format!("Failed to canonicalize source '{}': {}", from, err))?;
+    let to_path = ensure_guarded_new_path(Path::new(&to), &roots)?;
+    if !from_path.is_file() {
+        return Err(format!("Source '{}' is not a file", from_path.display()));
+    }
+
+    std::fs::copy(&from_path, &to_path)
+        .map(|_| ())
+        .map_err(|err| {
+            format!(
+                "Failed to import '{}' to '{}': {}",
+                from_path.display(),
+                to_path.display(),
+                err
+            )
+        })
+}
+
+#[cfg(test)]
+mod guarded_file_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn roots(root: &Path) -> Vec<String> {
+        vec![root.display().to_string()]
+    }
+
+    #[test]
+    fn guarded_remove_allows_child_inside_allowed_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        let file = root.join("mod.txt");
+        fs::write(&file, "ok").expect("write");
+
+        guarded_remove_path(file.display().to_string(), roots(&root), false).expect("remove child");
+
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn guarded_roots_skip_missing_entries_when_one_root_exists() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let missing = temp.path().join("missing-root");
+        fs::create_dir_all(&root).expect("root");
+        let file = root.join("mod.txt");
+        fs::write(&file, "ok").expect("write");
+
+        guarded_remove_path(
+            file.display().to_string(),
+            vec![missing.display().to_string(), root.display().to_string()],
+            false,
+        )
+        .expect("remove with missing sibling root");
+
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn guarded_path_rejects_parent_escape() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&outside).expect("outside");
+        let escaped = outside.join("secret.txt");
+        fs::write(&escaped, "no").expect("write escaped");
+        let traversal = root.join("..").join("outside").join("secret.txt");
+        let allowed = canonicalize_allowed_roots(&roots(&root)).expect("roots");
+
+        assert!(ensure_guarded_path(&traversal, &allowed).is_err());
+    }
+
+    #[test]
+    fn guarded_path_rejects_absolute_outside_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&outside).expect("outside");
+        let escaped = outside.join("secret.txt");
+        fs::write(&escaped, "no").expect("write escaped");
+
+        let result = guarded_remove_path(escaped.display().to_string(), roots(&root), false);
+
+        assert!(result.is_err());
+        assert!(escaped.exists());
+    }
+
+    #[test]
+    fn guarded_remove_refuses_allowed_root_itself() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+
+        let result = guarded_remove_path(root.display().to_string(), roots(&root), true);
+
+        assert!(result.is_err());
+        assert!(root.exists());
+    }
+
+    #[test]
+    fn guarded_rename_requires_destination_parent_inside_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&outside).expect("outside");
+        let from = root.join("mod.txt");
+        let to = outside.join("mod.txt");
+        fs::write(&from, "ok").expect("write");
+
+        let result = guarded_rename_path(from.display().to_string(), to.display().to_string(), roots(&root));
+
+        assert!(result.is_err());
+        assert!(from.exists());
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn guarded_copy_requires_destination_parent_inside_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&outside).expect("outside");
+        let from = root.join("mod.txt");
+        let to = outside.join("mod.txt");
+        fs::write(&from, "ok").expect("write");
+
+        let result = guarded_copy_file_path(from.display().to_string(), to.display().to_string(), roots(&root));
+
+        assert!(result.is_err());
+        assert!(from.exists());
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn guarded_import_allows_external_source_but_requires_destination_inside_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let external = temp.path().join("external");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&external).expect("external");
+        let from = external.join("preview.png");
+        let to = root.join("preview.png");
+        fs::write(&from, "image").expect("write");
+
+        guarded_import_file_path(from.display().to_string(), to.display().to_string(), roots(&root))
+            .expect("import external file");
+
+        assert_eq!(fs::read_to_string(&to).expect("read"), "image");
+    }
+
+    #[test]
+    fn guarded_import_rejects_destination_outside_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let external = temp.path().join("external");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&external).expect("external");
+        fs::create_dir_all(&outside).expect("outside");
+        let from = external.join("preview.png");
+        let to = outside.join("preview.png");
+        fs::write(&from, "image").expect("write");
+
+        let result = guarded_import_file_path(from.display().to_string(), to.display().to_string(), roots(&root));
+
+        assert!(result.is_err());
+        assert!(!to.exists());
+    }
+
+    #[test]
+    fn guarded_path_rejects_symlink_escape_when_symlinks_are_available() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&outside).expect("outside");
+        let target = outside.join("secret.txt");
+        let link = root.join("linked-secret.txt");
+        fs::write(&target, "no").expect("write target");
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&target, &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(&target, &link);
+
+        if link_result.is_err() {
+            return;
+        }
+
+        let allowed = canonicalize_allowed_roots(&roots(&root)).expect("roots");
+        assert!(ensure_guarded_path(&link, &allowed).is_err());
+    }
+}
 
 struct ExtractionSlotGuard;
 struct PreviewSlotGuard;
@@ -1388,6 +1738,18 @@ pub fn run() {
             get_image_server_url,
             get_session_id,
             get_runtime_data_dir,
+            guarded_remove_path,
+            guarded_rename_path,
+            guarded_copy_file_path,
+            guarded_import_file_path,
+            ww_bridge::list_unified_ww_cards,
+            ww_bridge::get_unified_ww_card_detail,
+            ww_bridge::refresh_unified_ww_sources,
+            ww_bridge::discover_afdian_candidates,
+            ww_bridge::write_unified_ww_cache_snapshot,
+            ww_bridge::attach_afdian_candidate_to_unified_card,
+            ww_bridge::detach_afdian_source_from_unified_card,
+            ww_bridge::run_temp_duplicate_compare,
             ensure_bundled_wuwa_mod_fixer,
             request_app_restart,
             execute_with_args,
