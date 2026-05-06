@@ -762,7 +762,7 @@ export async function main(useGame = "" as Games) {
 		game: { ...prev.game, ...configXX.settings },
 	}));
 	initHelpers();
-	await refreshAppUpdateCheck(false);
 	isInitialized = true;
 	store.set(MAIN_FUNC_STATUS, "fin");
+	void refreshAppUpdateCheck(false);
 }
