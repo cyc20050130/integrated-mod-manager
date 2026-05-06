@@ -117,6 +117,7 @@
     {
       "identifier": "fs:scope",
       "allow": [
+        "$APPDATA/**",
         "$APPLOCALDATA/**",
         "$LOCALDATA/**",
         "$RESOURCE/**",
@@ -131,6 +132,9 @@
     {
       "identifier": "opener:allow-open-path",
       "allow": [
+        {
+          "path": "$APPDATA/**"
+        },
         {
           "path": "$APPLOCALDATA/**"
         },

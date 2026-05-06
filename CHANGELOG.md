@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.3 - 2026-05-06
+
+### Fixed
+- Allowed IMM to access XXMI under `%APPDATA%`, so XXMI launcher detection and config reads no longer fail on standard installs.
+- Added APPDATA coverage to filesystem, opener, and asset scopes used by XXMI paths and previews.
+
 ## 3.2.2 - 2026-05-06
 
 ### Fixed

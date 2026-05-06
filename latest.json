@@ -1,11 +1,11 @@
 {
-	"version": "3.2.2",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Prevented startup-time background health checks from overwriting runtime config with default values before initialization completes.\",\"Fixed launch-time config corruption that could clear the remembered game, language, and XXMI path and leave IMM stuck on the loading flow.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.2 fixes startup config corruption that could leave IMM stuck loading.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.2\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-06T12:10:00Z",
+	"version": "3.2.3",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Allowed IMM to access XXMI under %APPDATA%, so standard XXMI installs are detected correctly again.\",\"Added APPDATA coverage to filesystem, opener, and asset scopes used by XXMI config reads and previews.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.3 fixes XXMI detection for standard AppData installs.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.3\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-06T12:40:00Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHBQL3EySmhEOHJqZWpoNlVSbllneU5UekUyMnZjU01xaHgrZW4wcGtXV1czdmY0RzgyU0lnRzZMSGRyWEphRi9IRU1VaTBtNExmcW9GaHBGclJsVEFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MDcwNjg2CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMl94NjQtc2V0dXAuZXhlClJhMGkwc3Y1dU4xMlRjVHdlYmF2Uy95SEV6M2xaQm1QVFBQdjJqMWJMVXpYdjVhbnU5czVUWWR6WkNpSEMwdUNNcjl2U0ZoenBVUWxlcmU3VmJtSkRBPT0K",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.2/Integrated.Mod.Manager.IMM._3.2.2_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGdxTVcrUEY0eUNidDBISjVkRE5FZWtTejFRbDBTeVp6VkFhU1hmbzg4bTcyY3hwb3NUakJlQnhMRjNpand6cXNtVkNFVHQ1Wm9EcXNoWkswKy80VUFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MDcxNTk4CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuM194NjQtc2V0dXAuZXhlCm1MVmIwS0FzRTVKNEJCWUJ2bTNZa1J2Q05EelI3OW5DSXQzY2s0OWRIYWxZOVBjYmJOcEpwRnJSYXVwaHB6aTdUYTFmc2c3dWZKc2RrcWYwWThScEFBPT0K",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.3/Integrated.Mod.Manager.IMM._3.2.3_x64-setup.exe"
 		}
 	}
 }
