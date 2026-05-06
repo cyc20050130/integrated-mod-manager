@@ -450,8 +450,8 @@ export async function initGame(game: RuntimeGame, status = true) {
 	await setCategories(game, status);
 	invoke("set_window_icon", { game });
 	// Validate source and target dirs
-	if (configXX.sourceDir && !(await exists(join(configXX.sourceDir)))) configXX.sourceDir = "";
-	if (configXX.targetDir && !(await exists(configXX.targetDir))) configXX.targetDir = "";
+	if (configXX.sourceDir && !(await pathExistsNative(join(configXX.sourceDir)))) configXX.sourceDir = "";
+	if (configXX.targetDir && !(await pathExistsNative(configXX.targetDir))) configXX.targetDir = "";
 	if (status) store.set(MAIN_FUNC_STATUS, "Validating source and target directories");
 	info("[IMM] Validating source and target directories...", configXX.sourceDir, configXX.targetDir);
 	store.set(SOURCE, configXX.sourceDir || "");

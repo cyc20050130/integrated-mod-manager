@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.6 - 2026-05-07
+
+### Fixed
+- Switched WWMI source/target directory validation to native path checks so startup no longer fails on external XXMI mod roots.
+- Continued removing frontend filesystem scope blockers from the XXMI startup path on standard installs.
+
 ## 3.2.5 - 2026-05-07
 
 ### Fixed
