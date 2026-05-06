@@ -13,5 +13,5 @@ test("default XXMI discovery tests both direct and sibling Roaming candidates", 
 	assert.match(source, /const directCandidate = join\(normalized, "XXMI Launcher"\)/);
 	assert.match(source, /parentParts\.length \? join\(\.\.\.parentParts, "XXMI Launcher"\) : ""/);
 	assert.match(source, /for \(const candidate of xxmiCandidates\)/);
-	assert.match(source, /if \(await safeExists\(candidate\)\)/);
+	assert.match(source, /if \(await pathExistsNative\(candidate\)\)/);
 });

@@ -1,11 +1,11 @@
 {
-	"version": "3.2.4",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Corrected default XXMI auto-discovery to target the Roaming-level XXMI Launcher folder instead of IMM's own app data folder.\",\"Restored automatic detection of XXMI Launcher Config.json for standard XXMI installs under %APPDATA%.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.4 fixes automatic XXMI path detection for standard installs.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.4\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-06T13:00:00Z",
+	"version": "3.2.5",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Switched XXMI config and importer file access to native Tauri commands so %APPDATA% paths are no longer blocked by frontend filesystem scope checks.\",\"Made default XXMI auto-discovery try both the direct Roaming folder and the sibling app-data case before giving up.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.5 fixes XXMI config detection and reading on AppData installs.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.5\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-07T00:10:00Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHBDeUdDajRLNm1VdE82ek9BemVGa1RSSmd5Y2tXWExFd1VEcW9xanZEd3JaYkgyZDZrVWRQZ2JLaGo0ckIrelZNc21iZWVTMmtoa29JT08yc2RtRHd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MTA3NjQxCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuNF94NjQtc2V0dXAuZXhlCkNYTkJ4ZVRBZTN1NmVFaVZWNU1CS2xuOU5nN0dKVjlOUGpURXZHRVRBcDBsVVBkY24ycG55Y2hkSFhwcXlTZ1pzaWRlZ2c4L29jWWVSd2IxUFVsdUFBPT0K",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.4/Integrated.Mod.Manager.IMM._3.2.4_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGllNVhMMENNRlU0a0N4bnRkOHBSeFRnTzRtTlRCdDFyRFdYY0R3U0s0aDlnNE8wVVU0ck5JSklGNmhLQUZvVE5BYTdId1lxWlZDMUJRNUhvZzRvckFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MTA5MTEyCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuNV94NjQtc2V0dXAuZXhlCmNEZENQUVkzMWVCb3JMMS9FQkpmV0hnNlkvZ29jMzBvbFg0SU03Qkx3S2JTSm54UGNzQ0N4eERpaEMwbGx0N3N0bmorQWdMU0k1OG1GRlVOdDliOUR3PT0K",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.5/Integrated.Mod.Manager.IMM._3.2.5_x64-setup.exe"
 		}
 	}
 }

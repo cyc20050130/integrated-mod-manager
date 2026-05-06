@@ -1571,6 +1571,21 @@ fn get_runtime_data_dir() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn path_exists_native(path: String) -> Result<bool, String> {
+    Ok(Path::new(&path).exists())
+}
+
+#[tauri::command]
+fn read_text_file_native(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn write_text_file_native(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn request_app_restart(app_handle: tauri::AppHandle) {
     app_handle.request_restart();
 }
@@ -1738,6 +1753,9 @@ pub fn run() {
             get_image_server_url,
             get_session_id,
             get_runtime_data_dir,
+            path_exists_native,
+            read_text_file_native,
+            write_text_file_native,
             guarded_remove_path,
             guarded_rename_path,
             guarded_copy_file_path,

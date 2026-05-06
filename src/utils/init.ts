@@ -143,6 +143,23 @@ async function safeWriteTextFile(pathLike: string, contents: string) {
 	}
 }
 
+async function pathExistsNative(pathLike: string) {
+	try {
+		return await invoke<boolean>("path_exists_native", { path: pathLike });
+	} catch (error) {
+		info(`[IMM] native exists() check failed for ${pathLike}:`, error);
+		return false;
+	}
+}
+
+async function readTextFileNative(pathLike: string) {
+	return invoke<string>("read_text_file_native", { path: pathLike });
+}
+
+async function writeTextFileNative(pathLike: string, contents: string) {
+	return invoke<void>("write_text_file_native", { path: pathLike, contents });
+}
+
 function getDefaultXxmiDirCandidatesFromAppData(appDataDir: string) {
 	const normalized = String(appDataDir || "").replaceAll("/", "\\").replace(/\\+$/g, "");
 	if (!normalized) return [] as string[];
@@ -183,7 +200,7 @@ let categories: Category[] = [];
 let isInitialized = false;
 async function getXXMIConfig(path = store.get(XXMI_DIR)): Promise<XXMIConfig | null> {
 	try {
-		return readJsonText<XXMIConfig>(await readTextFile(join(path, "XXMI Launcher Config.json")));
+		return readJsonText<XXMIConfig>(await readTextFileNative(join(path, "XXMI Launcher Config.json")));
 	} catch (e) {
 		info("[IMM] Failed to read XXMI Launcher config:", e);
 		return null;
@@ -217,7 +234,7 @@ export async function setPrePostLaunch(game: Games, value: boolean) {
 				.join(" && ");
 		}
 	}
-	await writeTextFile(join(store.get(XXMI_DIR), "XXMI Launcher Config.json"), JSON.stringify(data, null, 2));
+	await writeTextFileNative(join(store.get(XXMI_DIR), "XXMI Launcher Config.json"), JSON.stringify(data, null, 2));
 }
 export async function readXXMIConfig(path: string) {
 	paths = {
@@ -372,7 +389,7 @@ export async function verifyGameDir(game: Games) {
 		sourceDir: "",
 	};
 	try {
-		(await readTextFile(join(XXPath, "d3dx.ini"))).split("\n").forEach((line: string) => {
+		(await readTextFileNative(join(XXPath, "d3dx.ini"))).split("\n").forEach((line: string) => {
 			const [key, value] = line.split("=").map((x: string) => x.trim());
 			if (key == "include_recursive") {
 				const isPath = value.slice(1, 3) == ":\\";
@@ -518,7 +535,7 @@ function removeHelpers() {
 }
 export async function launchGame() {
 	await syncIniStateOnce("launch-game");
-	if (await exists(config.XXMI))
+	if (await pathExistsNative(config.XXMI))
 		isGameProcessRunning(config.game).then((running) => {
 			if (!running) {
 				executeXXMI(join(config.XXMI, "Resources\\Bin\\XXMI Launcher.exe"));
@@ -770,7 +787,7 @@ export async function main(useGame = "" as Games) {
 		apiClient.setClient(config.clientDate || "");
 		if (config.XXMI == "" || !(await safeExists(config.XXMI))) {
 			for (const candidate of xxmiCandidates) {
-				if (await safeExists(candidate)) {
+				if (await pathExistsNative(candidate)) {
 					config.XXMI = candidate;
 					break;
 				}

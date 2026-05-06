@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.5 - 2026-05-07
+
+### Fixed
+- Switched XXMI config and importer file access to native Tauri commands so `%APPDATA%` paths are no longer blocked by frontend filesystem scope checks.
+- Made default XXMI auto-discovery try both the direct Roaming folder and the sibling app-data case before giving up.
+
 ## 3.2.4 - 2026-05-06
 
 ### Fixed
