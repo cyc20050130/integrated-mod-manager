@@ -21,6 +21,7 @@ test("latest.json Windows installer URL uses the GitHub release asset-safe filen
 	const downloadUrl = manifest.platforms?.["windows-x86_64"]?.url || "";
 
 	assert.ok(downloadUrl, "expected latest.json to include a windows-x86_64 download URL");
-	assert.match(downloadUrl, /Integrated\.Mod\.Manager\.IMM\._3\.2\.0_x64-setup\.exe$/);
+	assert.match(downloadUrl, /\/releases\/download\/v3\.2\.0\/Integrated\.Mod\.Manager\.IMM\._3\.2\.0_x64-setup\.exe$/);
 	assert.doesNotMatch(downloadUrl, /%20|\(|\)/);
+	assert.doesNotMatch(downloadUrl, /\/releases\/latest\/download\//);
 });
