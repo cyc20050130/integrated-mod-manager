@@ -143,6 +143,15 @@ async function safeWriteTextFile(pathLike: string, contents: string) {
 	}
 }
 
+function getDefaultXxmiDirFromAppData(appDataDir: string) {
+	const parentParts = String(appDataDir || "")
+		.split("\\")
+		.filter(Boolean)
+		.slice(0, -1);
+	if (!parentParts.length) return "";
+	return join(...parentParts, "XXMI Launcher");
+}
+
 let paths = {
 	"": "",
 	exe: "",
@@ -725,7 +734,7 @@ export async function main(useGame = "" as Games) {
 		appData = await path.dataDir();
 		cwd = await readRuntimeDataDir();
 		info("[IMM] Runtime data directory:", cwd);
-		const XXMI = `${appData}\\XXMI Launcher`;
+		const XXMI = getDefaultXxmiDirFromAppData(appData);
 		if (!(await safeExists("config.json"))) {
 			store.set(MAIN_FUNC_STATUS, "Creating default config.json");
 			info("[IMM] Creating default config.json...");

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.4 - 2026-05-06
+
+### Fixed
+- Corrected default XXMI auto-discovery to target the Roaming-level `XXMI Launcher` folder instead of the app-specific IMM data folder.
+- Restored automatic detection of `XXMI Launcher Config.json` for standard XXMI installs under `%APPDATA%`.
+
 ## 3.2.3 - 2026-05-06
 
 ### Fixed
