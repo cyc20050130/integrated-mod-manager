@@ -50,6 +50,7 @@ function MainOnline() {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const carouselRef = useRef<HTMLDivElement | null>(null);
 	const unifiedCardsRef = useRef<Record<string, UnifiedOnlineCard[]>>({});
+	const loadingCacheKeysRef = useRef(new Set<string>());
 	const settings = useAtomValue(SETTINGS);
 	const nsfw = settings.global.nsfw;
 	const textData = useAtomValue(TEXT_DATA);
@@ -260,6 +261,7 @@ function MainOnline() {
 				void checkLoadMore();
 			}, 100);
 		} finally {
+			loadingCacheKeysRef.current.delete(cacheKey);
 			setIsLoading(false);
 		}
 	}, [appendLegacyOnlineCards, checkLoadMore, fetchUnifiedCards, game, setOnlineData, shouldUseUnifiedList]);
@@ -282,8 +284,9 @@ function MainOnline() {
 		//info("fetching2");
 		//info("fetching3");
 		//info("fetching", onlinePath, types);
-		if (!onlineDataRef.current[onlineCacheKey]) {
+		if (!onlineDataRef.current[onlineCacheKey] && !loadingCacheKeysRef.current.has(onlineCacheKey)) {
 			info("fetching", onlinePath);
+			loadingCacheKeysRef.current.add(onlineCacheKey);
 			pageCount[onlineCacheKey] = 1;
 			if (onlinePath.startsWith("home")) {
 				fetch(apiClient.banner(), { signal: controller.signal }).then((res) =>
@@ -318,6 +321,7 @@ function MainOnline() {
 		return () => {
 			clearTimeout(resetVisibleRangeTimer);
 			if (initialLoadTimer) clearTimeout(initialLoadTimer);
+			loadingCacheKeysRef.current.delete(onlineCacheKey);
 			controller.abort();
 		};
 	}, [onlineCacheKey, onlinePath, onlineSort, onlineType, setOnlineData, types]);

@@ -431,6 +431,7 @@ export async function initGame(game: RuntimeGame, status = true) {
 	configXX = {
 		...defConfigXX,
 		...savedConfig,
+		version: VERSION,
 		game,
 		settings: withNormalizedDownloadSettings(mergedSettings),
 		data: (savedConfig.data || {}) as ModDataObj,

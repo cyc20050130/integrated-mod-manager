@@ -1,11 +1,11 @@
 {
-	"version": "3.2.7",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Moved directory verification, migration, managed-folder creation, and external XXMI directory reads to native filesystem fallbacks.\",\"Fixed backup/config startup safe IO fallbacks so forbidden frontend fs scope errors no longer block recovery.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.7 fixes external XXMI directory verification and startup backup IO.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.7\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-10T01:55:00Z",
+	"version": "3.2.8",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Fixed WW online mod list refresh getting stuck or repeatedly reloading during source cache updates.\",\"Synchronized stale game config versions on startup so runtime config no longer stays behind the app version.\",\"Released D-drive aligned 3.2.8 build assets for updater checks.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.8 fixes WW online refresh loops and stale config version sync.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.8\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-10T11:38:19Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGgwREJrdVo3NmxXOHJEeUFQenVnYmM5WFdDcG4rUHk5a3Fra1VOTnZxSlNVNkZoaE9zOUl4M3JLOXlJZEZtalJlaVMvbngyYjg4Q09JM1Nmb2VBdlFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDA3MTkyCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuN194NjQtc2V0dXAuZXhlCi80NDJZTWx1ZWF1YzdjWVZMcU5BVmdUVkRaNnZnbFZoeWwxNHZnMTcvSFlYcmZqRzFxNHpGTmVYTlh5SUVVZjNZRVArTnowZ2hWRGpVTGordFlpUkFRPT0K",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.7/Integrated.Mod.Manager.IMM._3.2.7_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGlTNXdWZXJrcG5uVngrNDNxT3QxQXFGNGpWa05ySnVTUi9oNmh3NUQxQnN0cVAzS2VjWlNaSjZzRldUSGxxUC9mUmRyemxwUFJmeC9lcUtMMDczbEFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDEyOTI2CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuOF94NjQtc2V0dXAuZXhlCjRzRmErUitCZGxTRmlwbk5HaXVSamdDci9NNW1hdWdsZFMvZ0d2K25xbFlkTXdOMjREdk1GNDVNZFNheStUT2lxL0wvZmpuSS84SlQwYmdFMXUzaERnPT0K",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.8/Integrated.Mod.Manager.IMM._3.2.8_x64-setup.exe"
 		}
 	}
 }
