@@ -424,6 +424,19 @@ fn parse_unified_cache_snapshot(payload: &str) -> Result<UnifiedCacheSnapshot, S
         .map_err(|err| format!("Failed to parse WW unified cache snapshot: {}", err))
 }
 
+fn is_stale_two_card_fixture(snapshot: &UnifiedCacheSnapshot) -> bool {
+    snapshot.cards.len() == 2
+        && snapshot
+            .generated_at
+            .as_deref()
+            .map(|generated_at| generated_at.starts_with("2026-04-21"))
+            .unwrap_or(false)
+        && snapshot.cards.iter().any(|card| {
+            card.card.display_name == "Camellya Blue Dress"
+                || card.card.display_name == "Jinhsi School Uniform UI"
+        })
+}
+
 fn normalize_text(value: &str) -> String {
     value.trim().to_lowercase()
 }
@@ -670,6 +683,15 @@ fn load_unified_cache_snapshot(
         match fs::read_to_string(&candidate.path) {
             Ok(payload) => match parse_unified_cache_snapshot(&payload) {
                 Ok(snapshot) => {
+                    if candidate.source_kind == UnifiedCacheSourceKind::PersistedCache
+                        && is_stale_two_card_fixture(&snapshot)
+                    {
+                        log::warn!(
+                            "Ignoring stale two-card WW unified cache fixture at {}",
+                            candidate.path.display()
+                        );
+                        continue;
+                    }
                     return Ok(LoadedUnifiedCacheSnapshot {
                         snapshot,
                         source_kind: candidate.source_kind,
@@ -2840,6 +2862,42 @@ mod tests {
                 .all(|candidate| candidate.source_kind != UnifiedCacheSourceKind::DevFixture),
             "production cache candidates must not include dev fixture paths"
         );
+    }
+
+    #[test]
+    fn stale_two_card_fixture_cache_is_detected() {
+        let snapshot = parse_unified_cache_snapshot(
+            r#"{
+                "generatedAt": "2026-04-21T14:30:00Z",
+                "cards": [
+                    {
+                        "cardId": "fixture:camellya",
+                        "primarySourceId": "hui",
+                        "displayName": "Camellya Blue Dress",
+                        "originalNames": ["Camellya Blue Dress"],
+                        "category": "Camellya",
+                        "preview": null,
+                        "sources": [],
+                        "duplicateScore": 1,
+                        "duplicateReasons": []
+                    },
+                    {
+                        "cardId": "fixture:jinhsi",
+                        "primarySourceId": "keke",
+                        "displayName": "Jinhsi School Uniform UI",
+                        "originalNames": ["Jinhsi School Uniform UI"],
+                        "category": "UI",
+                        "preview": null,
+                        "sources": [],
+                        "duplicateScore": 1,
+                        "duplicateReasons": []
+                    }
+                ]
+            }"#,
+        )
+        .expect("fixture snapshot should parse");
+
+        assert!(is_stale_two_card_fixture(&snapshot));
     }
 
     #[test]
