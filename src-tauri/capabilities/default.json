@@ -163,7 +163,10 @@
       "identifier": "http:default",
       "allow": [
         {
-          "url": "https://gamebanana.com/apiv11/*"
+          "url": "https://gamebanana.com/*"
+        },
+        {
+          "url": "https://*.gamebanana.com/*"
         },
         {
           "url": "https://files.gamebanana.com/*"
@@ -181,7 +184,6 @@
         }
       ]
     },
-    "http:default",
     "shell:default"
   ]
 }
