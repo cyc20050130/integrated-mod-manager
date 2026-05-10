@@ -55,6 +55,7 @@ function getUnifiedSearchTerm(path: string): string | undefined {
 
 function MainOnline() {
 	const [isLoading, setIsLoading] = useState(false);
+	const [onlineLoadError, setOnlineLoadError] = useState("");
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const carouselRef = useRef<HTMLDivElement | null>(null);
 	const unifiedCardsRef = useRef<Record<string, UnifiedOnlineCard[]>>({});
@@ -249,15 +250,23 @@ function MainOnline() {
 	}, [checkLoadMore, updateVisibilityRange]);
 	const initialLoad = useCallback(async (url: string, cacheKey: string, controller: AbortController) => {
 		setIsLoading(true);
+		setOnlineLoadError("");
 		try {
 			const [data, unifiedCards] = await Promise.all([
 				fetch(url, { signal: controller.signal })
 					.then((res) => {
-						if (!res.ok) throw new Error(`Online list request failed: ${res.status} ${res.statusText}`);
+						if (!res.ok) {
+							const message =
+								res.status === 429
+									? "GameBanana 当前对本机限流，在线列表暂停刷新。请稍后再试。"
+									: `在线列表请求失败：${res.status} ${res.statusText}`;
+							throw new Error(message);
+						}
 						return res.json() as Promise<OnlineListResponse>;
 					})
 					.catch((err) => {
 						info("legacy online list unavailable", err);
+						setOnlineLoadError(err instanceof Error ? err.message : String(err || "在线列表请求失败"));
 						return null;
 					}),
 				fetchUnifiedCards(cacheKey),
@@ -402,6 +411,17 @@ function MainOnline() {
 			</div>
 
 			<AnimatePresence mode="popLayout">
+				{!isLoading && filteredOnlineData.length === 0 && onlineLoadError && (
+					<motion.div
+						className="mt-10 max-w-xl rounded-md border border-border bg-background/80 px-5 py-4 text-center text-sm text-muted-foreground"
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: 0 }}
+						transition={transitionConfig(0)}
+					>
+						{onlineLoadError}
+					</motion.div>
+				)}
 				<motion.div
 					className="min-h-fit card-grid card-grid-online grid justify-center w-full py-4"
 					layout
