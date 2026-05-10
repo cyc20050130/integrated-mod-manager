@@ -145,6 +145,10 @@ export async function refreshUnifiedWwSources(source?: OnlineSourceId): Promise<
 	return invoke("refresh_unified_ww_sources", { sourceId: source ?? null });
 }
 
+export async function refreshUnifiedWwCache(source: OnlineSourceFilter = "all"): Promise<UnifiedRefreshStatus[]> {
+	return invoke("refresh_unified_ww_sources", { sourceId: source });
+}
+
 export async function discoverAfdianCandidates(query: string): Promise<AfdianDiscoveryResult> {
 	return invoke("discover_afdian_candidates", { query });
 }

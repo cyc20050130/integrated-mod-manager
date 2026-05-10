@@ -211,6 +211,90 @@ test("resolveUnifiedOnlineList prefers mapped unified cards and falls back to le
 	assert.deepEqual(fallbackResult, legacyCards);
 });
 
+test("resolveUnifiedOnlineList can append legacy GameBanana cards when unified cache is partial", () => {
+	const unifiedCard = createUnifiedCardFromVariant(
+		makeVariant({
+			sourceId: "hui",
+			sourceModId: "hui-22",
+			title: "Unified Camellya",
+		}),
+		"Other"
+	);
+	const legacyCards = [
+		{
+			_idRow: 999,
+			_sModelName: "Mod",
+			_sName: "Legacy Camellya",
+			_sInitialVisibility: "show",
+			_nLikeCount: 1,
+		},
+	];
+
+	const result = resolveUnifiedOnlineList([unifiedCard], legacyCards, { appendLegacy: true });
+
+	assert.equal(result.length, 2);
+	assert.equal(result[0]?._sModelName, "UnifiedCard");
+	assert.equal(result[1]?._sModelName, "Mod");
+});
+
+test("resolveUnifiedOnlineList removes legacy duplicates already represented by GameBanana unified cards", () => {
+	const unifiedCard = createUnifiedCardFromVariant(
+		makeVariant({
+			sourceId: "gamebanana",
+			sourceModId: "999",
+			title: "Unified GameBanana Mod",
+		}),
+		"Other"
+	);
+	const legacyCards = [
+		{
+			_idRow: 999,
+			_sModelName: "Mod",
+			_sName: "Legacy Duplicate",
+			_sInitialVisibility: "show",
+			_nLikeCount: 1,
+		},
+		{
+			_idRow: 1000,
+			_sModelName: "Mod",
+			_sName: "Legacy Other",
+			_sInitialVisibility: "show",
+			_nLikeCount: 1,
+		},
+	];
+
+	const result = resolveUnifiedOnlineList([unifiedCard], legacyCards, { appendLegacy: true });
+
+	assert.equal(result.length, 2);
+	assert.equal(result[0]?._sModelName, "UnifiedCard");
+	assert.equal(result[1]?._sName, "Legacy Other");
+});
+
+test("resolveUnifiedOnlineList still returns only unified cards for source-specific views", () => {
+	const unifiedCard = createUnifiedCardFromVariant(
+		makeVariant({
+			sourceId: "hui",
+			sourceModId: "hui-22",
+			title: "Unified Camellya",
+		}),
+		"Other"
+	);
+	const legacyCards = [
+		{
+			_idRow: 999,
+			_sModelName: "Mod",
+			_sName: "Legacy Camellya",
+			_sInitialVisibility: "show",
+			_nLikeCount: 1,
+		},
+	];
+
+	const result = resolveUnifiedOnlineList([unifiedCard], legacyCards);
+
+	assert.equal(result.length, 1);
+	assert.equal(result[0]?._sModelName, "UnifiedCard");
+});
+
 test("resolveUnifiedSourceVariant prefers requested source and falls back to primary source", () => {
 	const card = mergeUnifiedCardGroup(
 		[

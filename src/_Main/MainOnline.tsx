@@ -54,6 +54,7 @@ function MainOnline() {
 	const nsfw = settings.global.nsfw;
 	const textData = useAtomValue(TEXT_DATA);
 	const [onlineData, setOnlineData] = useAtom(ONLINE_DATA);
+	const onlineDataRef = useRef(onlineData);
 	const onlineSource = useAtomValue(ONLINE_SOURCE);
 	const onlineType = useAtomValue(ONLINE_TYPE);
 	const onlinePath = useAtomValue(ONLINE_PATH);
@@ -67,6 +68,8 @@ function MainOnline() {
 		() => (shouldUseUnifiedWwOnline(game) ? buildUnifiedOnlineCacheKey(onlinePath, onlineSource) : onlinePath),
 		[game, onlinePath, onlineSource]
 	);
+	const shouldUseUnifiedList = shouldUseUnifiedWwOnline(game);
+	const appendLegacyOnlineCards = shouldUseUnifiedList && onlineSource === "all";
 	const installedItems = useAtomValue(INSTALLED_ITEMS);
 	const cardCopy = useMemo(
 		() => ({
@@ -146,12 +149,14 @@ function MainOnline() {
 			const nextLegacyCards = [...legacyCards, ...data._aRecords];
 			return {
 				...prev,
-				[cacheKey]: shouldUseUnifiedWwOnline(game)
-					? resolveUnifiedOnlineList(unifiedCardsRef.current[cacheKey], nextLegacyCards)
+				[cacheKey]: shouldUseUnifiedList
+					? resolveUnifiedOnlineList(unifiedCardsRef.current[cacheKey], nextLegacyCards, {
+							appendLegacy: appendLegacyOnlineCards,
+						})
 					: nextLegacyCards,
 			};
 		});
-	}, [game, setOnlineData]);
+	}, [appendLegacyOnlineCards, game, setOnlineData, shouldUseUnifiedList]);
 
 	const checkLoadMore = useCallback(async () => {
 		if (!containerRef.current || isLoading) return;
@@ -244,8 +249,10 @@ function MainOnline() {
 			setOnlineData((prev) => {
 				return {
 					...prev,
-					[cacheKey]: shouldUseUnifiedWwOnline(game)
-						? resolveUnifiedOnlineList(unifiedCards, data._aRecords)
+					[cacheKey]: shouldUseUnifiedList
+						? resolveUnifiedOnlineList(unifiedCards, data._aRecords, {
+								appendLegacy: appendLegacyOnlineCards,
+							})
 						: data._aRecords,
 				};
 			});
@@ -255,7 +262,11 @@ function MainOnline() {
 		} finally {
 			setIsLoading(false);
 		}
-	}, [checkLoadMore, fetchUnifiedCards, game, setOnlineData]);
+	}, [appendLegacyOnlineCards, checkLoadMore, fetchUnifiedCards, game, setOnlineData, shouldUseUnifiedList]);
+	const initialLoadRef = useRef(initialLoad);
+	useEffect(() => {
+		initialLoadRef.current = initialLoad;
+	}, [initialLoad]);
 	useEffect(() => {
 		const controller = new AbortController();
 		let initialLoadTimer: number | null = null;
@@ -271,7 +282,7 @@ function MainOnline() {
 		//info("fetching2");
 		//info("fetching3");
 		//info("fetching", onlinePath, types);
-		if (!onlineData[onlineCacheKey]) {
+		if (!onlineDataRef.current[onlineCacheKey]) {
 			info("fetching", onlinePath);
 			pageCount[onlineCacheKey] = 1;
 			if (onlinePath.startsWith("home")) {
@@ -286,11 +297,11 @@ function MainOnline() {
 					})
 				);
 				initialLoadTimer = window.setTimeout(() => {
-					initialLoad(apiClient.home({ type: onlineType }), onlineCacheKey, controller);
+					initialLoadRef.current(apiClient.home({ type: onlineType }), onlineCacheKey, controller);
 				}, 0);
 			} else if (types.some((t) => onlinePath.startsWith(t._sName) || onlinePath.startsWith("Skins"))) {
 				initialLoadTimer = window.setTimeout(() => {
-					initialLoad(
+					initialLoadRef.current(
 						apiClient.category({ cat: onlinePath.split("&_sort=")[0], sort: onlineSort, page: 1 }),
 						onlineCacheKey,
 						controller
@@ -300,7 +311,7 @@ function MainOnline() {
 				const term = onlinePath.replace("search/", "").split("&_type=")[0];
 				if (term.trim().length > 0)
 					initialLoadTimer = window.setTimeout(() => {
-						initialLoad(apiClient.search({ term, type: onlineType, page: 1 }), onlineCacheKey, controller);
+						initialLoadRef.current(apiClient.search({ term, type: onlineType, page: 1 }), onlineCacheKey, controller);
 					}, 0);
 			}
 		}
@@ -309,7 +320,7 @@ function MainOnline() {
 			if (initialLoadTimer) clearTimeout(initialLoadTimer);
 			controller.abort();
 		};
-	}, [initialLoad, onlineCacheKey, onlineData, onlinePath, onlineSort, onlineType, setOnlineData, types]);
+	}, [onlineCacheKey, onlinePath, onlineSort, onlineType, setOnlineData, types]);
 
 	const [now] = useState(() => Date.now() / 1000);
 	const filteredBannerData = ((onlineData.banner as OnlineMod[] | undefined) || []).filter(
@@ -336,6 +347,9 @@ function MainOnline() {
 		return start === -1 || (index >= start && index <= end) ? 0 : index < start ? 2 : 1;
 	};
 	const hasMorePages = (pageCount[onlineCacheKey] || 0) < max;
+	useEffect(() => {
+		onlineDataRef.current = onlineData;
+	}, [onlineData]);
 	//info(selected);
 	return (
 		<div

@@ -101,6 +101,7 @@ import {
 	discoverAfdianCandidates,
 	detachAfdianSourceFromUnifiedCard,
 	getUnifiedWwCardDetail,
+	refreshUnifiedWwCache,
 	refreshUnifiedWwSources,
 	type AfdianDiscoveryResult,
 	type UnifiedOnlineDetail,
@@ -326,6 +327,7 @@ function RightOnline({ open }: { open: boolean }) {
 	const [selectedUnifiedSourceId, setSelectedUnifiedSourceId] = useState<OnlineSourceId | null>(null);
 	const [unifiedDetail, setUnifiedDetail] = useState<UnifiedOnlineDetail | null>(null);
 	const [unifiedRefreshStatuses, setUnifiedRefreshStatuses] = useState<UnifiedRefreshStatus[]>([]);
+	const [refreshingUnifiedSourceId, setRefreshingUnifiedSourceId] = useState<OnlineSourceId | "all" | null>(null);
 	const [afdianCandidates, setAfdianCandidates] = useState<AfdianDiscoveryResult["candidates"]>([]);
 	const [afdianCandidatesQuery, setAfdianCandidatesQuery] = useState("");
 	const [cmdValue, setCmdValue] = useState("");
@@ -455,6 +457,40 @@ function RightOnline({ open }: { open: boolean }) {
 			});
 		},
 		[selected, setOnlineData, unifiedCacheKey]
+	);
+	const refreshUnifiedCache = useCallback(
+		async (sourceId: OnlineSourceId | "all") => {
+			setRefreshingUnifiedSourceId(sourceId);
+			setUnifiedRefreshStatuses((prev) => {
+				const requestedSources =
+					sourceId === "all" ? (["hui", "keke", "afdian", "gamebanana"] as OnlineSourceId[]) : [sourceId];
+				const retained = prev.filter((status) => !requestedSources.includes(status.sourceId));
+				return [
+					...retained,
+					...requestedSources.map((source) => ({
+						sourceId: source,
+						status: "refreshing" as const,
+						message: "正在刷新缓存...",
+					})),
+				];
+			});
+			try {
+				const statuses = await refreshUnifiedWwCache(sourceId);
+				setUnifiedRefreshStatuses(statuses);
+				setOnlineData((prev) =>
+					Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith("ww-unified:"))) as OnlineData
+				);
+				addToast({ type: "success", message: "在线源缓存刷新完成，重新进入列表会加载新缓存。" });
+			} catch (error) {
+				logError("Error refreshing unified source cache:", error);
+				addToast({ type: "error", message: "在线源缓存刷新失败，详情页会显示最近一次状态。" });
+				const statuses = await refreshUnifiedWwSources().catch(() => []);
+				setUnifiedRefreshStatuses(statuses);
+			} finally {
+				setRefreshingUnifiedSourceId(null);
+			}
+		},
+		[setOnlineData]
 	);
 	const legacyReuseRoute = unifiedDetailViewState.legacyReuseRoute;
 	const shouldReuseLegacyGamebananaDetail = unifiedDetailViewState.shouldReuseLegacyComments;
@@ -2107,7 +2143,24 @@ function RightOnline({ open }: { open: boolean }) {
 										)}
 
 										<div className="rounded-lg border bg-input/20 p-3">
-											<div className="text-sm font-medium">来源刷新状态</div>
+											<div className="flex items-center justify-between gap-2">
+												<div className="text-sm font-medium">来源刷新状态</div>
+												<Button
+													variant="outline"
+													className="h-8 px-2"
+													disabled={refreshingUnifiedSourceId !== null}
+													onClick={() => {
+														void refreshUnifiedCache("all");
+													}}
+												>
+													{refreshingUnifiedSourceId === "all" ? (
+														<LoaderIcon className="h-4 w-4 animate-spin" />
+													) : (
+														<Redo2Icon className="h-4 w-4" />
+													)}
+													<span className="ml-1 text-xs">刷新</span>
+												</Button>
+											</div>
 											<div className="mt-3 flex flex-col gap-2">
 												{unifiedRefreshRows.map((row) => (
 													<div
@@ -2119,7 +2172,23 @@ function RightOnline({ open }: { open: boolean }) {
 																{row.sourceId}
 																{row.isPrimary ? " · 主来源" : ""}
 															</div>
-															<div className="text-xs text-muted-foreground">{row.status}</div>
+															<div className="flex items-center gap-2">
+																<div className="text-xs text-muted-foreground">{row.status}</div>
+																<Button
+																	variant="outline"
+																	className="h-7 px-2"
+																	disabled={refreshingUnifiedSourceId !== null}
+																	onClick={() => {
+																		void refreshUnifiedCache(row.sourceId as OnlineSourceId);
+																	}}
+																>
+																	{refreshingUnifiedSourceId === row.sourceId ? (
+																		<LoaderIcon className="h-3.5 w-3.5 animate-spin" />
+																	) : (
+																		<Redo2Icon className="h-3.5 w-3.5" />
+																	)}
+																</Button>
+															</div>
 														</div>
 														<div className="mt-1 text-xs text-muted-foreground break-words">{row.title}</div>
 														{row.message && (

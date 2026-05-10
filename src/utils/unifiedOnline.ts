@@ -924,9 +924,23 @@ export function toOnlineListCard(card: UnifiedOnlineCard): UnifiedOnlineListCard
 
 export function resolveUnifiedOnlineList(
 	unifiedCards: UnifiedOnlineCard[] | null | undefined,
-	legacyCards: LegacyOnlineListCard[]
+	legacyCards: LegacyOnlineListCard[],
+	options: { appendLegacy?: boolean } = {}
 ): Array<UnifiedOnlineListCard | LegacyOnlineListCard> {
-	return unifiedCards && unifiedCards.length > 0 ? unifiedCards.map(toOnlineListCard) : legacyCards;
+	if (!unifiedCards || unifiedCards.length === 0) return legacyCards;
+	const unifiedList = unifiedCards.map(toOnlineListCard);
+	if (!options.appendLegacy) return unifiedList;
+
+	const unifiedGameBananaIds = new Set(
+		unifiedCards
+			.flatMap((card) => card.sources)
+			.filter((source) => source.sourceId === "gamebanana")
+			.map((source) => String(source.sourceModId))
+	);
+	const remainingLegacy = legacyCards.filter((card) => {
+		return card._sModelName !== "Mod" || !unifiedGameBananaIds.has(String(card._idRow));
+	});
+	return [...unifiedList, ...remainingLegacy];
 }
 
 export function mergeUnifiedCardGroup(cards: UnifiedOnlineCard[], evidence: DuplicateEvidence[]): UnifiedOnlineCard {
