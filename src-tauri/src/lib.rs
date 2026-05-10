@@ -47,6 +47,13 @@ struct DownloadProgress {
     key: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeDirEntry {
+    name: String,
+    is_directory: bool,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DownloadErrorEvent {
@@ -1586,6 +1593,31 @@ fn write_text_file_native(path: String, contents: String) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn read_dir_native(path: String) -> Result<Vec<NativeDirEntry>, String> {
+    let entries = std::fs::read_dir(&path).map_err(|err| err.to_string())?;
+    entries
+        .map(|entry| {
+            let entry = entry.map_err(|err| err.to_string())?;
+            let file_type = entry.file_type().map_err(|err| err.to_string())?;
+            Ok(NativeDirEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                is_directory: file_type.is_dir(),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn mkdir_native(path: String, recursive: bool) -> Result<(), String> {
+    if recursive {
+        std::fs::create_dir_all(&path)
+    } else {
+        std::fs::create_dir(&path)
+    }
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn request_app_restart(app_handle: tauri::AppHandle) {
     app_handle.request_restart();
 }
@@ -1756,6 +1788,8 @@ pub fn run() {
             path_exists_native,
             read_text_file_native,
             write_text_file_native,
+            read_dir_native,
+            mkdir_native,
             guarded_remove_path,
             guarded_rename_path,
             guarded_copy_file_path,

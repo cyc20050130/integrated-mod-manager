@@ -129,7 +129,7 @@ async function safeExists(pathLike: string) {
 		return await exists(pathLike);
 	} catch (error) {
 		info(`[IMM] exists() check failed for ${pathLike}:`, error);
-		return false;
+		return await pathExistsNative(pathLike);
 	}
 }
 
@@ -139,7 +139,13 @@ async function safeWriteTextFile(pathLike: string, contents: string) {
 		return true;
 	} catch (error) {
 		info(`[IMM] writeTextFile() failed for ${pathLike}:`, error);
-		return false;
+		try {
+			await writeTextFileNative(pathLike, contents);
+			return true;
+		} catch (nativeError) {
+			info(`[IMM] native writeTextFile() failed for ${pathLike}:`, nativeError);
+			return false;
+		}
 	}
 }
 

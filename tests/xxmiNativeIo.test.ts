@@ -19,6 +19,23 @@ test("tauri backend exposes native file io commands used by XXMI integration", (
 
 	assert.match(rustSource, /fn path_exists_native\(/);
 	assert.match(rustSource, /fn read_text_file_native\(/);
+	assert.match(rustSource, /fn read_dir_native\(path: String\)/);
+	assert.match(rustSource, /fn mkdir_native\(path: String, recursive: bool\)/);
 	assert.match(rustSource, /path_exists_native,/);
 	assert.match(rustSource, /read_text_file_native,/);
+	assert.match(rustSource, /read_dir_native,/);
+	assert.match(rustSource, /mkdir_native,/);
+});
+
+test("directory verification falls back to native io when plugin fs rejects external XXMI paths", () => {
+	const filesysSource = readFileText("src/utils/filesys.ts");
+
+	assert.match(filesysSource, /invoke<DirEntry\[]>\("read_dir_native"/);
+	assert.match(filesysSource, /invoke<void>\("mkdir_native"/);
+	assert.match(filesysSource, /function shouldUseNativePath\(path: string\)/);
+	assert.match(filesysSource, /if \(shouldUseNativePath\(path\)\) return readDirNative\(path\)/);
+	assert.match(filesysSource, /plugin fs readDir\(\) failed, using native fallback/);
+	assert.match(filesysSource, /plugin fs mkdir\(\) failed, using native fallback/);
+	assert.match(filesysSource, /readDirNative\(src\)/);
+	assert.match(filesysSource, /mkdirNative\(join\(src, managedSRC\), true\)/);
 });

@@ -1,11 +1,11 @@
 {
-	"version": "3.2.6",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Switched WWMI source and target directory validation to native path checks so startup no longer fails on external XXMI mod roots.\",\"Continued removing frontend filesystem scope blockers from the XXMI startup path on standard installs.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.6 fixes XXMI mod-root validation during startup.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.6\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-07T00:25:00Z",
+	"version": "3.2.7",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Moved directory verification, migration, managed-folder creation, and external XXMI directory reads to native filesystem fallbacks.\",\"Fixed backup/config startup safe IO fallbacks so forbidden frontend fs scope errors no longer block recovery.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.7 fixes external XXMI directory verification and startup backup IO.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.7\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-10T01:55:00Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHRDV0ZTbnJXajN5cXpqZHdDTXNZODlQSFVQTExrT1BLL0dYazBQdDJ5R1BLVXp4NmU4N083SngvdmduVFd5RnZQbTBDSjNKRUl3RTdoUUhXT0VCZkFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4MTEwNTQ5CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuNl94NjQtc2V0dXAuZXhlCnZCd3I4UnRvSEJRRmptMkFjMWJ2RXJTNk1Ec1p3YmFySER1a0ozZElScjJ6ME5NVkZQbEphZmZoUkxhN0YzbmZqR1RkQTA5NWxMN0J0WHk0QlFJVUJ3PT0K",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.6/Integrated.Mod.Manager.IMM._3.2.6_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGgwREJrdVo3NmxXOHJEeUFQenVnYmM5WFdDcG4rUHk5a3Fra1VOTnZxSlNVNkZoaE9zOUl4M3JLOXlJZEZtalJlaVMvbngyYjg4Q09JM1Nmb2VBdlFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDA3MTkyCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuN194NjQtc2V0dXAuZXhlCi80NDJZTWx1ZWF1YzdjWVZMcU5BVmdUVkRaNnZnbFZoeWwxNHZnMTcvSFlYcmZqRzFxNHpGTmVYTlh5SUVVZjNZRVArTnowZ2hWRGpVTGordFlpUkFRPT0K",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.7/Integrated.Mod.Manager.IMM._3.2.7_x64-setup.exe"
 		}
 	}
 }

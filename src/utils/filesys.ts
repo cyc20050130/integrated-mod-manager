@@ -1,5 +1,13 @@
 import defConfig from "../default.json";
-import { exists, mkdir, readDir, readTextFile, rename, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import {
+	exists as fsExists,
+	mkdir as fsMkdir,
+	readDir as fsReadDir,
+	readTextFile as fsReadTextFile,
+	rename,
+	writeFile,
+	writeTextFile as fsWriteTextFile,
+} from "@tauri-apps/plugin-fs";
 import {
 	exts,
 	IGNORE,
@@ -88,6 +96,55 @@ let progressMessage: HTMLElement | null = null;
 let progressPerct: HTMLElement | null = null;
 // Initialize Intl.Collator for faster string comparison
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function shouldUseNativePath(path: string) {
+	return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\");
+}
+async function exists(path: string) {
+	if (shouldUseNativePath(path)) return pathExistsNative(path);
+	try {
+		return await fsExists(path);
+	} catch (err) {
+		info("[IMM] plugin fs exists() failed, using native fallback:", path, err);
+		return pathExistsNative(path);
+	}
+}
+async function mkdir(path: string, options: { recursive?: boolean } = {}) {
+	if (shouldUseNativePath(path)) return mkdirNative(path, Boolean(options.recursive));
+	try {
+		return await fsMkdir(path, options);
+	} catch (err) {
+		info("[IMM] plugin fs mkdir() failed, using native fallback:", path, err);
+		return mkdirNative(path, Boolean(options.recursive));
+	}
+}
+async function readDir(path: string) {
+	if (shouldUseNativePath(path)) return readDirNative(path);
+	try {
+		return await fsReadDir(path);
+	} catch (err) {
+		info("[IMM] plugin fs readDir() failed, using native fallback:", path, err);
+		return readDirNative(path);
+	}
+}
+async function readTextFile(path: string) {
+	if (shouldUseNativePath(path)) return readTextFileNative(path);
+	try {
+		return await fsReadTextFile(path);
+	} catch (err) {
+		info("[IMM] plugin fs readTextFile() failed, using native fallback:", path, err);
+		return readTextFileNative(path);
+	}
+}
+async function writeTextFile(path: string, contents: string) {
+	if (shouldUseNativePath(path)) return writeTextFileNative(path, contents);
+	try {
+		return await fsWriteTextFile(path, contents);
+	} catch (err) {
+		info("[IMM] plugin fs writeTextFile() failed, using native fallback:", path, err);
+		return writeTextFileNative(path, contents);
+	}
+}
 
 const sp = [UNCATEGORIZED, IGNORE, OLD_RESTORE];
 let recentlyDownloaded: string[] = [];
@@ -290,6 +347,26 @@ export async function guardedImportFile(
 		allowedRoots,
 	});
 }
+async function pathExistsNative(path: string) {
+	try {
+		return await invoke<boolean>("path_exists_native", { path });
+	} catch (err) {
+		info("[IMM] native exists() check failed:", path, err);
+		return false;
+	}
+}
+async function readDirNative(path: string) {
+	return invoke<DirEntry[]>("read_dir_native", { path });
+}
+async function readTextFileNative(path: string) {
+	return invoke<string>("read_text_file_native", { path });
+}
+async function writeTextFileNative(path: string, contents: string) {
+	return invoke<void>("write_text_file_native", { path, contents });
+}
+async function mkdirNative(path: string, recursive = true) {
+	return invoke<void>("mkdir_native", { path, recursive });
+}
 function replaceDisabled(name: string) {
 	return name.replace("DISABLED_", "").replace("DISABLED", "").trim();
 }
@@ -333,8 +410,8 @@ function sortMods(a: Mod | DirEntry, b: Mod | DirEntry) {
 }
 async function copyDir(src: string, dest: string, withProgress = false) {
 	try {
-		await mkdir(dest, { recursive: true });
-		const entries = (await readDir(src)).filter(
+		await mkdirNative(dest, true);
+		const entries = (await readDirNative(src)).filter(
 			(item) =>
 				!withProgress ||
 				(item.name !== RESTORE &&
@@ -377,7 +454,7 @@ async function copyDir(src: string, dest: string, withProgress = false) {
 }
 
 async function countFilesInDir(path: string) {
-	const entries = (await readDir(join(path, ""))).filter(
+	const entries = (await readDirNative(join(path, ""))).filter(
 		(item) => item.name != RESTORE && item.name != IGNORE && item.name != PREFS
 	);
 	for (const entry of entries) {
@@ -399,8 +476,8 @@ export async function getRestorePoints(): Promise<string[]> {
 	info("[IMM] Getting restore points...");
 	try {
 		const restoreDir = join(modRoot, RESTORE);
-		if (!(await exists(restoreDir))) return [];
-		const entries = await readDir(restoreDir);
+		if (!(await pathExistsNative(restoreDir))) return [];
+		const entries = await readDirNative(restoreDir);
 		return entries
 			.filter((item) => item.isDirectory)
 			.map((item) => item.name)
@@ -425,7 +502,7 @@ export async function resetWithBackup() {
 export async function previewRestorePoint(point: string) {
 	info("[IMM] Previewing restore point:", point);
 	const path = join(modRoot, RESTORE, point);
-	if (!(await exists(path))) return [];
+	if (!(await pathExistsNative(path))) return [];
 	const entries = await readDirRecr(path, "", 2);
 	const categories = store.get(CATEGORIES) || [];
 	//info(entries);
@@ -559,7 +636,7 @@ export async function createRestorePoint(prefix = "") {
 	rootReplace = root;
 	await countFilesInDir(root);
 	try {
-		await mkdir(join(modRoot, RESTORE, restorePointName));
+		await mkdirNative(join(modRoot, RESTORE, restorePointName), true);
 	} catch {
 		return false;
 	}
@@ -587,7 +664,7 @@ export async function createRestorePoint(prefix = "") {
 export async function checkOldVerDirs(src: string) {
 	try {
 		let checkFolders = 0;
-		const entries = await readDir(src);
+		const entries = await readDirNative(src);
 		for (const i of entries) {
 			if (i.isDirectory && sp.includes(i.name)) {
 				checkFolders++;
@@ -604,13 +681,13 @@ export async function categorizeDir(src: string, modifyIni = false) {
 	const d3dx_path = join(...tgt.split("\\").slice(0, -1), "d3dx_user.ini");
 	let d3dx = "";
 	try {
-		info("[IMM] Reading d3dx_user.ini...", await exists(d3dx_path));
+		info("[IMM] Reading d3dx_user.ini...", await pathExistsNative(d3dx_path));
 		const targetParent = join(...tgt.split("\\").slice(0, -1));
 		const backupPath = join(targetParent, `d3dx_user_pre_imm.ini.bak`);
-		if (!(await exists(backupPath))) {
+		if (!(await pathExistsNative(backupPath))) {
 			await guardedCopyFile(d3dx_path, backupPath, { allowedRoots: [targetParent], includeDefaultRoots: false });
 		}
-		if (modifyIni) d3dx = await readTextFile(d3dx_path);
+		if (modifyIni) d3dx = await readTextFileNative(d3dx_path);
 	} catch {
 		info("[IMM] d3dx_user.ini not found or could not be read.");
 	}
@@ -619,7 +696,7 @@ export async function categorizeDir(src: string, modifyIni = false) {
 		const categories = [...store.get(CATEGORIES), { _sName: UNCATEGORIZED }].map((cat) => cat._sName);
 
 		const reqCategories: Record<string, Array<{ name: string; isDirectory: boolean }>> = {};
-		const entries = await readDir(src);
+		const entries = await readDirNative(src);
 		const ignore = [IGNORE, managedSRC, managedTGT, RESTORE, PREFS];
 		const fullDirectoryRenames: string[] = []; // First pass: categorize items
 		for (const item of entries) {
@@ -660,7 +737,7 @@ export async function categorizeDir(src: string, modifyIni = false) {
 		// Second pass: batch create directories and move items
 		const mkdirPromises: Promise<void>[] = [];
 		for (const key of Object.keys(reqCategories)) {
-			mkdirPromises.push(mkdir(join(src, key), { recursive: true }));
+			mkdirPromises.push(mkdirNative(join(src, key), true));
 		}
 		await Promise.all(mkdirPromises);
 
@@ -705,7 +782,7 @@ export async function categorizeDir(src: string, modifyIni = false) {
 					d3dxLines[i] = d3dxLines[i].startsWith(op) ? d3dxLines[i].replace(op, np) : d3dxLines[i];
 				}
 			}
-			await writeTextFile(d3dx_path, d3dxLines.join("\n"));
+			await writeTextFileNative(d3dx_path, d3dxLines.join("\n"));
 		}
 	} catch (categorizeError) {
 		error("[IMM] Error categorizing directory:", categorizeError);
@@ -721,14 +798,14 @@ export async function verifyDirStruct() {
 		skip: false,
 	};
 	try {
-		if (!(!!src && (await exists(src))) || !(!!tgt && (await exists(tgt))))
+		if (!(!!src && (await pathExistsNative(src))) || !(!!tgt && (await pathExistsNative(tgt))))
 			throw new Error("Source or Target not found: " + src + " | " + tgt);
 
-		if (!(await exists(tgt))) throw new Error("Target Directory not found: " + tgt);
+		if (!(await pathExistsNative(tgt))) throw new Error("Target Directory not found: " + tgt);
 		try {
 			const oldTgtPath = join(tgt, OLD_managedTGT);
 			const newTgtPath = join(tgt, managedTGT);
-			if (await exists(oldTgtPath)) {
+			if (await pathExistsNative(oldTgtPath)) {
 				await guardedRename(oldTgtPath, newTgtPath);
 				//add code to read the file d3dx_user.ini in the parent folder of oldTgtPath, and replace all instances of OLD_managedTGT with managedTGT
 				const parentDir = tgt.split("\\").slice(0, -1).join("\\");
@@ -736,10 +813,10 @@ export async function verifyDirStruct() {
 				info("[IMM] Updating d3dx_user.ini at:", iniPath);
 
 				try {
-					if (await exists(iniPath)) {
-						const iniContent = await readTextFile(iniPath);
+					if (await pathExistsNative(iniPath)) {
+						const iniContent = await readTextFileNative(iniPath);
 						const updatedContent = iniContent.split(OLD_managedTGT.toLowerCase()).join(managedTGT.toLowerCase());
-						await writeTextFile(iniPath, updatedContent);
+						await writeTextFileNative(iniPath, updatedContent);
 					}
 				} catch (e) {
 					error("Error updating d3dx_user.ini:", e);
@@ -747,14 +824,14 @@ export async function verifyDirStruct() {
 			}
 			const oldSrcPath = join(src, OLD_managedSRC);
 			const newSrcPath = join(src, managedSRC);
-			if (await exists(oldSrcPath)) {
+			if (await pathExistsNative(oldSrcPath)) {
 				await guardedRename(oldSrcPath, newSrcPath);
 				const targetEntries = (await readDirRecr(newTgtPath, "", 2)).flatMap((x) => x.children || []);
 				info("[IMM] Fixing symlinks in target directory. Broken: ", targetEntries);
 				for (const entry of targetEntries) {
 					const linkPath = join(newTgtPath, entry.path);
 					await guardedRemove(linkPath);
-					await mkdir(join(newTgtPath, entry.parent), { recursive: true });
+					await mkdirNative(join(newTgtPath, entry.parent), true);
 					try {
 						await invoke("create_symlink", {
 							linkPath: linkPath,
@@ -775,7 +852,7 @@ export async function verifyDirStruct() {
 			}
 		}
 		const modDir = join(src, managedSRC);
-		const [modDirExists, isOldVersion] = await Promise.all([exists(modDir), checkOldVerDirs(src)]);
+		const [modDirExists, isOldVersion] = await Promise.all([pathExistsNative(modDir), checkOldVerDirs(src)]);
 
 		if (modDirExists) {
 			await categorizeDir(modDir);
@@ -792,10 +869,10 @@ export async function verifyDirStruct() {
 		// ];
 		const reqCategories: Record<string, DirEntry> = {};
 
-		const srcEntries = await readDir(src);
+		const srcEntries = await readDirNative(src);
 		if (srcEntries.length === 0) {
 			status.skip = true;
-			await mkdir(modDir, { recursive: true });
+			await mkdirNative(modDir, true);
 			throw new Error("Source directory is empty");
 		}
 		status.before = srcEntries
@@ -834,7 +911,7 @@ export async function verifyDirStruct() {
 
 			if ((item.isDirectory && item.name === category._sName) || item.name === OLD_RESTORE) {
 				readPromises.push(
-					readDir(join(src, item.name))
+					readDirNative(join(src, item.name))
 						.then((entries) => ({ item, entries, category }))
 						.catch(() => {
 							//console.error(`Error reading directory ${item.name}:`, error);
@@ -877,7 +954,7 @@ export async function verifyDirStruct() {
 		// Process modDir if it exists
 		if (modDirExists) {
 			try {
-				const modDirEntries = await readDir(modDir);
+				const modDirEntries = await readDirNative(modDir);
 				const modDirReadPromises: Promise<{ category: Pick<Category, "_sName" | "_sIconUrl">; entries: DirEntry[] }>[] = [];
 
 				for (const item of modDirEntries) {
@@ -897,7 +974,7 @@ export async function verifyDirStruct() {
 
 					if (category) {
 						modDirReadPromises.push(
-							readDir(join(modDir, item.name))
+							readDirNative(join(modDir, item.name))
 								.then((entries) => ({ category, entries }))
 								.catch(() => {
 									//console.error(`Error reading modDir category ${item.name}:`, error);
@@ -943,9 +1020,9 @@ export async function createManagedDir() {
 	info("[IMM] Creating managed directories...");
 	try {
 		if (!src) return false;
-		await mkdir(join(src, managedSRC), { recursive: true });
+		await mkdirNative(join(src, managedSRC), true);
 		if (!tgt) return false;
-		await mkdir(join(tgt, managedTGT), { recursive: true });
+		await mkdirNative(join(tgt, managedTGT), true);
 		return true;
 	} catch (err) {
 		error("[IMM] Error creating managed directories:", err);
@@ -962,12 +1039,12 @@ export async function applyChanges(isMigration = false) {
 		const target = join(tgt, managedTGT);
 		if (!target) return true;
 		info("[IMM] Target exists, creating managed directories...");
-		await mkdir(join(src, managedSRC), { recursive: true });
-		await mkdir(join(tgt, managedTGT), { recursive: true });
+		await mkdirNative(join(src, managedSRC), true);
+		await mkdirNative(join(tgt, managedTGT), true);
 		info("[IMM] Managed directories created. Processing source directory...");
 		await categorizeDir(src, true);
 
-		const entries = (await readDir(src)).map((item) => item.name);
+		const entries = (await readDirNative(src)).map((item) => item.name);
 
 		info("[IMM] Processing entries:", entries);
 		// Batch process entries
@@ -995,9 +1072,9 @@ export async function applyChanges(isMigration = false) {
 				continue;
 			}
 
-			await mkdir(join(target, key), { recursive: true });
+			await mkdirNative(join(target, key), true);
 
-			const dirEntries = (await readDir(join(src, managedSRC, key))) || map[key].children || [];
+			const dirEntries = (await readDirNative(join(src, managedSRC, key))) || map[key].children || [];
 			// Batch process directory entries
 			const itemOperations: Promise<void>[] = [];
 			for (const item of dirEntries) {
@@ -1032,7 +1109,7 @@ async function readDirRecr(root: string, path: string, maxDepth = 2, depth = 0, 
 	if (depth > maxDepth) return [];
 	let entries: DirEntry[] = [];
 	try {
-		entries = await readDir(join(root, path));
+		entries = await readDirNative(join(root, path));
 	} catch {
 		return [];
 	}

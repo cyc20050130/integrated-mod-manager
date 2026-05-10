@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { GAME_ID_MAP } from "./consts";
-import { exists, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { warn } from "@/lib/logger";
 
 export function join(...parts: string[]) {
 	let result = parts.join("\\").replaceAll("/", "\\").replaceAll("\\\\", "\\");
@@ -9,11 +9,15 @@ export function join(...parts: string[]) {
 	return result;
 }
 export function updateIni(tgt: string, foreground = 0) {
-	tgt=tgt.split("\\").slice(0,-1).join("\\");
+	tgt = tgt.split("\\").slice(0, -1).join("\\");
 	const target = join(tgt, "d3dx.ini");
-	exists(target).then((res) => {
-		if (!res) return;
-		readTextFile(target).then((data) => {
+	invoke<boolean>("path_exists_native", { path: target })
+		.then((res) => {
+			if (!res) return;
+			return invoke<string>("read_text_file_native", { path: target });
+		})
+		.then((data) => {
+			if (!data) return;
 			let modified = false;
 			const lines = data.split("\n").map((line) => {
 				const trimmed = line.trim();
@@ -24,10 +28,13 @@ export function updateIni(tgt: string, foreground = 0) {
 				return line;
 			});
 			if (modified) {
-				writeTextFile(target, lines.join("\n"));
+				return invoke<void>("write_text_file_native", { path: target, contents: lines.join("\n") });
 			}
+			return undefined;
+		})
+		.catch((error) => {
+			warn("[IMM] Failed to update d3dx.ini hotreload setting:", error);
 		});
-	});
 }
 export async function setHotreload(enabled: 0 | 1 | 2, game: string, target: string): Promise<void> {
 	if (enabled == 1) {
