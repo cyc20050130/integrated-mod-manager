@@ -1,11 +1,11 @@
 {
-  "version": "3.2.13",
-  "notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Mapped low-level Failed to fetch errors to a clear Chinese GameBanana connectivity message.\",\"Kept GameBanana online requests on Tauri native HTTP instead of WebView fetch.\",\"Kept stale two-card WW cache ignored and removed from the local D-drive install.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.13 replaces raw Failed to fetch text with a clear GameBanana connectivity message.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.13\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-  "pub_date": "2026-05-10T12:41:31Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGc4bFVBT2hBWEhOdTFrRitlYTZ6a1JMZDRsZ3pwSnd3Rm1ncTMwcG5kRGxuMXdJN1BBT1pXTklFeGxsNmhWblpSdEpDcFBDM1lnSUpPSmV2RTg4dUFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDE2ODUyCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTNfeDY0LXNldHVwLmV4ZQpyMHNORFFCYnp4L2xIUmxVWUhXQjZDRXZuZ3V6SXRJck15Y3haN3NYYk1LTHFXc2RZNlZCNTl5KzVtSHBwOHBhMzZKeHJmWkJGSlI5WGo5V2NQRnhEdz09Cg==",
-      "url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.13/Integrated.Mod.Manager.IMM._3.2.13_x64-setup.exe"
-    }
-  }
+	"version": "3.2.14",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Allowed Tauri native HTTP access to GameBanana API endpoints so online requests are no longer blocked by capability scope.\",\"Kept GameBanana online requests on native HTTP with clearer rate-limit and connectivity messages.\",\"Kept stale two-card WW cache ignored and removed from the local D-drive install.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.14 fixes the GameBanana native HTTP capability scope.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.14\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-10T13:35:57Z",
+	"platforms": {
+		"windows-x86_64": {
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGh3aVBZaVVWaitaamswcmlGWXpMb1ljeCtkV0x5dHJ2R0xqc0dveUZ0REp5MmxZY29VTVZ1WmowR1lUS0Jsd0g5Z3B2OGZIT2tPcnk1RDJKT3haQlEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDIwMTIwCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTRfeDY0LXNldHVwLmV4ZQpkT25jNytvbjFnV1h2UGpNUzQ2WlFTalQ5dmpyR3lVaXRQQVMvQ05VdGx5NThDWXpnMnlyTnVnejUwRm9EVHVsZExobExBck5lNmFMSFJ2d2Zlb3hBQT09Cg==",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.14/Integrated.Mod.Manager.IMM._3.2.14_x64-setup.exe"
+		}
+	}
 }
