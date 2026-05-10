@@ -51,6 +51,9 @@ async function fetchGameBananaJson<T>(url: string, signal?: AbortSignal): Promis
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err || "Failed to fetch");
+		if (/failed to fetch/i.test(message)) {
+			throw new Error("无法连接 GameBanana。可能是网络、代理或 Cloudflare 拦截，请稍后再试。");
+		}
 		throw new Error(`无法连接 GameBanana：${message}`);
 	}
 
