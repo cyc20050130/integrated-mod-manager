@@ -27,6 +27,14 @@ import { buildUnifiedOnlineCacheKey, listUnifiedWwCards, shouldUseUnifiedWwOnlin
 import { resolveUnifiedOnlineList, type UnifiedOnlineCard } from "@/utils/unifiedOnline";
 
 const pageCount: Record<string, number> = {};
+type OnlineListResponse = {
+	_aMetadata?: {
+		_nRecordCount?: number;
+		_nPerPage?: number;
+	};
+	_aRecords?: OnlineMod[];
+};
+
 export function resetPageCounts() {
 	Object.keys(pageCount).forEach((key) => {
 		delete pageCount[key];
@@ -243,18 +251,27 @@ function MainOnline() {
 		setIsLoading(true);
 		try {
 			const [data, unifiedCards] = await Promise.all([
-				fetch(url, { signal: controller.signal }).then((res) => res.json()),
+				fetch(url, { signal: controller.signal })
+					.then((res) => {
+						if (!res.ok) throw new Error(`Online list request failed: ${res.status} ${res.statusText}`);
+						return res.json() as Promise<OnlineListResponse>;
+					})
+					.catch((err) => {
+						info("legacy online list unavailable", err);
+						return null;
+					}),
 				fetchUnifiedCards(cacheKey),
 			]);
-			max = data._aMetadata._nRecordCount / (data?._aMetadata?._nPerPage || 15);
+			const legacyRecords = data?._aRecords || [];
+			max = data?._aMetadata?._nRecordCount ? data._aMetadata._nRecordCount / (data?._aMetadata?._nPerPage || 15) : 0;
 			setOnlineData((prev) => {
 				return {
 					...prev,
 					[cacheKey]: shouldUseUnifiedList
-						? resolveUnifiedOnlineList(unifiedCards, data._aRecords, {
+						? resolveUnifiedOnlineList(unifiedCards, legacyRecords, {
 								appendLegacy: appendLegacyOnlineCards,
 							})
-						: data._aRecords,
+						: legacyRecords,
 				};
 			});
 			setTimeout(() => {
@@ -289,8 +306,12 @@ function MainOnline() {
 			loadingCacheKeysRef.current.add(onlineCacheKey);
 			pageCount[onlineCacheKey] = 1;
 			if (onlinePath.startsWith("home")) {
-				fetch(apiClient.banner(), { signal: controller.signal }).then((res) =>
-					res.json().then((data) => {
+				fetch(apiClient.banner(), { signal: controller.signal })
+					.then((res) => {
+						if (!res.ok) throw new Error(`Online banner request failed: ${res.status} ${res.statusText}`);
+						return res.json();
+					})
+					.then((data) => {
 						setOnlineData((prev) => {
 							return {
 								...prev,
@@ -298,7 +319,7 @@ function MainOnline() {
 							};
 						});
 					})
-				);
+					.catch((err) => info("legacy online banner unavailable", err));
 				initialLoadTimer = window.setTimeout(() => {
 					initialLoadRef.current(apiClient.home({ type: onlineType }), onlineCacheKey, controller);
 				}, 0);

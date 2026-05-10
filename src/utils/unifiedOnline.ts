@@ -922,11 +922,11 @@ export function toOnlineListCard(card: UnifiedOnlineCard): UnifiedOnlineListCard
 	};
 }
 
-export function resolveUnifiedOnlineList(
+export function resolveUnifiedOnlineList<TLegacyCard extends LegacyOnlineListCard>(
 	unifiedCards: UnifiedOnlineCard[] | null | undefined,
-	legacyCards: LegacyOnlineListCard[],
+	legacyCards: TLegacyCard[],
 	options: { appendLegacy?: boolean } = {}
-): Array<UnifiedOnlineListCard | LegacyOnlineListCard> {
+): Array<UnifiedOnlineListCard | TLegacyCard> {
 	if (!unifiedCards || unifiedCards.length === 0) return legacyCards;
 	const unifiedList = unifiedCards.map(toOnlineListCard);
 	if (!options.appendLegacy) return unifiedList;

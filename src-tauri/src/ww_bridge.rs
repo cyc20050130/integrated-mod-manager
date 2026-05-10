@@ -212,6 +212,7 @@ struct UnifiedCacheSnapshot {
 enum UnifiedCacheSourceKind {
     Missing,
     PersistedCache,
+    BundledFixture,
     DevFixture,
 }
 
@@ -555,21 +556,20 @@ fn apply_cache_source_context(
     statuses: Vec<UnifiedRefreshStatus>,
     source_kind: &UnifiedCacheSourceKind,
 ) -> Vec<UnifiedRefreshStatus> {
-    if *source_kind != UnifiedCacheSourceKind::DevFixture {
-        return statuses;
+    match source_kind {
+        UnifiedCacheSourceKind::BundledFixture | UnifiedCacheSourceKind::DevFixture => statuses
+            .into_iter()
+            .map(|status| UnifiedRefreshStatus {
+                message: Some(match status.message {
+                    Some(message) if message.starts_with("[fixture]") => message,
+                    Some(message) => format!("[fixture] {}", message),
+                    None => "[fixture] Unified cache fixture fallback active.".to_string(),
+                }),
+                ..status
+            })
+            .collect(),
+        _ => statuses,
     }
-
-    statuses
-        .into_iter()
-        .map(|status| UnifiedRefreshStatus {
-            message: Some(match status.message {
-                Some(message) if message.starts_with("[fixture]") => message,
-                Some(message) => format!("[fixture] {}", message),
-                None => "[fixture] Dev fixture fallback active.".to_string(),
-            }),
-            ..status
-        })
-        .collect()
 }
 
 fn dedupe_paths(candidates: Vec<UnifiedCacheCandidate>) -> Vec<UnifiedCacheCandidate> {
@@ -608,14 +608,14 @@ fn resolve_cache_candidates_from_paths(
         });
     }
 
-    if include_dev_fixtures {
-        if let Some(resource_fixture_path) = resource_fixture_path {
-            candidates.push(UnifiedCacheCandidate {
-                path: resource_fixture_path,
-                source_kind: UnifiedCacheSourceKind::DevFixture,
-            });
-        }
+    if let Some(resource_fixture_path) = resource_fixture_path {
+        candidates.push(UnifiedCacheCandidate {
+            path: resource_fixture_path,
+            source_kind: UnifiedCacheSourceKind::BundledFixture,
+        });
+    }
 
+    if include_dev_fixtures {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         candidates.push(UnifiedCacheCandidate {
             path: manifest_dir.join("dev-data").join("ww-unified-cache.json"),
@@ -2824,7 +2824,7 @@ mod tests {
     }
 
     #[test]
-    fn production_cache_candidates_exclude_dev_fixtures() {
+    fn production_cache_candidates_include_bundled_fixture_but_exclude_dev_paths() {
         let candidates = resolve_cache_candidates_from_paths(
             Some(PathBuf::from("C:/Users/test/AppData/Local/jp.bhatt.wwmm")),
             Some(PathBuf::from(
@@ -2837,8 +2837,14 @@ mod tests {
         assert!(
             candidates
                 .iter()
+                .any(|candidate| candidate.source_kind == UnifiedCacheSourceKind::BundledFixture),
+            "production cache candidates should include the bundled fixture fallback"
+        );
+        assert!(
+            candidates
+                .iter()
                 .all(|candidate| candidate.source_kind != UnifiedCacheSourceKind::DevFixture),
-            "production cache candidates must not include dev fixture paths"
+            "production cache candidates must not include manifest/current-dir dev fixture paths"
         );
     }
 

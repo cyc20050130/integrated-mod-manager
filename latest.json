@@ -1,11 +1,11 @@
 {
-	"version": "3.2.8",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Fixed WW online mod list refresh getting stuck or repeatedly reloading during source cache updates.\",\"Synchronized stale game config versions on startup so runtime config no longer stays behind the app version.\",\"Released D-drive aligned 3.2.8 build assets for updater checks.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.8 fixes WW online refresh loops and stale config version sync.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.8\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-10T11:38:19Z",
+	"version": "3.2.9",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Fixed WW online page blanking when GameBanana returns rate-limit or non-JSON errors.\",\"Bundled the WW unified cache fallback into release builds so non-GameBanana sources can still render when legacy API is unavailable.\",\"Kept unified and legacy online list item types compatible for stable cache updates.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.9 fixes blank WW online pages when GameBanana is temporarily unavailable.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.9\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-10T11:49:58Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGlTNXdWZXJrcG5uVngrNDNxT3QxQXFGNGpWa05ySnVTUi9oNmh3NUQxQnN0cVAzS2VjWlNaSjZzRldUSGxxUC9mUmRyemxwUFJmeC9lcUtMMDczbEFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDEyOTI2CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuOF94NjQtc2V0dXAuZXhlCjRzRmErUitCZGxTRmlwbk5HaXVSamdDci9NNW1hdWdsZFMvZ0d2K25xbFlkTXdOMjREdk1GNDVNZFNheStUT2lxL0wvZmpuSS84SlQwYmdFMXUzaERnPT0K",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.8/Integrated.Mod.Manager.IMM._3.2.8_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHV6dFhOc01idjdMellrODlPdlRVY2xGZ3k5K245VFZrcGVRTGM1TEdSdzhjdS9YdlhCZmtCWitnSWU0ZjZMeURzQzk4YnVzdDN3K0N4U3lhNm1paHdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDEzNzg3CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuOV94NjQtc2V0dXAuZXhlCkNkbFZJU0NnQkp5ZXhhVWo2eTVxN0ZlbHZhL3hZajdLeXRJdndKMHdPSnMxdVIycit6ODAxYlNubGFFK1VpRnIyTTlna2tackE0eVBxd3ZkaXhkQkF3PT0K",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.9/Integrated.Mod.Manager.IMM._3.2.9_x64-setup.exe"
 		}
 	}
 }
