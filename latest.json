@@ -1,11 +1,11 @@
 {
-	"version": "3.2.11",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Ignored stale two-card WW unified cache files left by previous builds.\",\"Removed the local persisted two-card cache from the D-drive install flow.\",\"Kept GameBanana rate-limit handling visible instead of showing sample cache cards.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.11 removes stale two-card online cache leftovers.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.11\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-10T12:14:46Z",
+	"version": "3.2.12",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Switched GameBanana online list requests from WebView fetch to Tauri native HTTP to avoid opaque Failed to fetch errors.\",\"Improved online error messages so Cloudflare rate limits and network failures are distinguishable.\",\"Kept stale two-card WW cache ignored and removed from the local D-drive install.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.12 replaces opaque Failed to fetch online errors with native HTTP handling.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.12\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-10T12:26:16Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGpIczFTYnJNVStVbXhxSkxVLzQzM3pXMVBjTld3bFF6WlRUakN4enQ4QXFZc1k1OEVQbWhDQ2dBdmE3LzVlV05ZVmJGY01xa2x2Y3lTTisxWno1REFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDE1MjQ0CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTFfeDY0LXNldHVwLmV4ZQo0SVp3dEdzM3p6LzJrOXd0SXFpL3RYcS9WaXBxU0ZXVnBpZlNhNnBCaXJwbS9HbFJqVHVVRTNZZFBQRmY4ZzB3WjhJVG5YT0dZSm1NU0ljS3dkelZEZz09Cg==",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.11/Integrated.Mod.Manager.IMM._3.2.11_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOG5xSEVRcUhwbWJJbFRuUXovZjBOaDUvZk43VVRUVy9LQTh1OG84enlCa0hGbWdlWi80dnFjSy9QSGR4NVkzamdCYStLN1ZydWUwNnZtNkR4RmJWM1FVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDE1OTQxCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTJfeDY0LXNldHVwLmV4ZQpIdWxmUXBsb29Qc243aGkxYitOMnplbnNYSXdjVTlQc2hOczNWaFEwbWtqVGpwc2VZTUFIWGdCZmF6aUx2T0ZkYXdMeUVYdXlxSktWdkgrY2JxTUlCdz09Cg==",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.12/Integrated.Mod.Manager.IMM._3.2.12_x64-setup.exe"
 		}
 	}
 }

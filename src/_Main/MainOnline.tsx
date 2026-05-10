@@ -16,6 +16,7 @@ import {
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import CardOnline from "./components/CardOnline";
 
 import Carousel from "./components/Carousel";
@@ -34,6 +35,36 @@ type OnlineListResponse = {
 	};
 	_aRecords?: OnlineMod[];
 };
+const GAMEBANANA_HEADERS = {
+	Accept: "application/json,text/plain,*/*",
+	Referer: "https://gamebanana.com/",
+	"User-Agent": "IntegratedModManager/3.2 (+https://github.com/cyc20050130/integrated-mod-manager)",
+};
+
+async function fetchGameBananaJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+	let res: Response;
+	try {
+		res = await tauriFetch(url, {
+			headers: GAMEBANANA_HEADERS,
+			connectTimeout: 15000,
+			...(signal ? { signal } : {}),
+		});
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err || "Failed to fetch");
+		throw new Error(`无法连接 GameBanana：${message}`);
+	}
+
+	if (!res.ok) {
+		const body = await res.text().catch(() => "");
+		const isRateLimited = res.status === 429 || body.includes("1015") || body.toLowerCase().includes("rate limited");
+		const message = isRateLimited
+			? "GameBanana 当前对本机限流，在线列表暂停刷新。请稍后再试。"
+			: `在线列表请求失败：${res.status} ${res.statusText || ""}`.trim();
+		throw new Error(message);
+	}
+
+	return (await res.json()) as T;
+}
 
 export function resetPageCounts() {
 	Object.keys(pageCount).forEach((key) => {
@@ -149,14 +180,13 @@ function MainOnline() {
 		[game, onlinePath, onlineSort, onlineSource]
 	);
 	const nextPage = useCallback(async (url: string, cacheKey: string) => {
-		const res = await fetch(url);
-		const data = await res.json();
+		const data = await fetchGameBananaJson<OnlineListResponse>(url);
 		setOnlineData((prev) => {
 			const currentItems = (prev[cacheKey] as OnlineListItem[] | undefined) || [];
 			const legacyCards = shouldUseUnifiedWwOnline(game)
 				? extractLegacyOnlineCards(currentItems)
 				: ((currentItems as OnlineMod[]) || []);
-			const nextLegacyCards = [...legacyCards, ...data._aRecords];
+			const nextLegacyCards = [...legacyCards, ...(data._aRecords || [])];
 			return {
 				...prev,
 				[cacheKey]: shouldUseUnifiedList
@@ -253,18 +283,8 @@ function MainOnline() {
 		setOnlineLoadError("");
 		try {
 			const [data, unifiedCards] = await Promise.all([
-				fetch(url, { signal: controller.signal })
-					.then((res) => {
-						if (!res.ok) {
-							const message =
-								res.status === 429
-									? "GameBanana 当前对本机限流，在线列表暂停刷新。请稍后再试。"
-									: `在线列表请求失败：${res.status} ${res.statusText}`;
-							throw new Error(message);
-						}
-						return res.json() as Promise<OnlineListResponse>;
-					})
-					.catch((err) => {
+				fetchGameBananaJson<OnlineListResponse>(url, controller.signal)
+					.catch((err: unknown) => {
 						info("legacy online list unavailable", err);
 						setOnlineLoadError(err instanceof Error ? err.message : String(err || "在线列表请求失败"));
 						return null;
@@ -315,11 +335,7 @@ function MainOnline() {
 			loadingCacheKeysRef.current.add(onlineCacheKey);
 			pageCount[onlineCacheKey] = 1;
 			if (onlinePath.startsWith("home")) {
-				fetch(apiClient.banner(), { signal: controller.signal })
-					.then((res) => {
-						if (!res.ok) throw new Error(`Online banner request failed: ${res.status} ${res.statusText}`);
-						return res.json();
-					})
+				fetchGameBananaJson<OnlineMod[]>(apiClient.banner(), controller.signal)
 					.then((data) => {
 						setOnlineData((prev) => {
 							return {
