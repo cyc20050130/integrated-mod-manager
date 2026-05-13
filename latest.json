@@ -1,11 +1,11 @@
 {
-	"version": "3.2.15",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Expanded the Tauri HTTP scope for GameBanana so online-list requests with nested API paths are allowed.\",\"Removed the duplicate unscoped http:default permission entry to avoid capability scope conflicts.\",\"Kept GameBanana rate-limit and connectivity messages for clearer online-source failures.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.15 fixes GameBanana URL scope errors for the online list.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.15\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-10T13:57:01Z",
+	"version": "3.2.17",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Fixed installed mod update detection when GameBanana only changes profile/update metadata without changing the active file timestamp.\",\"Added regression coverage so _tsDateUpdated participates in installed mod status checks.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.17 fixes missed mod updates from GameBanana profile-only metadata changes.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.17\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-13T10:00:00Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGpUT0ZGZE9neHMzWVJwbGEvcndBV2txSXA4YVAxVHcyMzFKTldRZVdrdkYwQkVzN2VzNFBjdHBVZWNxYXRvS2I2TTZTSXlOVTFZQzh3UTl2MHJYK0FVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NDIxNDEwCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTVfeDY0LXNldHVwLmV4ZQpYQmw4T2NBL0xSVXR4ZnJpa2FIMHNKbkFxMXRHU0FxeTFBWjAxT1NkeVZjWHovM3h3YkxHSENaNGtGN08xYmpFb3h4OFIvMlRvZTA5RXdEM3N3Z2VCQT09Cg==",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.15/Integrated.Mod.Manager.IMM._3.2.15_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHNvdkNsWjIzZkdTUFlQeE1QNzBIYXptU1BuSS93KzBPeHpwYi9DTE9HNkY5U1d4eGYvSG1maXFIR2poZ3I5TXl0YW4wcDVrbmRqSGU1UCtoNE9CM0E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NjY1NzcwCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTdfeDY0LXNldHVwLmV4ZQpQaXEvbjBJbnJ3RWtOQjZxaS8wZWNQZUJFc2xlKytVaDdxNitadlJNNlVLWmNKVnRtRDVPeEQ0VkkwTTFFUHBPWjd6d0xBY0NvY0I3bFpnOTJ3c1RCdz09Cg==",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.17/Integrated.Mod.Manager.IMM._3.2.17_x64-setup.exe"
 		}
 	}
 }
