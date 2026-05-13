@@ -23,6 +23,7 @@ import TEXT from "@/textData.json";
 import { error, info } from "@/lib/logger";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { getConfig } from "./filesys";
+import { computeModUpdateStatus } from "./modUpdateStatus";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { Games, GlobalSettings, InstalledItem, ModDataObj, OnlineBlacklistEntry, Settings } from "./types";
 
@@ -462,15 +463,17 @@ export function useInstalledItemsManager() {
 			} else {
 				try {
 					const data = (await fetchModNoUpdates(modRouteFromURL(item.source))) as {
+						_tsDateUpdated?: number;
 						_tsDateModified?: number;
 						_aFiles?: BananaFileRecord[];
 					};
-					if (data._tsDateModified) {
-						let latest = item.updated || 0;
-						data._aFiles?.forEach((file: BananaFileRecord) => {
-							latest = Math.max(latest, (file._tsDateModified || file._tsDateAdded || 0) * 1000);
+					if (data._tsDateUpdated || data._tsDateModified || data._aFiles?.length) {
+						const { latest, modStatus: nextStatus } = computeModUpdateStatus({
+							updatedAt: item.updated || 0,
+							viewedAt: item.viewed || 0,
+							profile: data,
 						});
-						modStatus = item.updated < latest ? (item.viewed < latest ? 2 : 1) : 0;
+						modStatus = nextStatus;
 						checked[item.name] = { updated: Date.now(), status: latest };
 					}
 				} catch {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.17 - 2026-05-13
+
+### Fixed
+- Fixed mod update detection missing GameBanana updates that only changed profile/update metadata without changing the active file timestamp.
+- Added regression coverage for update detection so `_tsDateUpdated` participates in installed mod status checks.
+
 ## 3.2.16 - 2026-05-13
 
 ### Fixed
