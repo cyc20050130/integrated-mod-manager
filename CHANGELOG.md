@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.2.16 - 2026-05-13
+
+### Fixed
+- Fixed enabled local mods failing to disable by deleting the managed symlink itself instead of resolving through to the source directory.
+- Fixed conflict resolution crashes by clamping conflict dialog state and only updating UI enablement for mods that were actually disabled.
+- Restart IMM automatically after a successful restore so recovered source links are reloaded and mod update checks run against the restored local state.
+
 ## 3.2.6 - 2026-05-07
 
 ### Fixed

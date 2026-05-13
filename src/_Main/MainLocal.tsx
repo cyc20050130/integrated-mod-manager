@@ -1,6 +1,7 @@
 import {
 	CATEGORY,
 	CONFLICTS,
+	CONFLICTS_OPEN,
 	FILTER,
 	INIT_DONE,
 	INSTALLED_ITEMS,
@@ -14,7 +15,7 @@ import {
 	SOURCE,
 	TEXT_DATA,
 } from "@/utils/vars";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import CardLocal from "./components/CardLocal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +40,7 @@ function MainLocal() {
 	const initDone = useAtomValue(INIT_DONE);
 	const textData = useAtomValue(TEXT_DATA);
 	const [conflicts, setConflicts] = useAtom(CONFLICTS);
+	const setConflictsOpen = useSetAtom(CONFLICTS_OPEN);
 	const [initial, setInitial] = useState(true);
 	const lastUpdated = useAtomValue(LAST_UPDATED);
 	const [modList, setModList] = useAtom(MOD_LIST);
@@ -144,10 +146,11 @@ function MainLocal() {
 				setConflicts({ conflicts: newCols, mods: modsInvolved });
 			} else if (collisions.length == 0) {
 				setConflicts({ conflicts: [], mods: {} });
+				setConflictsOpen(false);
 			}
 		}
 		checkForHashCollisions();
-	}, [conflicts.conflicts, initDone, modList, setConflicts, textData._Toasts.CollisionsDetected]);
+	}, [conflicts.conflicts, initDone, modList, setConflicts, setConflictsOpen, textData._Toasts.CollisionsDetected]);
 	const filteredList = useMemo(() => {
 		let newList: Mod[] =
 			searchDB && search

@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useAtom, useAtomValue } from "jotai";
-import { CONFLICTS_OPEN, ONLINE } from "@/utils/vars";
+import { CONFLICT_INDEX, CONFLICTS_OPEN, ONLINE } from "@/utils/vars";
 import MainLocal from "./MainLocal";
 import MainOnline from "./MainOnline";
 import BottomBar from "./components/BottomBar";
@@ -13,7 +13,8 @@ import ModConflicts from "@/_Main/components/ModConflicts";
 function Main() {
 	const online = useAtomValue(ONLINE);
 	const [debouncedOnline, setDebouncedOnline] = useState(online);
-	const [conflictsOpen, setConflictsOpen] = useAtom(CONFLICTS_OPEN)
+	const [conflictsOpen, setConflictsOpen] = useAtom(CONFLICTS_OPEN);
+	const [, setConflictIndex] = useAtom(CONFLICT_INDEX);
 	useEffect(() => {
 		const handler = setTimeout(() => {
 			setDebouncedOnline(online);
@@ -38,7 +39,15 @@ function Main() {
 					</motion.div>
 				</AnimatePresence>
 			</div>
-			<Dialog open={conflictsOpen} onOpenChange={setConflictsOpen}>
+			<Dialog
+				open={conflictsOpen}
+				onOpenChange={(open) => {
+					setConflictsOpen(open);
+					if (!open) {
+						setConflictIndex(0);
+					}
+				}}
+			>
 				<ModConflicts/>
 			</Dialog>
 			<BottomBar />

@@ -558,7 +558,7 @@ export async function restoreFromPoint(point: string) {
 	const path = join(modRoot, RESTORE, point);
 	if (!(await exists(path))) return null;
 	store.set(PROGRESS_OVERLAY, {
-		title: "Restoring from " + name,
+		title: "Restoring from " + point,
 		finished: false,
 		button: "Cancel",
 		open: true,
@@ -601,6 +601,14 @@ export async function restoreFromPoint(point: string) {
 		open: prev.open,
 		name: point,
 	}));
+	if (result === "Ok" && !canceled) {
+		try {
+			await invoke("request_app_restart");
+		} catch (restartError) {
+			warn("[IMM] Failed to request app restart after restore, reloading window instead:", restartError);
+			window.location.reload();
+		}
+	}
 	return null;
 }
 export async function createRestorePoint(prefix = "") {

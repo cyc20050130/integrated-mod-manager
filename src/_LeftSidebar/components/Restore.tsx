@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boolean; disabled?: boolean }) {
 	const textData = useAtomValue(TEXT_DATA);
 	const [dialogOpen, setDialogOpen] = useState(false);
+	const [restoring, setRestoring] = useState(false);
 	const setRemoveOpen = useSetAtom(REMOVE_OPEN);
 	const [restorePoints, setRestorePoints] = useState<string[]>([]);
 	const [selectedRestorePoint, setSelectedRestorePoint] = useState<number>(-1);
@@ -147,6 +148,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 							}
 							<Button
 								className="min-h-10 data-wuwa:bg-background/50 data-wuwa:mt-0 flex items-center justify-center w-full gap-2 px-2 mt-2 text-sm border rounded-b-sm"
+								disabled={disabled || restoring}
 								onClick={() => {
 									if (disabled) return;
 									setDialogOpen(false);
@@ -162,7 +164,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 							{textData._LeftSideBar._components._Restore.RestorePointContent}
 							<Button
 								className=" max-h-7 max-w-7"
-								disabled={disabled || !restorePoints[selectedRestorePoint]}
+								disabled={disabled || restoring || !restorePoints[selectedRestorePoint]}
 								onClick={() => {
 									if (disabled) return;
 									setAlertOpen(true);
@@ -228,6 +230,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 					<Button
 						className="w-28"
 						variant="destructive"
+						disabled={restoring}
 						onClick={() => {
 							setTimeout(() => {
 								setRemoveOpen(true);
@@ -242,11 +245,17 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 					</div>
 					<Button
 						className="w-28"
-						disabled={disabled}
+						disabled={disabled || restoring}
 						onClick={async () => {
 							if (selectedRestorePoint > -1 && selectedRestorePoint < restorePoints.length) {
+								const point = restorePoints[selectedRestorePoint];
 								setDialogOpen(false);
-								restoreFromPoint(restorePoints[selectedRestorePoint]);
+								setRestoring(true);
+								try {
+									await restoreFromPoint(point);
+								} finally {
+									setRestoring(false);
+								}
 							} else {
 								alert(textData._LeftSideBar._components._Restore.PleaseSelect);
 							}

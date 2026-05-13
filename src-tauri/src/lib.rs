@@ -275,6 +275,24 @@ fn ensure_guarded_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf
     }
 }
 
+fn ensure_guarded_remove_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|err| format!("Failed to inspect path '{}': {}", path.display(), err))?;
+
+    if metadata.file_type().is_symlink() {
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("Path '{}' has no parent", path.display()))?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("Path '{}' has no file name", path.display()))?;
+        let canonical_parent = ensure_guarded_path(parent, allowed_roots)?;
+        return Ok(canonical_parent.join(file_name));
+    }
+
+    ensure_guarded_path(path, allowed_roots)
+}
+
 fn ensure_guarded_new_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
     if path.exists() {
         return ensure_guarded_path(path, allowed_roots);
@@ -305,17 +323,33 @@ fn guarded_remove_path(
     recursive: bool,
 ) -> Result<(), String> {
     let roots = canonicalize_allowed_roots(&allowed_roots)?;
-    let target = ensure_guarded_path(Path::new(&path), &roots)?;
+    let target = ensure_guarded_remove_path(Path::new(&path), &roots)?;
     ensure_not_allowed_root(&target, &roots)?;
 
-    if target.is_dir() {
+    let metadata = std::fs::symlink_metadata(&target)
+        .map_err(|err| format!("Failed to inspect '{}' before removal: {}", target.display(), err))?;
+
+    if metadata.file_type().is_symlink() {
+        std::fs::remove_file(&target).or_else(|file_err| {
+            std::fs::remove_dir(&target).map_err(|dir_err| {
+                format!(
+                    "Failed to remove symlink '{}': file error: {}; dir error: {}",
+                    target.display(),
+                    file_err,
+                    dir_err
+                )
+            })
+        })
+    } else if metadata.is_dir() {
         if recursive {
             std::fs::remove_dir_all(&target)
         } else {
             std::fs::remove_dir(&target)
         }
+        .map_err(|err| err.to_string())
     } else {
         std::fs::remove_file(&target)
+            .map_err(|err| err.to_string())
     }
     .map_err(|err| format!("Failed to remove '{}': {}", target.display(), err))
 }
@@ -572,6 +606,33 @@ mod guarded_file_tests {
 
         let allowed = canonicalize_allowed_roots(&roots(&root)).expect("roots");
         assert!(ensure_guarded_path(&link, &allowed).is_err());
+    }
+
+    #[test]
+    fn guarded_remove_deletes_directory_symlink_without_touching_target() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let target_dir = root.join("Managed").join("Enabled Source");
+        let link = root.join("Mods").join("Enabled Source");
+        fs::create_dir_all(target_dir.parent().expect("target parent")).expect("target parent");
+        fs::create_dir_all(link.parent().expect("link parent")).expect("link parent");
+        fs::create_dir_all(&target_dir).expect("target dir");
+        fs::write(target_dir.join("mod.ini"), "ok").expect("write target file");
+
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(&target_dir, &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_dir(&target_dir, &link);
+
+        if link_result.is_err() {
+            return;
+        }
+
+        guarded_remove_path(link.display().to_string(), roots(&root), false).expect("remove symlink");
+
+        assert!(!link.exists());
+        assert!(target_dir.exists());
+        assert!(target_dir.join("mod.ini").exists());
     }
 }
 
