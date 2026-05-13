@@ -1,7 +1,7 @@
 {
 	"version": "3.2.17",
 	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Fixed installed mod update detection when GameBanana only changes profile/update metadata without changing the active file timestamp.\",\"Added regression coverage so _tsDateUpdated participates in installed mod status checks.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.17 fixes missed mod updates from GameBanana profile-only metadata changes.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.17\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-13T10:00:00Z",
+	"pub_date": "2026-05-13T09:52:24Z",
 	"platforms": {
 		"windows-x86_64": {
 			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHNvdkNsWjIzZkdTUFlQeE1QNzBIYXptU1BuSS93KzBPeHpwYi9DTE9HNkY5U1d4eGYvSG1maXFIR2poZ3I5TXl0YW4wcDVrbmRqSGU1UCtoNE9CM0E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NjY1NzcwCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTdfeDY0LXNldHVwLmV4ZQpQaXEvbjBJbnJ3RWtOQjZxaS8wZWNQZUJFc2xlKytVaDdxNitadlJNNlVLWmNKVnRtRDVPeEQ0VkkwTTFFUHBPWjd6d0xBY0NvY0I3bFpnOTJ3c1RCdz09Cg==",
