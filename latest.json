@@ -1,11 +1,11 @@
 {
-	"version": "3.2.17",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Fixed installed mod update detection when GameBanana only changes profile/update metadata without changing the active file timestamp.\",\"Added regression coverage so _tsDateUpdated participates in installed mod status checks.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.17 fixes missed mod updates from GameBanana profile-only metadata changes.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.17\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-13T09:52:24Z",
+	"version": "3.2.18",
+	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Added a portable updater path so IMM launched from D: keeps reinstalling back into the current folder instead of switching to the managed LocalAppData install.\",\"Switched archive extraction and native filesystem fallbacks to Windows extended-length paths to fix long-path mod installs.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.18 keeps portable installs on D: during updates and fixes long-path extraction failures.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.18\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-05-14T04:30:00Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHNvdkNsWjIzZkdTUFlQeE1QNzBIYXptU1BuSS93KzBPeHpwYi9DTE9HNkY5U1d4eGYvSG1maXFIR2poZ3I5TXl0YW4wcDVrbmRqSGU1UCtoNE9CM0E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NjY1NzcwCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTdfeDY0LXNldHVwLmV4ZQpQaXEvbjBJbnJ3RWtOQjZxaS8wZWNQZUJFc2xlKytVaDdxNitadlJNNlVLWmNKVnRtRDVPeEQ0VkkwTTFFUHBPWjd6d0xBY0NvY0I3bFpnOTJ3c1RCdz09Cg==",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.17/Integrated.Mod.Manager.IMM._3.2.17_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGtZNTh2U2dOQ3pPZGwvQlQrTmlaNHpLZ2prZE5WSDJmYmdEdjQyTFFuR1FDaUpJQnpBcVRKN2cweDBzYjg3bkwrYXZReE5ZcGsrYUFaa0kzYmFhZVFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NzMyOTg0CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMThfeDY0LXNldHVwLmV4ZQp0bU1GL3ltdnF6YXNaV2RFYXpnUGpLS3dFdzAwK3lBUkQyOWFmV3hxZ201bk9RYlpQZ1p5dk5MU2xRMmxJd2hYTWYvaiszKzhvTzIvWk9DZjFoMDREQT09Cg==",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.18/Integrated.Mod.Manager.IMM._3.2.18_x64-setup.exe"
 		}
 	}
 }

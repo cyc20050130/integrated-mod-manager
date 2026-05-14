@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.18 - 2026-05-14
+
+### Fixed
+- Added a portable updater path for IMM instances launched outside `%LOCALAPPDATA%`, so in-app updates can reinstall back into the current `D:` directory instead of silently switching to the managed `C:` install.
+- Switched archive extraction and native filesystem fallbacks to Windows extended-length paths, fixing long-path mod installs that previously failed during extraction.
+
 ## 3.2.17 - 2026-05-13
 
 ### Fixed

@@ -5,6 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import { BANANA_LINK, DISCORD_LINK, VERSION } from "@/utils/consts";
 import { flushRuntimeState } from "@/utils/filesys";
 import { refreshAppUpdateCheck } from "@/utils/init";
+import { getPortableUpdateUrl } from "@/utils/updateMode";
 import { getTimeDifference } from "@/utils/utils";
 import { IMM_UPDATE, TEXT_DATA, UPDATER_OPEN } from "@/utils/vars";
 import { invoke } from "@tauri-apps/api/core";
@@ -59,6 +60,24 @@ function Updater() {
 			await flushRuntimeState("before-update-install");
 			setProgress(0);
 			setUpdate((prev) => (prev ? { ...prev, status: "downloading", error: "" } : prev));
+			const installContext = await invoke<{
+				currentExePath: string;
+				currentExeDir: string;
+				managedInstallDir: string;
+				portable: boolean;
+			}>("get_update_install_context");
+			const portableUpdateUrl = getPortableUpdateUrl(update.raw.rawJson);
+			if (installContext.portable) {
+				if (!portableUpdateUrl) {
+					throw new Error("Portable update asset URL is missing from the updater manifest.");
+				}
+				setUpdate((prev) => (prev ? { ...prev, status: "installing" } : prev));
+				await invoke("install_portable_update", {
+					downloadUrl: portableUpdateUrl,
+					version: update.version,
+				});
+				return;
+			}
 			await update.raw.download((event) => {
 				switch (event.event) {
 					case "Started":

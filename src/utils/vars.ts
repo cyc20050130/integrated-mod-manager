@@ -38,6 +38,7 @@ interface UpdateDownloadEvent {
 interface UpdateHandle {
 	download(callback?: (event: UpdateDownloadEvent) => void, options?: unknown): Promise<void>;
 	install(): Promise<void>;
+	rawJson?: Record<string, unknown>;
 }
 interface ToastInfo {
 	id: number;

@@ -37,6 +37,7 @@ const PREVIEW_IDLE_WAIT_TIMEOUT_SECS: u64 = 90;
 const PREVIEW_IDLE_POLL_MS: u64 = 250;
 const LOW_SPEED_THRESHOLD_BPS: f64 = 48.0 * 1024.0;
 const LOW_SPEED_GRACE_SECS: u64 = 12;
+const WINDOWS_INSTALL_DIR_NAME: &str = "Integrated Mod Manager (IMM)";
 
 #[derive(Serialize, Clone)]
 struct DownloadProgress {
@@ -62,6 +63,15 @@ struct DownloadErrorEvent {
     stage: String,
     attempt: u32,
     max_attempts: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInstallContext {
+    current_exe_path: String,
+    current_exe_dir: String,
+    managed_install_dir: String,
+    portable: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,6 +228,104 @@ fn clean_folder_before_extraction(
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn to_windows_extended_path(path: &str) -> String {
+    let normalized = path.replace('/', "\\");
+    if normalized.starts_with(r"\\?\") {
+        return normalized;
+    }
+    if normalized.starts_with(r"\\") {
+        return format!(r"\\?\UNC\{}", normalized.trim_start_matches('\\'));
+    }
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' {
+        return format!(r"\\?\{}", normalized);
+    }
+    normalized
+}
+
+#[cfg(not(target_os = "windows"))]
+fn to_windows_extended_path(path: &str) -> String {
+    path.to_string()
+}
+
+fn local_app_data_install_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|base| base.join(WINDOWS_INSTALL_DIR_NAME))
+}
+
+fn normalize_compare_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+fn build_update_install_context_from_exe(exe_path: &Path) -> UpdateInstallContext {
+    let exe_dir = exe_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let managed_install_dir = local_app_data_install_dir().unwrap_or_else(|| exe_dir.clone());
+    let portable = normalize_compare_path(&exe_dir) != normalize_compare_path(&managed_install_dir);
+
+    UpdateInstallContext {
+        current_exe_path: exe_path.to_string_lossy().to_string(),
+        current_exe_dir: exe_dir.to_string_lossy().to_string(),
+        managed_install_dir: managed_install_dir.to_string_lossy().to_string(),
+        portable,
+    }
+}
+
+async fn download_file_to_path(url: &str, destination: &Path) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let response = Client::new()
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Update download failed with HTTP {}", response.status()));
+    }
+
+    let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+    std::fs::write(destination, &bytes).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn escape_powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(target_os = "windows")]
+fn build_portable_update_script(wait_pid: u32, installer: &Path, target_dir: &Path, exe_path: &Path) -> String {
+    format!(
+        "$ErrorActionPreference='SilentlyContinue'\n\
+$waitPid = {wait_pid}\n\
+$installer = '{installer}'\n\
+$targetDir = '{target_dir}'\n\
+$exePath = '{exe_path}'\n\
+while (Get-Process -Id $waitPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}\n\
+Start-Process -FilePath $installer -ArgumentList @('/S', '/D=' + $targetDir) -Wait -WindowStyle Hidden\n\
+if (Test-Path $exePath) {{ Start-Process -FilePath $exePath -WorkingDirectory (Split-Path -Parent $exePath) }}\n\
+Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue\n\
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n",
+        wait_pid = wait_pid,
+        installer = escape_powershell_single_quoted(&installer.to_string_lossy()),
+        target_dir = escape_powershell_single_quoted(&target_dir.to_string_lossy()),
+        exe_path = escape_powershell_single_quoted(&exe_path.to_string_lossy())
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn build_portable_update_script(_wait_pid: u32, _installer: &Path, _target_dir: &Path, _exe_path: &Path) -> String {
+    String::new()
 }
 
 static SESSION_ID: AtomicU64 = AtomicU64::new(0);
@@ -634,6 +742,33 @@ mod guarded_file_tests {
         assert!(target_dir.exists());
         assert!(target_dir.join("mod.ini").exists());
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_extended_path_prefixes_drive_paths() {
+        assert_eq!(
+            to_windows_extended_path("D:\\IMM\\Mods\\Hiyuki"),
+            r"\\?\D:\IMM\Mods\Hiyuki"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_extended_path_keeps_existing_prefixed_paths() {
+        assert_eq!(
+            to_windows_extended_path(r"\\?\D:\IMM\Mods\Hiyuki"),
+            r"\\?\D:\IMM\Mods\Hiyuki"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_extended_path_converts_unc_paths() {
+        assert_eq!(
+            to_windows_extended_path(r"\\server\share\IMM"),
+            r"\\?\UNC\server\share\IMM"
+        );
+    }
 }
 
 struct ExtractionSlotGuard;
@@ -927,23 +1062,21 @@ fn ensure_bundled_wuwa_mod_fixer(app_handle: tauri::AppHandle) -> Result<Bundled
 }
 
 async fn decompress_file(app_handle: tauri::AppHandle, file_path: &str, save_path: &str) -> Result<(), String> {
-   let program_path = app_handle
-    .path()
-    .resolve("ext/7z.exe", tauri::path::BaseDirectory::Resource)
-    .map_err(|e| e.to_string())?;
+    let program_path = app_handle
+        .path()
+        .resolve("ext/7z.exe", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| e.to_string())?;
 
-let output = app_handle
-    .shell()
-    .command(program_path.to_str().unwrap())
-    .args([
-        "x", 
-        file_path, 
-        &format!("-o{}", save_path),
-        "-y"
-    ])
-    .output()
-    .await
-    .map_err(|e| e.to_string())?;
+    let archive_arg = to_windows_extended_path(file_path);
+    let output_arg = format!("-o{}", to_windows_extended_path(save_path));
+
+    let output = app_handle
+        .shell()
+        .command(program_path.to_str().unwrap())
+        .args(["x", archive_arg.as_str(), output_arg.as_str(), "-y"])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
 
     if output.status.success() {
         Ok(())
@@ -1640,22 +1773,22 @@ fn get_runtime_data_dir() -> Result<String, String> {
 
 #[tauri::command]
 fn path_exists_native(path: String) -> Result<bool, String> {
-    Ok(Path::new(&path).exists())
+    Ok(Path::new(&to_windows_extended_path(&path)).exists())
 }
 
 #[tauri::command]
 fn read_text_file_native(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|err| err.to_string())
+    std::fs::read_to_string(to_windows_extended_path(&path)).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 fn write_text_file_native(path: String, contents: String) -> Result<(), String> {
-    std::fs::write(&path, contents).map_err(|err| err.to_string())
+    std::fs::write(to_windows_extended_path(&path), contents).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 fn read_dir_native(path: String) -> Result<Vec<NativeDirEntry>, String> {
-    let entries = std::fs::read_dir(&path).map_err(|err| err.to_string())?;
+    let entries = std::fs::read_dir(to_windows_extended_path(&path)).map_err(|err| err.to_string())?;
     entries
         .map(|entry| {
             let entry = entry.map_err(|err| err.to_string())?;
@@ -1671,11 +1804,77 @@ fn read_dir_native(path: String) -> Result<Vec<NativeDirEntry>, String> {
 #[tauri::command]
 fn mkdir_native(path: String, recursive: bool) -> Result<(), String> {
     if recursive {
-        std::fs::create_dir_all(&path)
+        std::fs::create_dir_all(to_windows_extended_path(&path))
     } else {
-        std::fs::create_dir(&path)
+        std::fs::create_dir(to_windows_extended_path(&path))
     }
     .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn get_update_install_context() -> Result<UpdateInstallContext, String> {
+    let exe_path = std::env::current_exe().map_err(|err| err.to_string())?;
+    Ok(build_update_install_context_from_exe(&exe_path))
+}
+
+#[tauri::command]
+async fn install_portable_update(
+    _app_handle: tauri::AppHandle,
+    download_url: String,
+    version: String,
+) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = download_url;
+        let _ = version;
+        return Err("Portable updater is only supported on Windows.".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let exe_path = std::env::current_exe().map_err(|err| err.to_string())?;
+        let context = build_update_install_context_from_exe(&exe_path);
+        if !context.portable {
+            return Err("Portable update was requested for a managed install.".to_string());
+        }
+
+        let current_pid = std::process::id();
+        let temp_root = std::env::temp_dir().join("imm-portable-updater");
+        std::fs::create_dir_all(&temp_root).map_err(|err| err.to_string())?;
+
+        let safe_version = version
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' { ch } else { '_' })
+            .collect::<String>();
+        let installer_path =
+            temp_root.join(format!("Integrated.Mod.Manager.IMM._{}_x64-setup.exe", safe_version));
+        let script_path = temp_root.join(format!("install-portable-update-{}.ps1", safe_version));
+
+        download_file_to_path(&download_url, &installer_path).await?;
+        let script_contents = build_portable_update_script(
+            current_pid,
+            &installer_path,
+            Path::new(&context.current_exe_dir),
+            &exe_path,
+        );
+        std::fs::write(&script_path, script_contents).map_err(|err| err.to_string())?;
+
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        Command::new("powershell.exe")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script_path.to_string_lossy().as_ref(),
+            ])
+            .spawn()
+            .map_err(|err| err.to_string())?;
+
+        std::process::exit(0);
+    }
 }
 
 #[tauri::command]
@@ -1846,6 +2045,7 @@ pub fn run() {
             get_image_server_url,
             get_session_id,
             get_runtime_data_dir,
+            get_update_install_context,
             path_exists_native,
             read_text_file_native,
             write_text_file_native,
@@ -1864,6 +2064,7 @@ pub fn run() {
             ww_bridge::detach_afdian_source_from_unified_card,
             ww_bridge::run_temp_duplicate_compare,
             ensure_bundled_wuwa_mod_fixer,
+            install_portable_update,
             request_app_restart,
             execute_with_args,
             create_symlink,
