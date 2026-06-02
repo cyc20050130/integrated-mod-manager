@@ -1,11 +1,11 @@
 {
-	"version": "3.2.18",
-	"notes": "{\"major\":[],\"minor\":[],\"patch\":[\"Added a portable updater path so IMM launched from D: keeps reinstalling back into the current folder instead of switching to the managed LocalAppData install.\",\"Switched archive extraction and native filesystem fallbacks to Windows extended-length paths to fix long-path mod installs.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.18 keeps portable installs on D: during updates and fixes long-path extraction failures.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.18\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-05-14T04:30:00Z",
+	"version": "3.2.19",
+	"notes": "{\"major\":[],\"minor\":[\"Merged upstream window-state persistence behavior while keeping IMM 3.2.x portable update, native IO, and unified online features.\",\"Improved preview crop initialization, reset/apply guards, and save flow so edited previews return cleanly to the preview screen.\"],\"patch\":[\"Fixed conflict resolution so the dialog only advances after every requested disable succeeds.\",\"Reduced startup/runtime render loops by avoiding repeated empty conflict writes and duplicate atom resets.\",\"Hardened restore, updater, tooltip, dialog, and non-Tauri runtime guards to avoid invalid interactions and browser-only crashes.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.19 merges upstream UI stability fixes while preserving the 3.2.x portable updater, long-path IO, and unified online support.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.19\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-06-02T03:07:19Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGtZNTh2U2dOQ3pPZGwvQlQrTmlaNHpLZ2prZE5WSDJmYmdEdjQyTFFuR1FDaUpJQnpBcVRKN2cweDBzYjg3bkwrYXZReE5ZcGsrYUFaa0kzYmFhZVFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NzMyOTg0CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMThfeDY0LXNldHVwLmV4ZQp0bU1GL3ltdnF6YXNaV2RFYXpnUGpLS3dFdzAwK3lBUkQyOWFmV3hxZ201bk9RYlpQZ1p5dk5MU2xRMmxJd2hYTWYvaiszKzhvTzIvWk9DZjFoMDREQT09Cg==",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.18/Integrated.Mod.Manager.IMM._3.2.18_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGxUUFdvb1N1U1JTOGJwZEpjbUF0L0RwWUxuYVpZQlVyMzlvcUd3dm9KVzFEa2R5blp4UURmU1JodHdjUG15WGRPT3VZeTNBWVcyeVdxU3dnaUZwcUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgwMzY5NjE3CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTlfeDY0LXNldHVwLmV4ZQpCTUE2OXFIUGdBZ0xzU2xLV3hDQjhNRDNYaXBDQnZMdDVxR1V5VDlTcnZVdlFBUTAxYW0yeVA2Yy8xdUQwKzFKaUx5Qkxuc0lQeDBYVE5Hbi9JcWhEUT09Cg==",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.19/Integrated.Mod.Manager.IMM._3.2.19_x64-setup.exe"
 		}
 	}
 }
