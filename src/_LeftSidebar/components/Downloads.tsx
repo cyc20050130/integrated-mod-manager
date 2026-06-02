@@ -212,6 +212,26 @@ function Downloads() {
 	const [queueWakeTick, setQueueWakeTick] = useState(0);
 
 	const dlSettings = useMemo(() => normalizeDownloadSettings(settings.game.download), [settings.game.download]);
+	const downloadOptions = useMemo(
+		() => ({
+			connectTimeoutSec: dlSettings.connectTimeoutSec,
+			stallTimeoutSec: dlSettings.stallTimeoutSec,
+			requestRetries: dlSettings.requestRetries,
+			progressIntervalMs: dlSettings.progressIntervalMs,
+			progressBytesThreshold: dlSettings.progressBytesThresholdKB * 1024,
+			backoffBaseMs: dlSettings.backoffBaseMs,
+			maxConcurrentExtracts: dlSettings.maxConcurrentExtracts,
+		}),
+		[
+			dlSettings.backoffBaseMs,
+			dlSettings.connectTimeoutSec,
+			dlSettings.maxConcurrentExtracts,
+			dlSettings.progressBytesThresholdKB,
+			dlSettings.progressIntervalMs,
+			dlSettings.requestRetries,
+			dlSettings.stallTimeoutSec,
+		]
+	);
 
 	const scheduleSave = useCallback(() => {
 		if (persistTimerRef.current) {
@@ -405,16 +425,6 @@ function Downloads() {
 				});
 				scheduleSave();
 
-				const downloadOptions = {
-					connectTimeoutSec: dlSettings.connectTimeoutSec,
-					stallTimeoutSec: dlSettings.stallTimeoutSec,
-					requestRetries: dlSettings.requestRetries,
-					progressIntervalMs: dlSettings.progressIntervalMs,
-					progressBytesThreshold: dlSettings.progressBytesThresholdKB * 1024,
-					backoffBaseMs: dlSettings.backoffBaseMs,
-					maxConcurrentExtracts: dlSettings.maxConcurrentExtracts,
-				};
-
 				await invoke("download_and_unzip", {
 					fileName: runtimeName,
 					downloadUrl: item.file,
@@ -450,7 +460,7 @@ function Downloads() {
 				startedKeysRef.current.delete(key);
 			}
 		},
-		[dlSettings, handleDownloadFailure, scheduleSave, setData, setDownloads, setLastUpdated]
+		[downloadOptions, handleDownloadFailure, scheduleSave, setData, setDownloads, setLastUpdated]
 	);
 
 	useEffect(() => {
@@ -489,11 +499,15 @@ function Downloads() {
 		const toStart = selected.map(({ item }) => enrichForDownload(item));
 		if (!toStart.length) return;
 
-		setDownloads((prev) => ({
-			...prev,
-			queue: prev.queue.filter((_, index) => !indicesToStart.has(index)),
-			downloading: [...prev.downloading, ...toStart],
-		}));
+		setDownloads((prev) => {
+			const nextQueue = prev.queue.filter((_, index) => !indicesToStart.has(index));
+			if (nextQueue.length === prev.queue.length && toStart.length === 0) return prev;
+			return {
+				...prev,
+				queue: nextQueue,
+				downloading: [...prev.downloading, ...toStart],
+			};
+		});
 
 		toStart.forEach((item) => {
 			const key = item.key || getDownloadKey(item);
@@ -673,16 +687,19 @@ function Downloads() {
 		resetExtracts();
 		cancelRequestedRef.current.clear();
 		startedKeysRef.current.clear();
-		setDownloads((prev) => ({
-			...prev,
-			downloading: [],
-			extracting: [],
-			queue: [
-				...prev.queue,
-				...prev.downloading.map((item) => ({ ...item, status: "pending" as const })),
-				...prev.extracting.map((item) => ({ ...item, status: "pending" as const })),
-			],
-		}));
+		setDownloads((prev) => {
+			if (!prev.downloading.length && !prev.extracting.length) return prev;
+			return {
+				...prev,
+				downloading: [],
+				extracting: [],
+				queue: [
+					...prev.queue,
+					...prev.downloading.map((item) => ({ ...item, status: "pending" as const })),
+					...prev.extracting.map((item) => ({ ...item, status: "pending" as const })),
+				],
+			};
+		});
 	}, [game, scheduleProgressRefresh, setDownloads]);
 
 	const clearCompleted = () => {

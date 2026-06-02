@@ -65,7 +65,9 @@ function ManageCategories() {
 	return (
 		<DialogContent>
 			<Tooltip>
-				<TooltipTrigger></TooltipTrigger>
+				<TooltipTrigger asChild>
+					<span aria-hidden="true" />
+				</TooltipTrigger>
 				<TooltipContent className="opacity-0"></TooltipContent>
 			</Tooltip>
 			<AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
@@ -93,40 +95,42 @@ function ManageCategories() {
 							className=" disabled:border-0 max-w-80 text-ellipsis overflow-hidden text-center break-words"
 						/>
 						<Tooltip>
-							<TooltipTrigger
-								className="-mt-9  self-end duration-200"
-								style={{
-									opacity: !alertData._sUrl && !alertData.creating ? 1 : 0,
-									pointerEvents: !alertData._sUrl && !alertData.creating ? "auto" : "none",
-								}}
-								onClick={async () => {
-									const success = await deleteCategory(alertData._sName);
-									if (success) {
-										const nextCustomCategories = { ...customCategories };
-										delete nextCustomCategories[alertData._sName];
-										setSettings((prev) => ({
-											...prev,
-											game: {
-												...prev.game,
-												customCategories: nextCustomCategories,
-											},
-										}));
-										saveConfigs();
-										setCategories();
-										setAlertOpen(false);
-									} else {
-										const deleteWarning = document.getElementById("deleteWarning");
-										if (deleteWarning) {
-											deleteWarning.style.opacity = "1";
-											setTimeout(() => {
-												deleteWarning.style.opacity = "0";
-												deleteWarning.style.pointerEvents = "none";
-											}, 3000);
+							<TooltipTrigger asChild>
+								<span
+									className="-mt-9 self-end duration-200"
+									style={{
+										opacity: !alertData._sUrl && !alertData.creating ? 1 : 0,
+										pointerEvents: !alertData._sUrl && !alertData.creating ? "auto" : "none",
+									}}
+									onClick={async () => {
+										const success = await deleteCategory(alertData._sName);
+										if (success) {
+											const nextCustomCategories = { ...customCategories };
+											delete nextCustomCategories[alertData._sName];
+											setSettings((prev) => ({
+												...prev,
+												game: {
+													...prev.game,
+													customCategories: nextCustomCategories,
+												},
+											}));
+											saveConfigs();
+											setCategories();
+											setAlertOpen(false);
+										} else {
+											const deleteWarning = document.getElementById("deleteWarning");
+											if (deleteWarning) {
+												deleteWarning.style.opacity = "1";
+												setTimeout(() => {
+													deleteWarning.style.opacity = "0";
+													deleteWarning.style.pointerEvents = "none";
+												}, 3000);
+											}
 										}
-									}
-								}}
-							>
-								<TrashIcon className="h-5 p-0.5 w-5 text-destructive cursor-pointer hover:text-accent/70" />
+									}}
+								>
+									<TrashIcon className="h-5 p-0.5 w-5 text-destructive cursor-pointer hover:text-accent/70" />
+								</span>
 							</TooltipTrigger>
 							<TooltipContent>{textData._RightSideBar._components._ManageCategories.DeleteCat}</TooltipContent>
 						</Tooltip>
@@ -154,17 +158,19 @@ function ManageCategories() {
 							/>
 
 							<Tooltip>
-								<TooltipTrigger
-									className="-mt-9 self-end -mr-6.5 duration-200"
-									style={{
-										opacity: alertData._sAltIconUrl ? 1 : 0,
-										pointerEvents: alertData._sAltIconUrl ? "auto" : "none",
-									}}
-									onClick={() => {
-										debouncedIconUpdate(alertData._sAltIconUrl || "");
-									}}
-								>
-									<RefreshCwIcon className="h-5 p-0.5 w-5 text-accent cursor-pointer hover:text-accent/70" />
+								<TooltipTrigger asChild>
+									<span
+										className="-mt-9 self-end -mr-6.5 duration-200"
+										style={{
+											opacity: alertData._sAltIconUrl ? 1 : 0,
+											pointerEvents: alertData._sAltIconUrl ? "auto" : "none",
+										}}
+										onClick={() => {
+											debouncedIconUpdate(alertData._sAltIconUrl || "");
+										}}
+									>
+										<RefreshCwIcon className="h-5 p-0.5 w-5 text-accent cursor-pointer hover:text-accent/70" />
+									</span>
 								</TooltipTrigger>
 								<TooltipContent>{textData._RightSideBar._components._ManageCategories.Reset}</TooltipContent>
 							</Tooltip>

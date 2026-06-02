@@ -1989,8 +1989,14 @@ pub fn run() {
         )
         .plugin(
             Builder::default()
-                // sets the flags to only track and restore size
-                .with_state_flags(StateFlags::SIZE)
+                // Persist practical window state while avoiding decoration flag churn.
+                .with_state_flags(
+                    StateFlags::SIZE
+                        | StateFlags::POSITION
+                        | StateFlags::MAXIMIZED
+                        | StateFlags::VISIBLE
+                        | StateFlags::FULLSCREEN,
+                )
                 .build(),
         )
         .plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {

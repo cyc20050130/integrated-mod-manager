@@ -59,6 +59,17 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 			});
 		}
 	}, [restorePoints, selectedRestorePoint]);
+
+	async function handleCreateRestorePoint() {
+		if (disabled || restoring) return;
+		setDialogOpen(false);
+		setRestoring(true);
+		try {
+			await createRestorePoint();
+		} finally {
+			setRestoring(false);
+		}
+	}
 	return (
 		<Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
 			<DialogTrigger asChild>
@@ -120,6 +131,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 									{restorePoints.map((item, index) => (
 										<Button
 											key={item}
+											disabled={restoring}
 											onClick={() => {
 												setSelectedRestorePoint(index);
 											}}
@@ -150,9 +162,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 								className="min-h-10 data-wuwa:bg-background/50 data-wuwa:mt-0 flex items-center justify-center w-full gap-2 px-2 mt-2 text-sm border rounded-b-sm"
 								disabled={disabled || restoring}
 								onClick={() => {
-									if (disabled) return;
-									setDialogOpen(false);
-									createRestorePoint();
+									void handleCreateRestorePoint();
 								}}
 							>
 								<PlusIcon className="w-4 h-4" /> {textData._LeftSideBar._components._Restore.CreateRestorePoint}

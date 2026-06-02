@@ -148,7 +148,9 @@ function ModPreferences({ item, details }: { item: PreferenceItem; details: Pref
 	return (
 		<DialogContent className="min-w-250">
 			<Tooltip>
-				<TooltipTrigger />
+				<TooltipTrigger asChild>
+					<span aria-hidden="true" />
+				</TooltipTrigger>
 				<TooltipContent className="opacity-0" />
 			</Tooltip>
 
@@ -244,9 +246,11 @@ function ModPreferences({ item, details }: { item: PreferenceItem; details: Pref
 			</div>
 			<div className="bg-background/80 button-like text-border backdrop-blur border-muted/20 sticky top-0 z-10 flex w-full px-8 py-2 border rounded-md">
 				<Tooltip>
-					<TooltipTrigger className="text-accent flex items-center justify-center w-full gap-2 mr-2 -ml-2">
-						<InfoIcon className="text-accent/70 cursor-help inline-block w-4 h-4 ml-1" />
-						{textData._RightSideBar._components._ModPreferences.Name}
+					<TooltipTrigger asChild>
+						<span className="text-accent flex items-center justify-center w-full gap-2 mr-2 -ml-2">
+							<InfoIcon className="text-accent/70 cursor-help inline-block w-4 h-4 ml-1" />
+							{textData._RightSideBar._components._ModPreferences.Name}
+						</span>
 					</TooltipTrigger>
 					<TooltipContent className="w-48 px-1 text-center">
 						{textData._RightSideBar._components._ModPreferences.NameTip}
@@ -254,9 +258,11 @@ function ModPreferences({ item, details }: { item: PreferenceItem; details: Pref
 				</Tooltip>
 				|{/* <div className="text-accent w-1/5 text-center">Target Var</div>| */}
 				<Tooltip>
-					<TooltipTrigger className="text-accent flex items-center justify-center w-full gap-2">
-						<InfoIcon className="text-accent/70 cursor-help inline-block w-4 h-4 ml-1" />
-						{textData._RightSideBar._components._ModPreferences.DefVal}
+					<TooltipTrigger asChild>
+						<span className="text-accent flex items-center justify-center w-full gap-2">
+							<InfoIcon className="text-accent/70 cursor-help inline-block w-4 h-4 ml-1" />
+							{textData._RightSideBar._components._ModPreferences.DefVal}
+						</span>
 					</TooltipTrigger>
 					<TooltipContent className="w-48 px-1 text-center">
 						{textData._RightSideBar._components._ModPreferences.DefValTip}
@@ -264,9 +270,11 @@ function ModPreferences({ item, details }: { item: PreferenceItem; details: Pref
 				</Tooltip>
 				|
 				<Tooltip>
-					<TooltipTrigger className="text-accent flex items-center justify-center w-full gap-2">
-						<InfoIcon className="text-accent/70 cursor-help inline-block w-4 h-4 ml-1" />
-						{textData._RightSideBar._components._ModPreferences.Pref}
+					<TooltipTrigger asChild>
+						<span className="text-accent flex items-center justify-center w-full gap-2">
+							<InfoIcon className="text-accent/70 cursor-help inline-block w-4 h-4 ml-1" />
+							{textData._RightSideBar._components._ModPreferences.Pref}
+						</span>
 					</TooltipTrigger>
 					<TooltipContent className="w-48 px-1 text-center">
 						{textData._RightSideBar._components._ModPreferences.PrefTip}
@@ -274,8 +282,10 @@ function ModPreferences({ item, details }: { item: PreferenceItem; details: Pref
 				</Tooltip>
 				|
 				<Tooltip>
-					<TooltipTrigger className="text-accent flex items-center justify-center w-full gap-2 -mr-4">
-						{textData._RightSideBar._components._ModPreferences.Expected}
+					<TooltipTrigger asChild>
+						<span className="text-accent flex items-center justify-center w-full gap-2 -mr-4">
+							{textData._RightSideBar._components._ModPreferences.Expected}
+						</span>
 					</TooltipTrigger>
 				</Tooltip>
 			</div>

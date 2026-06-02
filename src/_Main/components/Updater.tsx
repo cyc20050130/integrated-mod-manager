@@ -41,7 +41,10 @@ function Updater() {
 	const minor = parsedBody.minor || [];
 	const patch = parsedBody.patch || [];
 	const busy =
-		update?.status === "downloading" || update?.status === "installing" || update?.status === "relaunching";
+		update?.status === "checking" ||
+		update?.status === "downloading" ||
+		update?.status === "installing" ||
+		update?.status === "relaunching";
 
 	async function triggerCheck(openDialog = true) {
 		setProgress(0);

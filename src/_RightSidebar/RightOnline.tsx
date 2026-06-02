@@ -784,9 +784,7 @@ function RightOnline({ open }: { open: boolean }) {
 	}, [activeUnifiedSource?.sourceId, isDevRuntime, isUnifiedSelected, legacyReuseRoute, selected, shouldReuseLegacyGamebananaDetail]);
 	useEffect(() => {
 		if (isUnifiedSelected && unifiedDetailViewState.mode !== "legacy-reuse" && loadingComments) {
-			queueMicrotask(() => {
-				setLoadingComments(false);
-			});
+			setLoadingComments(false);
 		}
 	}, [isUnifiedSelected, loadingComments, unifiedDetailViewState.mode]);
 	useEffect(() => {
@@ -794,12 +792,10 @@ function RightOnline({ open }: { open: boolean }) {
 			return;
 		}
 
-		queueMicrotask(() => {
-			setCommentsOpen(false);
-			if (lastSelected === "comments") {
-				setLastSelected("about");
-			}
-		});
+		setCommentsOpen(false);
+		if (lastSelected === "comments") {
+			setLastSelected("about");
+		}
 	}, [isUnifiedSelected, lastSelected, unifiedDetailViewState.mode]);
 	useEffect(() => {
 		if (!isDevRuntime || !isUnifiedSelected) {
@@ -1525,8 +1521,10 @@ function RightOnline({ open }: { open: boolean }) {
 				<div className="flex items-center gap-1">
 					{file._sDescription && file._sDescription.length > 0 && (
 						<Tooltip>
-							<TooltipTrigger>
-								<InfoIcon />
+							<TooltipTrigger asChild>
+								<span className="inline-flex items-center justify-center">
+									<InfoIcon />
+								</span>
 							</TooltipTrigger>
 							<TooltipContent className="max-w-64 w-fit text-center">
 								<p className="max-w-64 text-center break-words">{file._sDescription}</p>
@@ -1661,7 +1659,7 @@ function RightOnline({ open }: { open: boolean }) {
 							if (open) setLastSelected("about");
 						}}
 					>
-						<CollapsibleTrigger className="text-accent flex items-center justify-between w-full h-8">
+						<CollapsibleTrigger asChild>
 							<Button
 								className={
 									"w-full flex justify-between bg-accent bgaccent   text-background " +
@@ -1694,7 +1692,7 @@ function RightOnline({ open }: { open: boolean }) {
 							if (open) setLastSelected("update");
 						}}
 					>
-						<CollapsibleTrigger className="text-accent flex items-center justify-between w-full h-8">
+						<CollapsibleTrigger asChild>
 							<Button
 								className={
 									"w-full flex justify-between bg-accent bgaccent   text-background " +
@@ -1760,7 +1758,7 @@ function RightOnline({ open }: { open: boolean }) {
 						}
 					}}
 				>
-					<CollapsibleTrigger className="text-accent flex items-center justify-between w-full h-8">
+					<CollapsibleTrigger asChild>
 						<Button
 							className={
 								"w-full flex justify-between bg-accent bgaccent   text-background " +

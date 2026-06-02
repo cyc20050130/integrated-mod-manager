@@ -237,8 +237,10 @@ function Remove() {
 						<div className="flex w-full items-center justify-between">
 							<label className="w-2/5 flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+									<TooltipTrigger asChild>
+										<span className="inline-flex items-center justify-center">
+											<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent className="max-w-48 justify-center text-center">
 										{textData._LeftSideBar._components._RemoveIMM.IMMTip}
@@ -262,8 +264,10 @@ function Remove() {
 						<div className="flex w-full items-center justify-between">
 							<label className="w-2/5 flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+									<TooltipTrigger asChild>
+										<span className="inline-flex items-center justify-center">
+											<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent className="max-w-48 justify-center text-center">
 										{textData._LeftSideBar._components._RemoveIMM.ModTip}
@@ -287,8 +291,10 @@ function Remove() {
 						<div className="flex w-full items-center justify-between">
 							<label className="w-2/5 flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+									<TooltipTrigger asChild>
+										<span className="inline-flex items-center justify-center">
+											<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent className="max-w-48 justify-center text-center">
 										{textData._LeftSideBar._components._RemoveIMM.PresetTip}

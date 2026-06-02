@@ -137,14 +137,15 @@ function MainLocal() {
 				return paths;
 			});
 
-			if (collisions.length > 0 && JSON.stringify(conflicts.conflicts) !== JSON.stringify(newCols)) {
+			const conflictsChanged = JSON.stringify(conflicts.conflicts) !== JSON.stringify(newCols);
+			if (collisions.length > 0 && conflictsChanged) {
 				addToast({
 					type: "error",
 					message: textData._Toasts.CollisionsDetected,
 					onClick: openConflict,
 				});
 				setConflicts({ conflicts: newCols, mods: modsInvolved });
-			} else if (collisions.length == 0) {
+			} else if (collisions.length == 0 && conflicts.conflicts.length > 0) {
 				setConflicts({ conflicts: [], mods: {} });
 				setConflictsOpen(false);
 			}

@@ -446,7 +446,9 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 				className="duration-300"
 			>
 				<Tooltip>
-					<TooltipTrigger></TooltipTrigger>
+					<TooltipTrigger asChild>
+						<span aria-hidden="true" />
+					</TooltipTrigger>
 					<TooltipContent className="opacity-0"></TooltipContent>
 				</Tooltip>
 				<AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
@@ -512,20 +514,23 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 						...\{source.split("\\").slice(-3).join("\\")}
 					</label>
 					<Tooltip>
-						<TooltipTrigger
-							onClick={() => {
-								addToast({
-									type: "info",
-									message: textData._Toasts.RefreshMods,
-								});
-								// setModList([]);
-								refreshModList().then((data) => {
-									setModList(data);
-									setRefresh((prev) => prev + 1);
-								});
-							}}
-						>
-							<RefreshCwIcon className="text-link hover:opacity-100 h-4 duration-200 opacity-50"></RefreshCwIcon>
+						<TooltipTrigger asChild>
+							<span
+								className="inline-flex items-center justify-center"
+								onClick={() => {
+									addToast({
+										type: "info",
+										message: textData._Toasts.RefreshMods,
+									});
+									// setModList([]);
+									refreshModList().then((data) => {
+										setModList(data);
+										setRefresh((prev) => prev + 1);
+									});
+								}}
+							>
+								<RefreshCwIcon className="text-link hover:opacity-100 h-4 duration-200 opacity-50"></RefreshCwIcon>
+							</span>
 						</TooltipTrigger>
 						<TooltipContent>{textData.Refresh}</TooltipContent>
 					</Tooltip>

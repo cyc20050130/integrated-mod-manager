@@ -45,21 +45,25 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 							}}
 						>
 							<Dialog>
-								<DialogTrigger>
-									<Tooltip>
-										<TooltipTrigger>
-											<HelpCircleIcon className="hover:opacity-100 inline w-5 h-5 opacity-50" />
+								<Tooltip>
+									<DialogTrigger asChild>
+										<TooltipTrigger asChild>
+											<Button className="aspect-square items-center justify-center">
+												<HelpCircleIcon className="hover:opacity-100 inline w-5 h-5 opacity-50" />
+											</Button>
 										</TooltipTrigger>
+									</DialogTrigger>
 										<TooltipContent>
 											<p className="text-center w-20">{textData._Checklist.ClickHelp}</p>
 										</TooltipContent>
-									</Tooltip>
-								</DialogTrigger>
+								</Tooltip>
 								<DialogContent className="min-h-130">
 									<div className="min-h-fit text-accent my-6 text-3xl">
 										{textData._Checklist.SelectingXXMIDir}
 										<Tooltip>
-											<TooltipTrigger></TooltipTrigger>
+											<TooltipTrigger asChild>
+												<span aria-hidden="true" />
+											</TooltipTrigger>
 											<TooltipContent className="opacity-0"></TooltipContent>
 										</Tooltip>
 									</div>
@@ -133,8 +137,10 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 						>
 							<Label className="flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="hover:opacity-100 inline w-4 h-4 opacity-50" />
+									<TooltipTrigger asChild>
+										<span className="flex items-center justify-center">
+											<InfoIcon className="hover:opacity-100 inline w-4 h-4 opacity-50" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent>
 										<p className="w-48 text-center">{textData._Checklist.ThisDirTarget}</p>
@@ -183,8 +189,10 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 						>
 							<Label className="flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="hover:opacity-100 inline w-4 h-4 opacity-50" />
+									<TooltipTrigger asChild>
+										<span className="flex items-center justify-center">
+											<InfoIcon className="hover:opacity-100 inline w-4 h-4 opacity-50" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent>
 										<p className="w-48 text-center">{textData._Checklist.ThisDirSource}</p>

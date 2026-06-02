@@ -7,7 +7,12 @@ import Help from "@/_Main/components/Help";
 import Updater from "@/_Main/components/Updater";
 import WuwaModFixer from "@/_Main/components/WuwaModFixer";
 
-const appWindow = getCurrentWindow();
+const appWindow =
+	typeof globalThis !== "undefined" &&
+	typeof globalThis.window !== "undefined" &&
+	"__TAURI_INTERNALS__" in globalThis.window
+		? getCurrentWindow()
+		: null;
 
 function Decorations() {
 	const [leftSidebarOpen, setLeftSidebarOpen] = useAtom(LEFT_SIDEBAR_OPEN);
@@ -94,13 +99,13 @@ function Decorations() {
 			</div>
 
 			<div className="z-200 flex gap-1 px-1 pointer-events-auto">
-				<Button onClick={() => appWindow.minimize()} variant="warn" className="h-4 w-4">
+				<Button onClick={() => appWindow?.minimize()} variant="warn" className="h-4 w-4">
 					<MinusIcon className="max-h-3" />
 				</Button>
-				<Button onClick={() => appWindow.toggleMaximize()} variant="success" className="h-4 w-4">
+				<Button onClick={() => appWindow?.toggleMaximize()} variant="success" className="h-4 w-4">
 					<RectangleHorizontalIcon className="max-h-3 scale-x-80" />
 				</Button>
-				<Button onClick={() => appWindow.close()} variant="destructive" className="h-4 w-4">
+				<Button onClick={() => appWindow?.close()} variant="destructive" className="h-4 w-4">
 					<XIcon className="max-h-3" />
 				</Button>
 			</div>

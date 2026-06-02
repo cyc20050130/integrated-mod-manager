@@ -34,7 +34,7 @@ import { startIniStateSync, stopIniStateSync, syncIniStateOnce } from "./utils/i
 // import { Button } from "./components/ui/button";
 
 initializeThemes();
-main();
+let appMainStarted = false;
 function App() {
 	const initDone = useAtomValue(INIT_DONE);
 	const lang = useAtomValue(LANG);
@@ -54,6 +54,11 @@ function App() {
 	const [_, setShowModeSwitch] = useState(false);
 	const [previousOnline, setPreviousOnline] = useState(online);
 	const initialIniSyncTargetRef = useRef("");
+	useEffect(() => {
+		if (appMainStarted) return;
+		appMainStarted = true;
+		void main();
+	}, []);
 	const afterInit = useCallback(async () => {
 		saveConfigs();
 		setModList(await refreshModList());

@@ -233,7 +233,9 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 				<div className="min-h-fit text-accent my-6 text-3xl">
 					{textData.Settings}
 					<Tooltip>
-						<TooltipTrigger></TooltipTrigger>
+						<TooltipTrigger asChild>
+							<span aria-hidden="true" />
+						</TooltipTrigger>
 						<TooltipContent className="opacity-0"></TooltipContent>
 					</Tooltip>
 				</div>
@@ -354,8 +356,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<div className="flex items-center gap-1">
 												{textData._LeftSideBar._components._Settings.NSFW}
 												<Tooltip>
-													<TooltipTrigger>
-														<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent>
 														<div className="flex flex-col gap-1">
@@ -470,8 +474,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<div className="flex items-center gap-1">
 												{textData._LeftSideBar._components._Settings.AutoReload}
 												<Tooltip>
-													<TooltipTrigger>
-														<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent>
 														<div className="flex flex-col gap-1">
@@ -525,8 +531,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<div className="flex items-center gap-1">
 												{textData._LeftSideBar._components._Settings.LaunchSettings}
 												<Tooltip>
-													<TooltipTrigger>
-														<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent>
 														<div className="flex flex-col gap-1">
@@ -732,9 +740,11 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<div className="flex items-center gap-1">
 												{textData._LeftSideBar._components._Settings.HotKey}
 												<Tooltip>
-												<TooltipTrigger>
-													<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
-												</TooltipTrigger>
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
+													</TooltipTrigger>
 												<TooltipContent>
 													<div className="flex flex-col gap-1">
 														<div>{textData._LeftSideBar._components._Settings._HotKey.HKMsg1}</div>

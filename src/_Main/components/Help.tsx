@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight, HelpCircle } from "lucide-react";
 import { useState } from "react";
 import CarouselTut from "./CarouselTut";
 import { AnimatePresence, motion } from "motion/react";
-import {Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 function Help() {
 	const textData = useAtomValue(TEXT_DATA);
@@ -28,7 +28,9 @@ function Help() {
 				<div className="min-h-fit text-accent mt-6 text-3xl">
 					{textData.Tutorials}
 					<Tooltip>
-						<TooltipTrigger></TooltipTrigger>
+						<TooltipTrigger asChild>
+							<span aria-hidden="true" />
+						</TooltipTrigger>
 						<TooltipContent className="opacity-0"></TooltipContent>
 					</Tooltip>
 				</div>

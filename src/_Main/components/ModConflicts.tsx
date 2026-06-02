@@ -3,15 +3,17 @@ import { Button } from "@/components/ui/button";
 import { DialogContent } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toggleMod } from "@/utils/filesys";
+import { addToast } from "@/_Toaster/ToastProvider";
 
-import { CONFLICT_INDEX, CONFLICTS, MOD_LIST, TEXT_DATA } from "@/utils/vars";
+import { CONFLICT_INDEX, CONFLICTS, CONFLICTS_OPEN, MOD_LIST, TEXT_DATA } from "@/utils/vars";
 
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 function ModConflicts() {
 	const setModList = useSetAtom(MOD_LIST);
+	const [conflictsOpen, setConflictsOpen] = useAtom(CONFLICTS_OPEN);
 	const { conflicts } = useAtomValue(CONFLICTS);
 	const [curIndex, setCurIndex] = useAtom(CONFLICT_INDEX);
 	const [curSelected, setCurSelected] = useState(-1);
@@ -23,10 +25,27 @@ function ModConflicts() {
 	}, [conflicts, curIndex]);
 	const currentConflict = conflicts[safeIndex] || [];
 
+	useEffect(() => {
+		if (!conflicts.length) {
+			if (conflictsOpen) setConflictsOpen(false);
+			if (curIndex !== 0) setCurIndex(0);
+			return;
+		}
+		if (curIndex !== safeIndex) {
+			setCurIndex(safeIndex);
+		}
+	}, [conflicts.length, conflictsOpen, curIndex, safeIndex, setCurIndex, setConflictsOpen]);
+
+	useEffect(() => {
+		if (curSelected !== -1) setCurSelected(-1);
+	}, [safeIndex, curSelected]);
+
 	return (
 		<DialogContent>
 			<Tooltip>
-				<TooltipTrigger></TooltipTrigger>
+				<TooltipTrigger asChild>
+					<span aria-hidden="true" />
+				</TooltipTrigger>
 				<TooltipContent className="opacity-0"></TooltipContent>
 			</Tooltip>
 
@@ -169,6 +188,7 @@ function ModConflicts() {
 							const disabledSet = new Set(results.filter((item) => item.disabled).map((item) => item.path));
 							setNextSide("right");
 							setCurSelected(-1);
+							const allDisabled = disabledSet.size === toDisable.length;
 							if (disabledSet.size > 0) {
 								setModList((old) =>
 									old.map((mod) => ({
@@ -176,6 +196,16 @@ function ModConflicts() {
 										enabled: disabledSet.has(mod.path) ? false : mod.enabled,
 									}))
 								);
+							}
+							if (!allDisabled) {
+								addToast({ type: "error", message: textData._Toasts.ErrOcc });
+								return;
+							}
+							if (safeIndex < conflicts.length - 1) {
+								const newIndex = safeIndex + 1;
+								setTimeout(() => {
+									setCurIndex(newIndex);
+								}, 50);
 							}
 						} else if (safeIndex < conflicts.length - 1) {
 							const newIndex = safeIndex + 1;

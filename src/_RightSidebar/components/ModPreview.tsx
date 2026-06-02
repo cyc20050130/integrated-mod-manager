@@ -78,7 +78,9 @@ function ModPreview({
 	return (
 		<DialogContent className=" select-none min-w-136 min-h-0">
 			<Tooltip>
-				<TooltipTrigger></TooltipTrigger>
+				<TooltipTrigger asChild>
+					<span aria-hidden="true" />
+				</TooltipTrigger>
 				<TooltipContent className="opacity-0"></TooltipContent>
 			</Tooltip>
 

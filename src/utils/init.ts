@@ -124,7 +124,14 @@ function getErrorMessage(error: unknown) {
 	return String(error || "Update check failed");
 }
 
+function isNativeRuntimePath(pathLike: string) {
+	return /^[a-zA-Z]:[\\/]/.test(pathLike) || pathLike.startsWith("\\\\");
+}
+
 async function safeExists(pathLike: string) {
+	if (!isNativeRuntimePath(pathLike)) {
+		return await pathExistsNative(pathLike);
+	}
 	try {
 		return await exists(pathLike);
 	} catch (error) {
@@ -133,7 +140,23 @@ async function safeExists(pathLike: string) {
 	}
 }
 
+async function safeReadTextFile(pathLike: string) {
+	if (!isNativeRuntimePath(pathLike)) {
+		return await readTextFileNative(pathLike);
+	}
+	try {
+		return await readTextFile(pathLike);
+	} catch (error) {
+		info(`[IMM] readTextFile() failed for ${pathLike}:`, error);
+		return await readTextFileNative(pathLike);
+	}
+}
+
 async function safeWriteTextFile(pathLike: string, contents: string) {
+	if (!isNativeRuntimePath(pathLike)) {
+		await writeTextFileNative(pathLike, contents);
+		return true;
+	}
 	try {
 		await writeTextFile(pathLike, contents);
 		return true;
@@ -287,36 +310,43 @@ export function getDataDir() {
 export function getPrevGame() {
 	return prevGame;
 }
-export const window = getCurrentWebviewWindow();
+const hasTauriWindowRuntime =
+	typeof globalThis !== "undefined" &&
+	typeof globalThis.window !== "undefined" &&
+	"__TAURI_INTERNALS__" in globalThis.window;
+
+export const window = hasTauriWindowRuntime ? getCurrentWebviewWindow() : null;
 export function changeWindowTitle(title: string) {
-	window.setTitle(title);
+	window?.setTitle(title);
 }
 export async function setWindowType(type: number) {
 	if (type == 0) {
 		// if (await window.isMaximized())
-		window.unmaximize();
+		await window?.unmaximize();
 		// window.setFullscreen(false);
 		// window.setDecorations(true);
 		// currentMonitor().then((x) => {
 		// 	if (x?.size) window.setSize(new PhysicalSize(x.size.width * 0.8, x.size.height * 0.8));
 		// });
 	} else if (type == 1) {
-		window.unmaximize();
+		await window?.unmaximize();
 		// window.setFullscreen(false);
 		// window.setDecorations(false);
 		// currentMonitor().then((x) => {
 		// 	if (x?.size) window.setSize(new PhysicalSize(x.size.width * 0.8, x.size.height * 0.8));
 		// });
 	} else if (type == 2) {
-		window.maximize();
+		await window?.maximize();
 		// window.setFullscreen(true);
 	}
 }
-invoke<string>("get_image_server_url").then((url) => {
-	setImageServer(url + "/preview");
-});
+if (hasTauriWindowRuntime) {
+	invoke<string>("get_image_server_url").then((url) => {
+		setImageServer(url + "/preview");
+	});
+}
 export async function updateConfig(oconfig: LegacyConfig | null = null): Promise<RuntimeGlobalConfig> {
-	if (!oconfig) oconfig = readJsonText<LegacyConfig>(await readTextFile("config.json"));
+	if (!oconfig) oconfig = readJsonText<LegacyConfig>(await safeReadTextFile("config.json"));
 	info("[IMM] Updating config from:", oconfig);
 	if (compareVersions(oconfig.version || "0.0.0", "2.1.0") >= 0) {
 		return sanitizeGlobalSettings(oconfig as RuntimeGlobalConfig) as RuntimeGlobalConfig;
@@ -357,7 +387,7 @@ export async function updateConfig(oconfig: LegacyConfig | null = null): Promise
 		}
 		return newPreset;
 	});
-	await writeTextFile(
+	await safeWriteTextFile(
 		`configWW.json`,
 		JSON.stringify(
 			{
@@ -395,7 +425,7 @@ export async function verifyGameDir(game: Games) {
 		sourceDir: "",
 	};
 	try {
-		(await readTextFileNative(join(XXPath, "d3dx.ini"))).split("\n").forEach((line: string) => {
+		(await safeReadTextFile(join(XXPath, "d3dx.ini"))).split("\n").forEach((line: string) => {
 			const [key, value] = line.split("=").map((x: string) => x.trim());
 			if (key == "include_recursive") {
 				const isPath = value.slice(1, 3) == ":\\";
@@ -414,7 +444,7 @@ export async function initGame(game: RuntimeGame, status = true) {
 	info(`[IMM] Initializing game: ${game}...`);
 	store.set(ONLINE_DATA, {});
 	const savedConfig = (await safeExists(`config${game}.json`))
-		? readJsonText<Partial<RuntimeGameConfig>>(await readTextFile(`config${game}.json`))
+		? readJsonText<Partial<RuntimeGameConfig>>(await safeReadTextFile(`config${game}.json`))
 		: {};
 	const mergedSettings = {
 		...defConfigXX.settings,
@@ -452,7 +482,7 @@ export async function initGame(game: RuntimeGame, status = true) {
 	} else {
 		dataDir = configXX.targetDir;
 	}
-	await writeTextFile(`config${game}.json`, JSON.stringify(configXX, null, 2));
+	await safeWriteTextFile(`config${game}.json`, JSON.stringify(configXX, null, 2));
 	apiClient.setGame(game);
 	await setCategories(game, status);
 	invoke("set_window_icon", { game });
@@ -567,7 +597,7 @@ export async function checkWWMM() {
 	const wwmmPath = await path.join(await path.localDataDir(), "Wuwa Mod Manager (WWMM)", "config.json");
 	if (await safeExists(wwmmPath)) {
 		//info('exists')
-		return (await readTextFile(wwmmPath)) || null;
+		return (await safeReadTextFile(wwmmPath)) || null;
 	}
 	return null;
 }
@@ -581,18 +611,18 @@ export async function maintainBackups() {
 	for (const file of files) {
 		if (await safeExists(file)) {
 			try {
-				const data = JSON.parse(await readTextFile(file));
+				const data = JSON.parse(await safeReadTextFile(file));
 				delete data.categories;
 				if (await safeExists(backupPath + file + ".bak")) {
 					try {
-						const backupData = readJsonText<Record<string, unknown>>(await readTextFile(backupPath + file + ".bak"));
+						const backupData = readJsonText<Record<string, unknown>>(await safeReadTextFile(backupPath + file + ".bak"));
 						if (
 							backupData.updatedAt &&
 							new Date().getTime() - new Date(String(backupData.updatedAt)).getTime() > 24 * 60 * 60 * 1000
 						) {
 							info(`[IMM] Creating backup for: ${file}...`);
 							await remove(backupPath + file + ".bak.bak").catch(() => undefined);
-							const currentBackupText = await readTextFile(backupPath + file + ".bak");
+							const currentBackupText = await safeReadTextFile(backupPath + file + ".bak");
 							await safeWriteTextFile(backupPath + file + ".bak.bak", currentBackupText);
 							await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 						}
@@ -609,7 +639,7 @@ export async function maintainBackups() {
 				store.set(MAIN_FUNC_STATUS, `Config file corrupted, restoring from backup`);
 				if (await safeExists(backupPath + file + ".bak")) {
 					try {
-						const backupData = readJsonText<Record<string, unknown>>(await readTextFile(backupPath + file + ".bak"));
+						const backupData = readJsonText<Record<string, unknown>>(await safeReadTextFile(backupPath + file + ".bak"));
 						await safeWriteTextFile(file, JSON.stringify(backupData, null, 2));
 						info(`[IMM] Successfully restored backup for: ${file}`);
 					} catch {
@@ -617,7 +647,7 @@ export async function maintainBackups() {
 						if (await safeExists(backupPath + file + ".bak.bak")) {
 							try {
 								const backupData2 = readJsonText<Record<string, unknown>>(
-									await readTextFile(backupPath + file + ".bak.bak")
+									await safeReadTextFile(backupPath + file + ".bak.bak")
 								);
 								await safeWriteTextFile(file, JSON.stringify(backupData2, null, 2));
 								await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(backupData2, null, 2));
@@ -762,11 +792,11 @@ export async function main(useGame = "" as Games) {
 		if (!(await safeExists("config.json"))) {
 			store.set(MAIN_FUNC_STATUS, "Creating default config.json");
 			info("[IMM] Creating default config.json...");
-			await writeTextFile("config.json", JSON.stringify(defConfig, null, 2));
+			await safeWriteTextFile("config.json", JSON.stringify(defConfig, null, 2));
 		}
 		await maintainBackups();
 		info("[IMM] Reading runtime config.json...");
-		const rawConfigText = await readTextFile("config.json");
+		const rawConfigText = await safeReadTextFile("config.json");
 		info("[IMM] Runtime config.json length:", rawConfigText.length);
 		const rawConfig = readJsonText<Record<string, unknown>>(rawConfigText);
 		config = sanitizeGlobalSettings(safeLoadJson(structuredClone(defConfig), rawConfig));
@@ -812,7 +842,7 @@ export async function main(useGame = "" as Games) {
 			config = await updateConfig();
 		}
 		info("[IMM] Saving config...");
-		await writeTextFile("config.json", JSON.stringify(config, null, 2));
+		await safeWriteTextFile("config.json", JSON.stringify(config, null, 2));
 		await readXXMIConfig(config.XXMI || "");
 		store.set(MAIN_FUNC_STATUS, "Initializing game");
 		info("[IMM] Initializing game...");

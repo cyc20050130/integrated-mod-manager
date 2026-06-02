@@ -719,8 +719,10 @@ function RightLocal() {
 											}}
 										>
 											<Tooltip>
-												<TooltipTrigger>
-													<LinkIcon className=" w-4 h-4" />
+												<TooltipTrigger asChild>
+													<span className="flex items-center justify-center">
+														<LinkIcon className=" w-4 h-4" />
+													</span>
 												</TooltipTrigger>
 												<TooltipContent className="flex items-center justify-center w-20">
 													<p className="max-w-20 w-full text-center">
@@ -746,8 +748,10 @@ function RightLocal() {
 												className="bg-pat2"
 											>
 												<Tooltip>
-													<TooltipTrigger>
-														<SearchIcon className=" w-4 h-4 pointer-events-none" />
+													<TooltipTrigger asChild>
+														<span className="flex items-center justify-center">
+															<SearchIcon className=" w-4 h-4 pointer-events-none" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent className="w-15 flex items-center justify-center">
 														<p className="max-w-15 w-full text-center">
@@ -773,7 +777,7 @@ function RightLocal() {
 								</Label>
 								<div className="w-48.5 flex gap-1 justify-evenly items-center px-1">
 									<Tooltip>
-										<TooltipTrigger>
+										<TooltipTrigger asChild>
 											<Button
 												onClick={() => {
 													if (!item) return;
@@ -816,7 +820,7 @@ function RightLocal() {
 										</TooltipContent>
 									</Tooltip>
 									<Tooltip>
-										<TooltipTrigger>
+										<TooltipTrigger asChild>
 											<Button
 												onClick={() => {
 													if (!item) return;
@@ -862,7 +866,7 @@ function RightLocal() {
 										</TooltipContent>
 									</Tooltip>
 									<Tooltip>
-										<TooltipTrigger>
+										<TooltipTrigger asChild>
 											<Button
 												onClick={toggleBlacklist}
 												className="aspect-square flex flex-col h-8"

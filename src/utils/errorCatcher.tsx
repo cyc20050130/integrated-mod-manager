@@ -173,7 +173,9 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, S
 								<div className="min-h-fit text-accent my-6 text-3xl">
 									Component Stack Trace
 									<Tooltip>
-										<TooltipTrigger></TooltipTrigger>
+										<TooltipTrigger asChild>
+											<span aria-hidden="true" />
+										</TooltipTrigger>
 										<TooltipContent className="opacity-0"></TooltipContent>
 									</Tooltip>
 								</div>
