@@ -13,13 +13,14 @@ import {
 	RIGHT_SIDEBAR_OPEN,
 	RIGHT_SLIDEOVER_OPEN,
 	SETTINGS,
+	TARGET,
 } from "./utils/vars";
 import { AnimatePresence, motion } from "motion/react";
 import Checklist from "./_Checklist/Checklist";
 import { initializeThemes } from "./utils/theme";
 import Changes from "./_Changes/Changes";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { refreshModList, saveConfigs } from "./utils/filesys";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushRuntimeState, refreshModList, saveConfigs } from "./utils/filesys";
 import { SidebarProvider } from "./components/ui/sidebar";
 import LeftSidebar from "./_LeftSidebar/Left";
 import Main from "./_Main/Main";
@@ -28,10 +29,12 @@ import RightOnline from "./_RightSidebar/RightOnline";
 import { main } from "./utils/init";
 import ToastProvider from "./_Toaster/ToastProvider";
 import Progress from "./_Progress/Progress";
+import { startIntegrityMaintenanceOnLaunch } from "./utils/linkIntegrity";
+import { startIniStateSync, stopIniStateSync, syncIniStateOnce } from "./utils/iniStateSync";
 // import { Button } from "./components/ui/button";
 
 initializeThemes();
-main();
+let appMainStarted = false;
 function App() {
 	const initDone = useAtomValue(INIT_DONE);
 	const lang = useAtomValue(LANG);
@@ -40,28 +43,66 @@ function App() {
 	const game = useAtomValue(GAME);
 	const changes = useAtomValue(CHANGES);
 	const settings = useAtomValue(SETTINGS);
+	const target = useAtomValue(TARGET);
 	const leftSidebarOpen = useAtomValue(LEFT_SIDEBAR_OPEN);
 	// const setOnlineSelected = useSetAtom(ONLINE_SELECTED);
 	const [rightSidebarOpen, setRightSidebarOpen] = useAtom(RIGHT_SIDEBAR_OPEN);
 	const [rightSlideOverOpen, setRightSlideOverOpen] = useAtom(RIGHT_SLIDEOVER_OPEN);
 	const setModList = useSetAtom(MOD_LIST);
+	const modList = useAtomValue(MOD_LIST);
 	const progressOverlay = useAtomValue(PROGRESS_OVERLAY);
 	const [_, setShowModeSwitch] = useState(false);
 	const [previousOnline, setPreviousOnline] = useState(online);
+	const initialIniSyncTargetRef = useRef("");
+	useEffect(() => {
+		if (appMainStarted) return;
+		appMainStarted = true;
+		void main();
+	}, []);
 	const afterInit = useCallback(async () => {
 		saveConfigs();
 		setModList(await refreshModList());
 		return Promise.resolve();
-	}, []);
+	}, [setModList]);
 	useEffect(() => {
 		if (err) {
 			throw new Error(err);
 		}
 	}, [err]);
 	useEffect(() => {
+		const handleBeforeUnload = () => {
+			void flushRuntimeState("window-beforeunload");
+		};
+		window.addEventListener("beforeunload", handleBeforeUnload);
+		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+	}, []);
+	useEffect(() => {
+		if (!initDone) return;
+		void startIntegrityMaintenanceOnLaunch();
+	}, [initDone]);
+	useEffect(() => {
+		if (!initDone || !target) {
+			initialIniSyncTargetRef.current = "";
+			void stopIniStateSync();
+			return;
+		}
+		void startIniStateSync();
+		return () => {
+			void stopIniStateSync();
+		};
+	}, [initDone, target]);
+	useEffect(() => {
+		if (!initDone || !target || !modList.length) return;
+		if (initialIniSyncTargetRef.current === target) return;
+		initialIniSyncTargetRef.current = target;
+		void syncIniStateOnce("app-init-sync");
+	}, [initDone, target, modList]);
+	useEffect(() => {
 		if (previousOnline !== online) {
-			setShowModeSwitch(true);
-			setPreviousOnline(online);
+			queueMicrotask(() => {
+				setShowModeSwitch(true);
+				setPreviousOnline(online);
+			});
 			const timer2 = setTimeout(() => {
 				setRightSidebarOpen(!online);
 			}, 300);
@@ -76,7 +117,7 @@ function App() {
 			};
 		}
 		return undefined;
-	}, [online]);
+	}, [online, previousOnline, setRightSidebarOpen]);
 	const leftSidebarStyle = useMemo(
 		() => ({
 			minWidth: leftSidebarOpen ? "20.95rem" : "3.95rem",

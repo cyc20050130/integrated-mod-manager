@@ -559,8 +559,8 @@ function SidebarMenuSkeleton({
 }) {
   
   const width = React.useMemo(() => {
-    return `${Math.floor(Math.random() * 40) + 50}%`
-  }, [])
+    return showIcon ? "70%" : "60%"
+  }, [showIcon])
   return (
     <div
       data-slot="sidebar-menu-skeleton"

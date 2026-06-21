@@ -1,7 +1,7 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "Integrated Mod Manager (IMM)",
-	"version": "3.1.0",
+	"version": "3.2.19",
 	"identifier": "jp.bhatt.wwmm",
 	"build": {
 		"beforeDevCommand": "npm run dev",
@@ -31,7 +31,14 @@
 			"assetProtocol": {
 				"enable": true,
 				"scope": [
-					"**"
+					"$APPDATA/**",
+					"$APPLOCALDATA/**",
+					"$LOCALDATA/**",
+					"$RESOURCE/**",
+					"$DOCUMENT/**",
+					"$DOWNLOAD/**",
+					"$PICTURE/**",
+					"$VIDEO/**"
 				]
 			},
 			"capabilities": [
@@ -55,14 +62,15 @@
 			}
 		},
 		"resources": [
-			"ext/*"
+			"ext/*",
+			"tools/**/*"
 		]
 	},
 	"plugins": {
 		"updater": {
 			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVDNDVCOEZFQzIyMkJDMjkKUldRcHZDTEMvcmhGWEhGdWNGcFJzN1hYR05YVXZPMXlzcVc3b2xrMzA5M25SdTZkMldtOUFWbzcK",
 			"endpoints": [
-				"https://github.com/jpbhatt21/integrated-mod-manager/releases/latest/download/latest.json"
+				"https://raw.githubusercontent.com/jpbhatt21/integrated-mod-manager/main/latest.json"
 			],
 			"windows": {
 				"installMode": "passive"

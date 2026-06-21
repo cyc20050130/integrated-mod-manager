@@ -1,5 +1,20 @@
+import type { UnifiedOnlineListCard } from "./unifiedOnline";
+
 export type Games = "WW" | "ZZ" | "GI" | "SR" | "EF" | ""; //| "GI" ;
 export type Language = "en" | "cn" | "ru" | "jp" | "kr" | "";
+export interface WuwaModFixerState {
+	version: string;
+	exePath: string;
+	checkedAt: number;
+	releaseUrl: string;
+}
+export interface OnlineBlacklistEntry {
+	game: Games;
+	route: string;
+	source?: string;
+	name?: string;
+	createdAt: number;
+}
 export interface DirEntry {
 	name: string;
 	isDirectory: boolean;
@@ -24,16 +39,30 @@ export interface GlobalSettings {
 	notice?: number;
 	preReleases: boolean;
 	chkModUpdates: boolean;
+	onlineBlacklist: OnlineBlacklistEntry[];
+	wuwaModFixer: WuwaModFixerState;
 }
 export interface GameSettings {
 	launch: 0 | 1 | 2;
 	hotReload: 0 | 1 | 2;
 	onlineType: string;
 	customCategories: { [key: string]: CustomCategory };
+	download: DownloadSettings;
 }
 export interface Settings {
 	global: GlobalSettings;
 	game: GameSettings;
+}
+export interface DownloadSettings {
+	maxConcurrentDownloads: number;
+	maxConcurrentExtracts: number;
+	requestRetries: number;
+	connectTimeoutSec: number;
+	stallTimeoutSec: number;
+	maxRequeueRounds: number;
+	progressIntervalMs: number;
+	progressBytesThresholdKB: number;
+	backoffBaseMs: number;
 }
 export interface CustomCategory {
 	_sIconUrl: string;
@@ -57,8 +86,8 @@ export interface ModData {
 	tags?: string[];
 	note?: string;
 	namespace?: string;
-	// state?: { [key: string]: any };
-	vars?: { [key: string]: any };
+	// state?: Record<string, unknown>;
+	vars?: Record<string, Record<string, unknown>>;
 	crop?: {
 		scale?: number;
 		x?: number;
@@ -84,6 +113,7 @@ export interface GameConfig {
 	data: ModDataObj;
 	presets: Preset[];
 	categories: Category[];
+	downloads?: DownloadList;
 	updatedAt: string;
 }
 export interface DownloadItem {
@@ -95,14 +125,24 @@ export interface DownloadItem {
 	file: string;
 	updated: number;
 	name: string;
+	displayName?: string;
+	safeName?: string;
 	fname: string;
 	key?: string;
+	path?: string;
+	dlPath?: string;
+	updatedAt?: number;
+	requeueRounds?: number;
+	lastError?: string;
+	createdAt?: number;
+	lastTriedAt?: number;
 }
 export interface DownloadList {
 	queue: DownloadItem[];
-	downloading: DownloadItem | null;
+	downloading: DownloadItem[];
 	completed: DownloadItem[];
 	extracting: DownloadItem[];
+	failed: DownloadItem[];
 }
 export interface ModHotKeys {
 	key: string;
@@ -115,6 +155,7 @@ export interface ModHotKeys {
 	namespace: string;
 	pref: string | null;
 	reset: string | null;
+	state?: string | null;
 }
 export interface Mod {
 	isDir: boolean;
@@ -199,8 +240,8 @@ export interface OnlineMod {
 	_tsDateModified?: number;
 	_tsDateUpdated?: number;
 	_bHasFiles?: boolean;
-	_aTags?: any[];
-	_aFiles?: any[];
+	_aTags?: unknown[];
+	_aFiles?: unknown[];
 	_aPreviewMedia?: OnlineModPreviewMedia;
 	_aSubmitter: OnlineModSubmitter;
 	_aRootCategory: OnlineModCategory;
@@ -214,11 +255,12 @@ export interface OnlineMod {
 	_nViewCount?: number;
 	_bIsOwnedByAccessor?: boolean;
 	_sImageUrl?: string;
-	_aComments?: any[];
+	_aComments?: unknown[];
 	_sPeriod?: "today" | "yesterday" | "week" | "month" | "3month" | "6month" | "year" | "alltime";
 }
+export type OnlineListItem = OnlineMod | UnifiedOnlineListCard;
 export interface OnlineData {
-	[key: string]: OnlineMod[] | OnlineMod;
+	[key: string]: OnlineListItem[] | OnlineListItem;
 }
 export interface ChangeInfo {
 	before: DirEntry[];
@@ -226,4 +268,65 @@ export interface ChangeInfo {
 	map: Record<string, DirEntry>;
 	title: string;
 	skip: boolean;
+}
+
+export interface LinkAuditModEntry {
+	path: string;
+	category: string;
+	name: string;
+	hasDataRecord: boolean;
+	source?: string;
+}
+
+export interface LinkAuditOrphanEntry {
+	path: string;
+	category: string;
+	name: string;
+	source: string;
+}
+
+export interface LinkAuditSuggestion {
+	game: Games;
+	localPath: string;
+	candidateDataPath: string;
+	source: string;
+	confidence: number;
+	reason: string;
+}
+
+export interface LinkAuditGameReport {
+	game: Games;
+	configPath: string;
+	sourceDir: string;
+	modRoot: string;
+	scannedAt: string;
+	matched: LinkAuditModEntry[];
+	unlinked: LinkAuditModEntry[];
+	orphans: LinkAuditOrphanEntry[];
+	suggestedMappings: LinkAuditSuggestion[];
+	warnings: string[];
+}
+
+export interface LinkAuditSummary {
+	matched: number;
+	unlinked: number;
+	orphans: number;
+	suggestedMappings: number;
+}
+
+export interface LinkAuditReport {
+	generatedAt: string;
+	scope: Games[];
+	games: LinkAuditGameReport[];
+	summary: LinkAuditSummary;
+}
+
+export interface PreviewBackfillState {
+	running: boolean;
+	queued: number;
+	completed: number;
+	failed: number;
+	skippedCooldown: number;
+	lastRunAt: number;
+	lastError?: string;
 }

@@ -17,7 +17,7 @@ function Blur({  blur }: { blur: boolean }) {
 					onClick={(e) => {
 						e.currentTarget.style.opacity = "0";
 						e.currentTarget.style.pointerEvents = "none";
-						let parent = e.currentTarget.parentElement;
+						const parent = e.currentTarget.parentElement;
 						if (parent) {
 							parent.style.background = "#0000";
 							parent.style.backdropFilter = "blur(0px)";

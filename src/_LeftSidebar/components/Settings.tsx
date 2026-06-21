@@ -14,11 +14,27 @@ import { join, setHotreload } from "@/utils/hotreload";
 import { getCwd, setPrePostLaunch, setWindowType } from "@/utils/init";
 import TEXT from "@/textData.json";
 import { exportConfig, keySort } from "@/utils/utils";
-import { INIT_DONE, PRESETS, SAVED_LANG, SETTINGS, SOURCE, store, TARGET, TEXT_DATA, XXMI_MODE } from "@/utils/vars";
+import {
+	INIT_DONE,
+	LINK_AUDIT_REPORT,
+	LINK_AUDIT_RUNNING,
+	PRESETS,
+	PREVIEW_BACKFILL_STATE,
+	SAVED_LANG,
+	SETTINGS,
+	SOURCE,
+	store,
+	TARGET,
+	TEXT_DATA,
+	XXMI_MODE,
+} from "@/utils/vars";
+import { DownloadSettings } from "@/utils/types";
+import { DEFAULT_DOWNLOAD_SETTINGS } from "@/utils/downloads";
 import { Separator } from "@radix-ui/react-separator";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { useAtom, useAtomValue } from "jotai";
+import { exportLinkAuditReport, runLinkIntegrityScan, runPreviewBackfill } from "@/utils/linkIntegrity";
 import {
 	AppWindowIcon,
 	CheckIcon,
@@ -44,8 +60,8 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 let bg: HTMLBodyElement | null = null;
-let keys = [] as any[];
-let keysdown = [] as any[];
+let keys: string[] = [];
+let keysdown: string[] = [];
 function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	const textData = useAtomValue(TEXT_DATA);
 	const customMode = useAtomValue(XXMI_MODE);
@@ -56,15 +72,36 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	const [_, setSource] = useAtom(SOURCE);
 	const [target, setTarget] = useAtom(TARGET);
 	const [settings, setSettings] = useAtom(SETTINGS);
+	const linkAuditReport = useAtomValue(LINK_AUDIT_REPORT);
+	const linkAuditRunning = useAtomValue(LINK_AUDIT_RUNNING);
+	const previewBackfillState = useAtomValue(PREVIEW_BACKFILL_STATE);
 	const [alertOpen, setAlertOpen] = useState(false);
 	const [globalPage, setGlobalPage] = useState(true);
 	const [langAlertData, setLangAlertData] = useState({ prev: "en", new: "en" } as {
 		prev: keyof typeof TEXT;
 		new: keyof typeof TEXT;
 	});
+	const setDownloadNumber = (field: keyof DownloadSettings, min: number, max: number, raw: string) => {
+		const parsed = Number.parseInt(raw, 10);
+		if (!Number.isFinite(parsed)) return;
+		const value = Math.max(min, Math.min(max, parsed));
+		setSettings((prev) => {
+			const current = prev.game.download || DEFAULT_DOWNLOAD_SETTINGS;
+			prev.game.download = {
+				...current,
+				[field]: value,
+			};
+			return { ...prev };
+		});
+		saveConfigs();
+	};
 	const importConfig = async () => {
 		try {
-			const dialogOptions: any = {
+			const dialogOptions: {
+				title: string;
+				filters: { name: string; extensions: string[] }[];
+				defaultPath?: string;
+			} = {
 				title: textData._LeftSideBar._components._Settings._ImportExport.ImportPop || "Import Config",
 				filters: [
 					{
@@ -88,9 +125,22 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 					addToast({ type: "error", message: textData._Toasts.InvalidConfig });
 				}
 			}
-		} catch (error) {
+		} catch {
 			addToast({ type: "error", message: textData._Toasts.ErrorImporting });
 		}
+	};
+	const triggerLinkScan = async () => {
+		const report = await runLinkIntegrityScan();
+		if (!report) return;
+		void runPreviewBackfill(report);
+		addToast({
+			type: "success",
+			message: `Link scan done: ${report.summary.matched} matched, ${report.summary.unlinked} unlinked, ${report.summary.orphans} orphans`,
+		});
+	};
+	const exportScanReport = async () => {
+		const ok = await exportLinkAuditReport(linkAuditReport);
+		if (ok) addToast({ type: "success", message: "Link scan report exported" });
 	};
 	
 	return (
@@ -183,7 +233,9 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 				<div className="min-h-fit text-accent my-6 text-3xl">
 					{textData.Settings}
 					<Tooltip>
-						<TooltipTrigger></TooltipTrigger>
+						<TooltipTrigger asChild>
+							<span aria-hidden="true" />
+						</TooltipTrigger>
 						<TooltipContent className="opacity-0"></TooltipContent>
 					</Tooltip>
 				</div>
@@ -304,8 +356,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<div className="flex items-center gap-1">
 												{textData._LeftSideBar._components._Settings.NSFW}
 												<Tooltip>
-													<TooltipTrigger>
-														<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent>
 														<div className="flex flex-col gap-1">
@@ -420,8 +474,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<div className="flex items-center gap-1">
 												{textData._LeftSideBar._components._Settings.AutoReload}
 												<Tooltip>
-													<TooltipTrigger>
-														<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent>
 														<div className="flex flex-col gap-1">
@@ -445,13 +501,13 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<Tabs
 												defaultValue={settings.game.hotReload.toString()}
 												className="w-full"
-												onValueChange={(e: any) => {
-													e = parseInt(e) as 0 | 1 | 2;
+												onValueChange={(e) => {
+													const nextValue = Number.parseInt(e, 10) as 0 | 1 | 2;
 													setSettings((prev) => {
-														prev.game.hotReload = e;
+														prev.game.hotReload = nextValue;
 														return { ...prev };
 													});
-													setHotreload(e, settings.global.game, target);
+													setHotreload(nextValue, settings.global.game, target);
 													saveConfigs();
 												}}
 											>
@@ -475,8 +531,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											<div className="flex items-center gap-1">
 												{textData._LeftSideBar._components._Settings.LaunchSettings}
 												<Tooltip>
-													<TooltipTrigger>
-														<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent>
 														<div className="flex flex-col gap-1">
@@ -505,7 +563,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 														: {}
 												}
 												onValueChange={(e) => {
-													let val = parseInt(e) as 0 | 1 | 2;
+													const val = parseInt(e) as 0 | 1 | 2;
 													if (val == 2 || settings.game.launch == 2) setPrePostLaunch(settings.global.game, val == 2);
 													if (val == 2) {
 														setAlertType("xxmi");
@@ -553,10 +611,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											</div>
 										</div>
 									</div>
-									<div className="min-w-1/2 justify-evenly flex flex-col min-h-full gap-2 pr-2">
-										<div className="flex flex-col w-full gap-2">
-											{textData._LeftSideBar._components._Settings.ImportExport}
-											<div className="flex justify-start w-full gap-2 pr-2">
+										<div className="min-w-1/2 justify-evenly flex flex-col min-h-full gap-2 pr-2">
+											<div className="flex flex-col w-full gap-2">
+												{textData._LeftSideBar._components._Settings.ImportExport}
+												<div className="flex justify-start w-full gap-2 pr-2">
 												<Button
 													// disabled={disabled}
 													onClick={importConfig}
@@ -565,25 +623,135 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 													<DownloadIcon className="w-4 h-4" />
 													{textData._LeftSideBar._components._Settings._ImportExport.Import}
 												</Button>
-												<Button onClick={()=>exportConfig(settings,textData)} className="h-9 w-1/2 text-sm">
-													<UploadIcon className="w-4 h-4" />
-													{textData._LeftSideBar._components._Settings._ImportExport.Export}
-												</Button>
+													<Button onClick={()=>exportConfig(settings,textData)} className="h-9 w-1/2 text-sm">
+														<UploadIcon className="w-4 h-4" />
+														{textData._LeftSideBar._components._Settings._ImportExport.Export}
+													</Button>
+												</div>
 											</div>
-										</div>
-										<div className="flex items-center gap-1">
-											{textData._LeftSideBar._components._Settings.HotKey}
-											<Tooltip>
-												<TooltipTrigger>
-													<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
-												</TooltipTrigger>
+											<div className="flex flex-col w-full gap-2">
+												<div className="flex items-center gap-1">Link Integrity (Review Only)</div>
+												<div className="flex justify-start w-full gap-2 pr-2">
+													<Button onClick={triggerLinkScan} className="h-9 w-1/2 text-sm" disabled={linkAuditRunning}>
+														{linkAuditRunning ? "Scanning..." : "Scan All Games"}
+													</Button>
+													<Button
+														onClick={exportScanReport}
+														className="h-9 w-1/2 text-sm"
+														disabled={!linkAuditReport || linkAuditRunning}
+													>
+														Export JSON
+													</Button>
+												</div>
+												<div className="text-[11px] text-muted-foreground">
+													{linkAuditReport
+														? `matched ${linkAuditReport.summary.matched} | unlinked ${linkAuditReport.summary.unlinked} | orphans ${linkAuditReport.summary.orphans} | suggestions ${linkAuditReport.summary.suggestedMappings}`
+														: "No scan report yet"}
+												</div>
+												<div className="text-[11px] text-muted-foreground">
+													{previewBackfillState.running
+														? `preview backfill running: ${previewBackfillState.completed}/${previewBackfillState.queued} done, ${previewBackfillState.failed} failed, cooldown skips ${previewBackfillState.skippedCooldown}`
+														: `preview backfill last run: ${
+																previewBackfillState.lastRunAt
+																	? new Date(previewBackfillState.lastRunAt).toLocaleString()
+																	: "never"
+															}`}
+												</div>
+												{linkAuditReport && linkAuditReport.games.some((g) => g.suggestedMappings.length > 0) && (
+													<div className="max-h-28 overflow-y-auto border rounded-md px-2 py-1 text-xs">
+														{linkAuditReport.games.map((g) => (
+															<div key={g.game} className="mb-2">
+																<div className="text-accent">{g.game} suggestions ({g.suggestedMappings.length})</div>
+																{g.suggestedMappings.slice(0, 6).map((s) => (
+																	<div key={`${g.game}_${s.localPath}_${s.candidateDataPath}`} className="text-muted-foreground">
+																		{`${s.localPath} <= ${s.candidateDataPath} (${Math.round(s.confidence * 100)}%)`}
+																	</div>
+																))}
+															</div>
+														))}
+													</div>
+												)}
+											</div>
+											<div className="flex flex-col w-full gap-2">
+												<div className="flex items-center gap-1">Download Queue (Advanced)</div>
+												<div className="grid grid-cols-2 gap-2">
+													<div className="flex flex-col gap-1">
+														<label className="text-xs text-muted-foreground">Downloads</label>
+														<Input
+															type="number"
+															min={1}
+															max={3}
+															value={settings.game.download.maxConcurrentDownloads}
+															onChange={(e) => setDownloadNumber("maxConcurrentDownloads", 1, 3, e.currentTarget.value)}
+														/>
+													</div>
+													<div className="flex flex-col gap-1">
+														<label className="text-xs text-muted-foreground">Extracts</label>
+														<Input
+															type="number"
+															min={1}
+															max={4}
+															value={settings.game.download.maxConcurrentExtracts}
+															onChange={(e) => setDownloadNumber("maxConcurrentExtracts", 1, 4, e.currentTarget.value)}
+														/>
+													</div>
+													<div className="flex flex-col gap-1">
+														<label className="text-xs text-muted-foreground">Request retries</label>
+														<Input
+															type="number"
+															min={1}
+															max={5}
+															value={settings.game.download.requestRetries}
+															onChange={(e) => setDownloadNumber("requestRetries", 1, 5, e.currentTarget.value)}
+														/>
+													</div>
+													<div className="flex flex-col gap-1">
+														<label className="text-xs text-muted-foreground">Requeue rounds</label>
+														<Input
+															type="number"
+															min={1}
+															max={8}
+															value={settings.game.download.maxRequeueRounds}
+															onChange={(e) => setDownloadNumber("maxRequeueRounds", 1, 8, e.currentTarget.value)}
+														/>
+													</div>
+													<div className="flex flex-col gap-1">
+														<label className="text-xs text-muted-foreground">Connect timeout (s)</label>
+														<Input
+															type="number"
+															min={3}
+															max={60}
+															value={settings.game.download.connectTimeoutSec}
+															onChange={(e) => setDownloadNumber("connectTimeoutSec", 3, 60, e.currentTarget.value)}
+														/>
+													</div>
+													<div className="flex flex-col gap-1">
+														<label className="text-xs text-muted-foreground">Stall timeout (s)</label>
+														<Input
+															type="number"
+															min={5}
+															max={180}
+															value={settings.game.download.stallTimeoutSec}
+															onChange={(e) => setDownloadNumber("stallTimeoutSec", 5, 180, e.currentTarget.value)}
+														/>
+													</div>
+												</div>
+											</div>
+											<div className="flex items-center gap-1">
+												{textData._LeftSideBar._components._Settings.HotKey}
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<span className="inline-flex items-center justify-center">
+															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+														</span>
+													</TooltipTrigger>
 												<TooltipContent>
 													<div className="flex flex-col gap-1">
 														<div>{textData._LeftSideBar._components._Settings._HotKey.HKMsg1}</div>
 														<div>
-															{textData._LeftSideBar._components._Settings._HotKey.HKMsg2} <b>'IMM'</b>{" "}
+															{textData._LeftSideBar._components._Settings._HotKey.HKMsg2} <b>&apos;IMM&apos;</b>{" "}
 															{textData._LeftSideBar._components._Settings._HotKey.HKMsg3}{" "}
-															<b>'{textData._LeftSideBar._components._Settings._AutoReload.OnFocus}'</b>
+															<b>&apos;{textData._LeftSideBar._components._Settings._AutoReload.OnFocus}&apos;</b>
 														</div>
 														<Separator />
 														<div>{textData._LeftSideBar._components._Settings._HotKey.HKMsg4}</div>
@@ -602,7 +770,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 										<div className="max-h-51 flex flex-col w-full h-full gap-1 p-2 ml-2 overflow-x-hidden overflow-y-auto">
 											{presets.length > 0 ? (
 												presets.map((preset, index) => (
-													<div className="flex flex-col items-center justify-between w-full h-16 gap-2">
+													<div key={preset.name || `preset-${index}`} className="flex flex-col items-center justify-between w-full h-16 gap-2">
 														<Input
 															className="w-full text-muted-foreground text-ellipsis h-10 p-0 overflow-hidden break-words border-0"
 															style={{ backgroundColor: "#0000" }}
@@ -625,8 +793,8 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 																	keysdown = [];
 																	keys = [];
 																} else {
-																	let next: any = [];
-																	let key = processHotkeyCode(e.code)
+																	let next: string[] = [];
+																	const key = processHotkeyCode(e.code)
 																		.split("")
 																		.map((x, i) => (i == 0 ? x.toUpperCase() : x))
 																		.join("");
@@ -644,8 +812,8 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 															}}
 															onKeyUpCapture={(e) => {
 																if (e.code == "Backspace" || e.code == "Escape") return;
-																let key = e.code;
-																let index = keysdown.indexOf(key);
+																const key = e.code;
+																const index = keysdown.indexOf(key);
 																if (index > -1) keysdown.splice(index, 1);
 																if (keysdown.length == 0) {
 																	keys = [];

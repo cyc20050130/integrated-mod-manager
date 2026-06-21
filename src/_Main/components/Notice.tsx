@@ -6,29 +6,31 @@ import { NOTICE, NOTICE_OPEN, TEXT_DATA, UPDATER_OPEN } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { TriangleAlertIcon, Undo2Icon, UploadIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-let timer = null as any;
+let timer: ReturnType<typeof setTimeout> | null = null;
 function Notice() {
 	const [noticeOpen, setNoticeOpen] = useAtom(NOTICE_OPEN);
 	const setUpdateeOpen = useSetAtom(UPDATER_OPEN);
 	const notice = useAtomValue(NOTICE);
-	const [counter, setCounter] = useState(10);
+	const [counter, setCounter] = useState(() => notice.timer || 10);
 	useEffect(() => {
-		let interval = null as any;
+		let interval: ReturnType<typeof setInterval> | null = null;
 		if (noticeOpen) {
-			if (timer) clearInterval(timer);
+			if (timer) clearTimeout(timer);
 			if (notice.timer > 0) {
 				let count = notice.timer;
-				setCounter(count);
+				timer = setTimeout(() => setCounter(count), 0);
 				interval = setInterval(() => {
 					count -= 1;
 					setCounter(count);
 					if (count <= 0) {
-						clearInterval(interval);
+						if (interval) clearInterval(interval);
 					}
 				}, 1000);
 			}
 		}
-		return () => interval && clearInterval(interval);
+		return () => {
+			if (interval) clearInterval(interval);
+		};
 	}, [notice, noticeOpen]);
 	//info(notice.ignoreable)
 	const textData = useAtomValue(TEXT_DATA);

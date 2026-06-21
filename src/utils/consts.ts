@@ -5,10 +5,12 @@ import {
 	DownloadItem,
 	Games,
 	InstalledItem,
+	LinkAuditReport,
 	Language,
 	Mod,
 	ModDataObj,
 	OnlineData,
+	PreviewBackfillState,
 	Preset,
 	Settings,
 } from "./types";
@@ -26,7 +28,7 @@ export const OLD_managedSRC = "DISABLED (Managed by IMM)";
 export const OLD_managedTGT = "Mods (Managed by IMM)";
 export const managedSRC = "DISABLED - ALL MODS ARE STORED HERE (Managed by IMM)";
 export const managedTGT = "DO NOT MODIFY (Managed by IMM)";
-export const VERSION = "3.1.0";
+export const VERSION = "3.2.19";
 export const GAMES: Games[] = ["WW", "ZZ", "GI", "SR", "EF"];
 export const GAME_GB_IDS: { [key: number]: Games } = {
 	20357: "WW",
@@ -99,17 +101,37 @@ export const DEFAULTS = {
 			listType: 0,
 			nsfw: 1,
 			toggleClick: 2,
-			ignore: VERSION,
-			clientDate: "1759866302559426603",
-			XXMI: "",
-			lang: "",
-			game: "",
-		},
+			ignore: "",
+				clientDate: "1759866302559426603",
+				XXMI: "",
+				lang: "",
+				game: "",
+				preReleases: false,
+				chkModUpdates: true,
+				onlineBlacklist: [],
+				wuwaModFixer: {
+					version: "",
+					exePath: "",
+					checkedAt: 0,
+					releaseUrl: "",
+				},
+			},
 		game: {
 			launch: 0,
 			hotReload: 1,
 			onlineType: "Mod",
 			customCategories: {},
+			download: {
+				maxConcurrentDownloads: 1,
+				maxConcurrentExtracts: 2,
+				requestRetries: 3,
+				connectTimeoutSec: 10,
+				stallTimeoutSec: 25,
+				maxRequeueRounds: 3,
+				progressIntervalMs: 700,
+				progressBytesThresholdKB: 256,
+				backoffBaseMs: 2000,
+			},
 		},
 	} as Settings,
 	SOURCE: "",
@@ -123,9 +145,10 @@ export const DEFAULTS = {
 	DOWNLOAD_LIST: {
 		...{
 			queue: [] as DownloadItem[],
-			downloading: null as DownloadItem | null,
+			downloading: [] as DownloadItem[],
 			completed: [] as DownloadItem[],
 			extracting: [] as DownloadItem[],
+			failed: [] as DownloadItem[],
 		},
 	},
 	ONLINE: false,
@@ -146,10 +169,21 @@ export const DEFAULTS = {
 	SEARCH: "",
 	INSTALLED_ITEMS: [] as InstalledItem[],
 	ONLINE_DATA: {} as OnlineData,
+	ONLINE_SOURCE: "all" as const,
 	ONLINE_TYPE: "Mod",
 	ONLINE_SORT: "",
 	ONLINE_PATH: "home&type=Mod",
 	ONLINE_SELECTED: "",
+	LINK_AUDIT_REPORT: null as LinkAuditReport | null,
+	LINK_AUDIT_RUNNING: false,
+	PREVIEW_BACKFILL_STATE: {
+		running: false,
+		queued: 0,
+		completed: 0,
+		failed: 0,
+		skippedCooldown: 0,
+		lastRunAt: 0,
+	} as PreviewBackfillState,
 };
 export const SORT_OPTIONS = Object.fromEntries(
 	[

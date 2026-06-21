@@ -242,7 +242,7 @@ def create_release_data():
         print("exe sig not found, leaving it blank")
     
     # Create URL
-    url = f"https://github.com/jpbhatt21/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._{version}_x64-setup.exe"
+    url = f"https://github.com/jpbhatt21/integrated-mod-manager/releases/download/v{version}/Integrated.Mod.Manager.IMM._{version}_x64-setup.exe"
     
     # Print summary
     print("\n" + "="*60)
@@ -411,7 +411,7 @@ def main():
                     print("exe sig not found, leaving it blank")
                 
                 # Update signature and URL in platforms
-                url = f"https://github.com/jpbhatt21/integrated-mod-manager/releases/latest/download/Integrated.Mod.Manager.IMM._{version}_x64-setup.exe"
+                url = f"https://github.com/jpbhatt21/integrated-mod-manager/releases/download/v{version}/Integrated.Mod.Manager.IMM._{version}_x64-setup.exe"
                 if 'platforms' in data and 'windows-x86_64' in data['platforms']:
                     data['platforms']['windows-x86_64']['signature'] = sig
                     data['platforms']['windows-x86_64']['url'] = url

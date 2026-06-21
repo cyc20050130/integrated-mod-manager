@@ -6,27 +6,37 @@ import { saveConfigs } from "@/utils/filesys";
 import { Mod } from "@/utils/types";
 import { getImageUrl, handleImageError } from "@/utils/utils";
 import { DATA, LAST_UPDATED, MOD_LIST } from "@/utils/vars";
-import { useAtom,  useSetAtom } from "jotai";
-import {  RefreshCcwIcon, SaveIcon, Undo2Icon } from "lucide-react";
-import { useEffect, useState } from "react";
-function ModPreviewCrop({ item, setDialogType }: { item: any, setDialogType: (type: string) => void }) {
+import { useAtom, useSetAtom } from "jotai";
+import { RefreshCcwIcon, SaveIcon, Undo2Icon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+function ModPreviewCrop({ item, setDialogType }: { item: Mod; setDialogType: (type: string) => void }) {
 	const setData = useSetAtom(DATA);
 	const setModList = useSetAtom(MOD_LIST);
 	const [lastUpdated, setLastUpdated] = useAtom(LAST_UPDATED);
 	const previewUrl = `${getImageUrl(item?.path)}?${lastUpdated}`;
-	const [scale, setScale] = useState(1);
+	const initialScale = item?.crop?.scale || 1;
+	const initialOffset = useMemo(
+		() => ({ x: (item?.crop?.x || 0) * 1.5, y: (item?.crop?.y || 0) * 1.5 }),
+		[item?.crop?.x, item?.crop?.y]
+	);
+	const initialAspect = item?.crop?.vertical ? 0.99 : 1;
+	const [scale, setScale] = useState(initialScale);
 	const [mouseDown, setMouseDown] = useState(false);
 	const [mouseDownPos, setMouseDownPos] = useState({ x: 0, y: 0 });
-	const [offset, setOffset] = useState({ x: 0, y: 0 });
-	const [aspect, setAspect] = useState(1);
+	const [offset, setOffset] = useState(initialOffset);
+	const [aspect, setAspect] = useState(initialAspect);
 	const [disabled, setDisabled] = useState(false);
+	const hasChanges =
+		scale !== initialScale || offset.x !== initialOffset.x || offset.y !== initialOffset.y;
+
 	useEffect(() => {
-		console.log(setDialogType)
+		setScale(initialScale);
+		setOffset(initialOffset);
+		setAspect(initialAspect);
 		setMouseDown(false);
-		setOffset({ x: (item?.crop?.x || 0) * 1.5, y: (item?.crop?.y || 0) * 1.5 });
-		setScale(item?.crop?.scale || 1);
-		setAspect(item?.crop?.vertical ? 0.99 : 1);
-	}, [item]);
+		setDisabled(false);
+	}, [initialAspect, initialOffset, initialScale, item?.path]);
+
 	function newMouseEvent(e: React.MouseEvent<HTMLDivElement, MouseEvent>, scale: number) {
 		if (disabled) return;
 		const deltaX = mouseDown ? (e.clientX - mouseDownPos.x) / 1 : 0;
@@ -42,7 +52,9 @@ function ModPreviewCrop({ item, setDialogType }: { item: any, setDialogType: (ty
 	return (
 		<DialogContent className="min-w-250 select-none">
 			<Tooltip>
-				<TooltipTrigger></TooltipTrigger>
+				<TooltipTrigger asChild>
+					<span aria-hidden="true" />
+				</TooltipTrigger>
 				<TooltipContent className="opacity-0"></TooltipContent>
 			</Tooltip>
 
@@ -114,15 +126,15 @@ function ModPreviewCrop({ item, setDialogType }: { item: any, setDialogType: (ty
 				<Button
 					variant="destructive"
 					onClick={() => {
-						setScale(1);
-						setOffset({ x: 0, y: 0 });
+						setScale(initialScale);
+						setOffset(initialOffset);
 					}}
-					disabled={disabled || (scale == 1 && offset.x == 0 && offset.y == 0)}
+					disabled={disabled || !hasChanges}
 				>
 					<Undo2Icon /> Reset Changes
 				</Button>
 				<Button
-				onClick={()=>setDialogType("preview")}
+					onClick={() => setDialogType("preview")}
 				>
 					<RefreshCcwIcon />
 					Change Image
@@ -141,7 +153,7 @@ function ModPreviewCrop({ item, setDialogType }: { item: any, setDialogType: (ty
 								...prev[item.path],
 								crop,
 							};
-							if (offset.x == 0 && offset.y == 0 && scale == 1) delete prev[item.path].crop;
+							if (offset.x === 0 && offset.y === 0 && scale === 1) delete prev[item.path].crop;
 							setModList((prev) =>
 								prev.map((mod) => (mod.path === item.path ? ({ ...mod, crop: crop || {} } as Mod) : mod))
 							);
@@ -153,10 +165,9 @@ function ModPreviewCrop({ item, setDialogType }: { item: any, setDialogType: (ty
 							message: "Image updated successfully.",
 							type: "success",
 						});
-						const curDialog = document.getElementById("radix-_r_q_")
-						if (curDialog) (curDialog.lastElementChild as HTMLButtonElement)?.click()
+						setDialogType("preview");
 					}}
-					disabled={disabled || ((scale == item?.crop?.scale || (!item?.crop?.scale && scale==1)) && (offset.x == item?.crop?.x*1.5 || (!item?.crop?.x && !offset.x)) && (offset.y == item?.crop?.y*1.5 || (!item?.crop?.y && !offset.y)))}
+					disabled={disabled || !hasChanges}
 				>
 					<SaveIcon />
 					Apply Changes
@@ -167,4 +178,3 @@ function ModPreviewCrop({ item, setDialogType }: { item: any, setDialogType: (ty
 }
 
 export default ModPreviewCrop;
-``;

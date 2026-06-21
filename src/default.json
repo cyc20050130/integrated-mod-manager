@@ -1,5 +1,5 @@
 {
-	"version": "3.1.0",
+	"version": "3.2.19",
 	"updatedAt": 0,
 	"bgOpacity": 1,
 	"winOpacity": 1,
@@ -8,12 +8,19 @@
 	"listType": 0,
 	"nsfw": 1,
 	"toggleClick": 2,
-	"ignore": "2.1.0",
+	"ignore": "",
 	"notice": 0,
 	"clientDate": "",
 	"XXMI": "",
 	"lang": "",
 	"game": "",
-	"chkModUpd": true,
-	"preReleases": false
+	"chkModUpdates": true,
+	"preReleases": false,
+	"onlineBlacklist": [],
+	"wuwaModFixer": {
+		"version": "",
+		"exePath": "",
+		"checkedAt": 0,
+		"releaseUrl": ""
+	}
 }

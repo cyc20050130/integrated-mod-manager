@@ -9,23 +9,53 @@ import {
 	DownloadList,
 	Games,
 	InstalledItem,
+	LinkAuditReport,
 	Language,
 	Mod,
 	ModDataObj,
 	OnlineData,
 	Preset,
+	PreviewBackfillState,
 	ProgressData,
 	Settings,
 } from "./types";
+
 interface UpdateInfo {
 	version: string;
-	status: "available" | "downloading" | "ready" | "error" | "installed" | "ignored";
+	status: "checking" | "up_to_date" | "available" | "downloading" | "installing" | "relaunching" | "error";
 	date: string;
 	body: string;
-	raw: any | null;
+	raw: UpdateHandle | null;
+	error?: string;
+}
+interface UpdateDownloadEvent {
+	event: string;
+	data?: {
+		contentLength?: number;
+		chunkLength?: number;
+	};
+}
+interface UpdateHandle {
+	download(callback?: (event: UpdateDownloadEvent) => void, options?: unknown): Promise<void>;
+	install(): Promise<void>;
+	rawJson?: Record<string, unknown>;
+}
+interface ToastInfo {
+	id: number;
+	type: "success" | "error" | "info" | "warning";
+	message: string;
+	onClick: null | (() => void);
+}
+interface NoticeInfo {
+	heading: string;
+	subheading: string;
+	ignoreable: number;
+	timer: number;
+	ver: string;
+	id: number;
 }
 const INIT_DONE = atom(false);
-const MAIN_FUNC_STATUS = atom("" as String);
+const MAIN_FUNC_STATUS = atom<string>("");
 const FIRST_LOAD = atom(false);
 const GAME = atom<Games>("");
 const LANG = atom<Language>("en");
@@ -40,19 +70,37 @@ const SETTINGS = atom<Settings>({
 		listType: 0,
 		nsfw: 1,
 		toggleClick: 2,
-		ignore: VERSION,
+		ignore: "",
 		clientDate: "1759866302559426603",
 		XXMI: "",
 		lang: "",
 		game: "",
 		preReleases: false,
 		chkModUpdates: true,
+		onlineBlacklist: [],
+		wuwaModFixer: {
+			version: "",
+			exePath: "",
+			checkedAt: 0,
+			releaseUrl: "",
+		},
 	},
 	game: {
 		launch: 0,
 		hotReload: 1,
 		onlineType: "Mod",
 		customCategories: {},
+		download: {
+			maxConcurrentDownloads: 1,
+			maxConcurrentExtracts: 2,
+			requestRetries: 3,
+			connectTimeoutSec: 10,
+			stallTimeoutSec: 25,
+			maxRequeueRounds: 3,
+			progressIntervalMs: 700,
+			progressBytesThresholdKB: 256,
+			backoffBaseMs: 2000,
+		},
 	},
 });
 const SOURCE = atom<string>("");
@@ -77,11 +125,12 @@ const CATEGORY = atom(DEFAULTS.CATEGORY);
 const SEARCH = atom(DEFAULTS.SEARCH);
 const INSTALLED_ITEMS = atom<InstalledItem[]>(DEFAULTS.INSTALLED_ITEMS);
 const ONLINE_DATA = atom<OnlineData>(DEFAULTS.ONLINE_DATA);
+const ONLINE_SOURCE = atom(DEFAULTS.ONLINE_SOURCE);
 const ONLINE_TYPE = atom(DEFAULTS.ONLINE_TYPE);
 const ONLINE_SORT = atom(DEFAULTS.ONLINE_SORT);
 const ONLINE_PATH = atom(DEFAULTS.ONLINE_PATH);
 const ONLINE_SELECTED = atom(DEFAULTS.ONLINE_SELECTED);
-const TOASTS = atom([] as any[]);
+const TOASTS = atom<ToastInfo[]>([]);
 const CHANGES = atom<ChangeInfo>({
 	before: [],
 	after: [],
@@ -93,14 +142,15 @@ const TEXT_DATA = atom(TEXT["en"]);
 const PROGRESS_OVERLAY = atom<ProgressData>({ title: "", open: false, finished: false, button: "", name: "" });
 const IMM_UPDATE = atom(null as UpdateInfo | null);
 const UPDATER_OPEN = atom(false);
-const NOTICE = atom({
+const WUWA_MOD_FIXER_OPEN = atom(false);
+const NOTICE = atom<NoticeInfo>({
 	heading: "",
 	subheading: "",
 	ignoreable: 2,
 	timer: 10,
 	ver: VERSION,
 	id: 0,
-} as any);
+});
 const HELP_OPEN = atom(false);
 const TUTORIAL_OPEN = atom(false);
 const NOTICE_OPEN = atom(false);
@@ -119,51 +169,66 @@ export function openConflict(index=-1) {
 		return true;
 	});
 }
+store.sub(CONFLICTS_OPEN, () => {
+	if (!store.get(CONFLICTS_OPEN)) {
+		store.set(CONFLICT_INDEX, 0);
+	}
+});
 const FILE_TO_DL = atom("");
+const LINK_AUDIT_REPORT = atom<LinkAuditReport | null>(DEFAULTS.LINK_AUDIT_REPORT);
+const LINK_AUDIT_RUNNING = atom<boolean>(DEFAULTS.LINK_AUDIT_RUNNING);
+const PREVIEW_BACKFILL_STATE = atom<PreviewBackfillState>(DEFAULTS.PREVIEW_BACKFILL_STATE);
+const resetIfChanged = <T>(targetAtom: Parameters<typeof store.get>[0], value: T) => {
+	if (Object.is(store.get(targetAtom), value)) return;
+	store.set(targetAtom as never, value as never);
+};
 export function resetAtoms() {
-	const atoms = {
-		INIT_DONE,
-		LANG,
-		GAME,
-		SETTINGS,
-		SOURCE,
-		TARGET,
-		DATA,
-		PRESETS,
-		CATEGORIES,
-		TYPES,
-		CHANGES,
-		ONLINE,
-		DOWNLOAD_LIST,
-		CURRENT_PRESET,
-		MOD_LIST,
-		SELECTED,
-		FILTER,
-		CATEGORY,
-		SEARCH,
-		SORT,
-		INSTALLED_ITEMS,
-		ONLINE_DATA,
-		ONLINE_TYPE,
-		ONLINE_PATH,
-		ONLINE_SORT,
-		ONLINE_SELECTED,
-		XXMI_MODE,
-	};
-	store.set(FILE_TO_DL, "");
-	Object.keys(atoms).forEach((atom) =>
-		store.set(atoms[atom as keyof typeof atoms] as any, DEFAULTS[atom as keyof typeof DEFAULTS])
-	);
+	resetIfChanged(FILE_TO_DL, "");
+	resetIfChanged(INIT_DONE, DEFAULTS.INIT_DONE);
+	resetIfChanged(LANG, DEFAULTS.LANG);
+	resetIfChanged(GAME, DEFAULTS.GAME);
+	resetIfChanged(SETTINGS, DEFAULTS.SETTINGS);
+	resetIfChanged(SOURCE, DEFAULTS.SOURCE);
+	resetIfChanged(TARGET, DEFAULTS.TARGET);
+	resetIfChanged(DATA, DEFAULTS.DATA);
+	resetIfChanged(PRESETS, DEFAULTS.PRESETS);
+	resetIfChanged(CATEGORIES, DEFAULTS.CATEGORIES);
+	resetIfChanged(TYPES, DEFAULTS.TYPES);
+	resetIfChanged(CHANGES, DEFAULTS.CHANGES);
+	resetIfChanged(ONLINE, DEFAULTS.ONLINE);
+	resetIfChanged(DOWNLOAD_LIST, DEFAULTS.DOWNLOAD_LIST);
+	resetIfChanged(CURRENT_PRESET, DEFAULTS.CURRENT_PRESET);
+	resetIfChanged(MOD_LIST, DEFAULTS.MOD_LIST);
+	resetIfChanged(SELECTED, DEFAULTS.SELECTED);
+	resetIfChanged(FILTER, DEFAULTS.FILTER);
+	resetIfChanged(CATEGORY, DEFAULTS.CATEGORY);
+	resetIfChanged(SEARCH, DEFAULTS.SEARCH);
+	resetIfChanged(SORT, DEFAULTS.SORT);
+	resetIfChanged(INSTALLED_ITEMS, DEFAULTS.INSTALLED_ITEMS);
+	resetIfChanged(ONLINE_DATA, DEFAULTS.ONLINE_DATA);
+	resetIfChanged(ONLINE_SOURCE, DEFAULTS.ONLINE_SOURCE);
+	resetIfChanged(ONLINE_TYPE, DEFAULTS.ONLINE_TYPE);
+	resetIfChanged(ONLINE_PATH, DEFAULTS.ONLINE_PATH);
+	resetIfChanged(ONLINE_SORT, DEFAULTS.ONLINE_SORT);
+	resetIfChanged(ONLINE_SELECTED, DEFAULTS.ONLINE_SELECTED);
+	resetIfChanged(XXMI_MODE, DEFAULTS.XXMI_MODE);
+	resetIfChanged(LINK_AUDIT_REPORT, DEFAULTS.LINK_AUDIT_REPORT);
+	resetIfChanged(LINK_AUDIT_RUNNING, DEFAULTS.LINK_AUDIT_RUNNING);
+	resetIfChanged(PREVIEW_BACKFILL_STATE, DEFAULTS.PREVIEW_BACKFILL_STATE);
 }
 const ERR = atom("");
 export {
 	CONFLICTS,
 	FILE_TO_DL,
+	LINK_AUDIT_REPORT,
+	LINK_AUDIT_RUNNING,
+	PREVIEW_BACKFILL_STATE,
 	ERR,
 	XXMI_DIR,
 	XXMI_MODE,
 	FIRST_LOAD,
 	HELP_OPEN,
+	WUWA_MOD_FIXER_OPEN,
 	TUTORIAL_OPEN,
 	NOTICE,
 	NOTICE_OPEN,
@@ -180,6 +245,7 @@ export {
 	DOWNLOAD_LIST,
 	TYPES,
 	ONLINE_DATA,
+	ONLINE_SOURCE,
 	ONLINE_TYPE,
 	ONLINE_PATH,
 	ONLINE_SORT,

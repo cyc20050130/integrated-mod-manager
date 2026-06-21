@@ -8,11 +8,11 @@ import Page5 from "./pages/Page5";
 function Checklist() {
 	const [page, setPage] = useState(0);
 	const pages = [
-		<Page1 setPage={setPage} />,
-		<Page2 setPage={setPage} />,
-		<Page3 setPage={setPage} />,
-		<Page4 setPage={setPage} />,
-		<Page5 setPage={setPage} />
+		<Page1 key="page-1" setPage={setPage} />,
+		<Page2 key="page-2" setPage={setPage} />,
+		<Page3 key="page-3" setPage={setPage} />,
+		<Page4 key="page-4" setPage={setPage} />,
+		<Page5 key="page-5" setPage={setPage} />
 	];
 	return (
 		<motion.div

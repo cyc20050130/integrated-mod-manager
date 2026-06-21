@@ -1,6 +1,7 @@
 import {
 	CATEGORY,
 	CONFLICTS,
+	CONFLICTS_OPEN,
 	FILTER,
 	INIT_DONE,
 	INSTALLED_ITEMS,
@@ -14,11 +15,11 @@ import {
 	SOURCE,
 	TEXT_DATA,
 } from "@/utils/vars";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import CardLocal from "./components/CardLocal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { preventContextMenu } from "@/utils/utils";
+import { isModBlacklisted, preventContextMenu } from "@/utils/utils";
 import { toggleMod } from "@/utils/filesys";
 import MiniSearch from "minisearch";
 import { join, setChange } from "@/utils/hotreload";
@@ -31,15 +32,15 @@ import { info } from "@/lib/logger";
 // import { RefreshCwIcon } from "lucide-react";
 // import { addToast } from "@/_Toaster/ToastProvider";
 
-let searchDB: any = null;
+let searchDB: MiniSearch<Mod> | null = null;
 let prev = "prev";
 let prevEnabled = "noData";
-let filterChangeCount = 0;
-let timeout: any = null;
+let timeout: ReturnType<typeof setTimeout> | null = null;
 function MainLocal() {
 	const initDone = useAtomValue(INIT_DONE);
 	const textData = useAtomValue(TEXT_DATA);
 	const [conflicts, setConflicts] = useAtom(CONFLICTS);
+	const setConflictsOpen = useSetAtom(CONFLICTS_OPEN);
 	const [initial, setInitial] = useState(true);
 	const lastUpdated = useAtomValue(LAST_UPDATED);
 	const [modList, setModList] = useAtom(MOD_LIST);
@@ -55,7 +56,6 @@ function MainLocal() {
 	const filter = useAtomValue(FILTER);
 	const search = useAtomValue(SEARCH);
 	const source = useAtomValue(SOURCE);
-	const [filteredList, setFilteredList] = useState([] as Mod[]);
 	const [visibleRange, setVisibleRange] = useState({ start: -1, end: -1 });
 	const [selected, setSelected] = useAtom(SELECTED);
 	const containerRef = useRef<HTMLDivElement | null>(null);
@@ -63,7 +63,6 @@ function MainLocal() {
 	const sort = useAtomValue(SORT);
 	const scrollTimeoutRef = useRef<number | null>(null);
 	// const scrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-	const keyRef = useRef<string | null>(null);
 	useEffect(() => {
 		if (!searchDB && modList.length > 0) {
 			searchDB = new MiniSearch({
@@ -119,57 +118,49 @@ function MainLocal() {
 				});
 			const validHashes = Object.entries(allHashes).filter(([_, parents]) => parents.size == 1);
 			const collisions = Object.entries(hashes).filter(
-				([hash, paths]) => paths.length > 1 && validHashes.some(([vHash]) => vHash == hash)
+				([hash, paths]) => paths.length > 1 && validHashes.some(([vHash]) => vHash === hash)
 			);
-			let newCols = {} as any;
+			const collisionMap: Record<string, Set<string>> = {};
 			collisions.forEach(([_, paths]) => {
 				const key = paths[0];
-				newCols[key] = (newCols as any)[key] || new Set();
+				collisionMap[key] = collisionMap[key] || new Set();
 				paths.slice(1).forEach((p) => {
-					newCols[key].add(p);
+					collisionMap[key].add(p);
 				});
 			});
 			const modsInvolved = {} as Record<string, number>;
-			newCols = Object.keys(newCols).map((key, i) => {
-				const paths = [key, ...[...newCols[key]]];
+			const newCols = Object.keys(collisionMap).map((key, i) => {
+				const paths = [key, ...[...collisionMap[key]]];
 				paths.forEach((p) => {
 					modsInvolved[p] = modsInvolved[p] || i;
 				});
 				return paths;
 			});
 
-			if (collisions.length > 0 && JSON.stringify(conflicts.conflicts) !== JSON.stringify(newCols)) {
+			const conflictsChanged = JSON.stringify(conflicts.conflicts) !== JSON.stringify(newCols);
+			if (collisions.length > 0 && conflictsChanged) {
 				addToast({
 					type: "error",
 					message: textData._Toasts.CollisionsDetected,
 					onClick: openConflict,
 				});
 				setConflicts({ conflicts: newCols, mods: modsInvolved });
-			} else if (collisions.length == 0) {
+			} else if (collisions.length == 0 && conflicts.conflicts.length > 0) {
 				setConflicts({ conflicts: [], mods: {} });
+				setConflictsOpen(false);
 			}
 		}
 		checkForHashCollisions();
-	}, [modList]);
-	useEffect(() => {
-		filterChangeCount += 1;
-	}, [filter, category, search, sort]);
-	useEffect(() => {
-		keyRef.current = `${filter}-${category}-${search}-${modList.length}-${filterChangeCount}-${sort}`;
-		if (prev !== keyRef.current) {
-			if (containerRef.current) {
-				containerRef.current.scrollTo({ top: 0 });
-			}
-			setVisibleRange({ start: -1, end: -1 });
-			setInitial(true);
-		}
-		prev = keyRef.current;
-		let newList: Mod[] = searchDB && search ? searchDB.search(search) : [...modList];
+	}, [conflicts.conflicts, initDone, modList, setConflicts, setConflictsOpen, textData._Toasts.CollisionsDetected]);
+	const filteredList = useMemo(() => {
+		let newList: Mod[] =
+			searchDB && search
+				? searchDB
+						.search(search)
+						.map((result) => modList.find((mod) => mod.path === result.id))
+						.filter((mod): mod is Mod => Boolean(mod))
+				: [...modList];
 
-		// let enb = filters.shift() || "All";
-		// if (enb != "All") {
-		// 	newList = newList.filter((mod) => mod.enabled == (enb == "Enabled"));
-		// }
 		Object.entries(filter).forEach(([key, value]) => {
 			let modifier = (mod: Mod) => !!mod;
 			switch (key) {
@@ -179,8 +170,8 @@ function MainLocal() {
 				case "st":
 					modifier = (mod) => value == "all" || (value == "enabled" ? mod.enabled : !mod.enabled);
 					break;
-				case "tag":
-					const valObj = value as { [key: string]: string };
+				case "tag": {
+					const valObj = value as Record<string, string>;
 					modifier = (mod) => {
 						return Object.entries(valObj).every(([tag, val]) => {
 							switch (val) {
@@ -194,6 +185,7 @@ function MainLocal() {
 						});
 					};
 					break;
+				}
 				case "upd":
 					modifier = (mod) => value == "any" || (value == "has" ? !!updateObj[mod.path] : !updateObj[mod.path]);
 					break;
@@ -222,22 +214,41 @@ function MainLocal() {
 				});
 				break;
 		}
-
-		setFilteredList(newList);
-	}, [modList, filter, category, search, filterChangeCount, sort]);
+		const regularMods = newList.filter((mod) => !isModBlacklisted(mod.tags));
+		const blacklistedMods = newList.filter((mod) => isModBlacklisted(mod.tags));
+		return [...regularMods, ...blacklistedMods];
+	}, [category, filter, modList, search, sort, updateObj]);
+	const currentKey = useMemo(
+		() => `${JSON.stringify(filter)}-${Array.from(category).join(",")}-${search}-${modList.length}-${sort}`,
+		[category, filter, modList.length, search, sort]
+	);
+	const keyChanged = prev !== currentKey;
+	const animationInitialState = initial || keyChanged;
+	const currentVisibleRange = useMemo(
+		() => (keyChanged ? { start: -1, end: -1 } : visibleRange),
+		[keyChanged, visibleRange]
+	);
+	useEffect(() => {
+		if (prev !== currentKey) {
+			if (containerRef.current) {
+				containerRef.current.scrollTo({ top: 0 });
+			}
+		}
+		prev = currentKey;
+	}, [currentKey]);
 
 	const handleClick = async (e: MouseEvent, mod: Mod) => {
 		const click = e.button;
-		let tag = (e.target as HTMLElement).tagName.toLowerCase();
+		const tag = (e.target as HTMLElement).tagName.toLowerCase();
 		if (tag == "button") {
 			return;
 		}
 		if (click == toggleOn) {
 			const ct = (e.currentTarget as HTMLDivElement)?.firstElementChild?.firstElementChild
 				?.nextElementSibling as HTMLImageElement;
-			ct && (ct.style.filter = mod.enabled ? "brightness(0.5) saturate(0.5)" : "brightness(1) ");
-			let success = await toggleMod(mod.path, !mod.enabled);
-			console.log("Toggled mod:", mod.path, "New state:", !mod.enabled, "Success:", success);
+			if (ct) ct.style.filter = mod.enabled ? "brightness(0.5) saturate(0.5)" : "brightness(1) ";
+			const success = await toggleMod(mod.path, !mod.enabled);
+			info("[IMM] Toggled mod:", mod.path, !mod.enabled, success);
 			if (success)
 				setModList((prev) => {
 					return prev.map((m) => {
@@ -273,12 +284,12 @@ function MainLocal() {
 	// Memoize animation variants to prevent recreation on every render
 	const animationVariants = useCallback(
 		() => ({
-			hidden: { opacity: initial ? 0 : 1, y: 20 },
+			hidden: { opacity: animationInitialState ? 0 : 1, y: 20 },
 			visible: { opacity: 1, y: 0 },
-			exit: { opacity: initial ? 0 : 1, y: -20 },
+			exit: { opacity: animationInitialState ? 0 : 1, y: -20 },
 			invisible: { opacity: 0 },
 		}),
-		[initial]
+		[animationInitialState]
 	);
 
 	// Memoize transition config
@@ -286,18 +297,18 @@ function MainLocal() {
 		(index: number) => ({
 			duration: 0.3,
 			ease: "easeOut" as const,
-			delay: initial ? 0.05 * index : 0,
+			delay: animationInitialState ? 0.05 * index : 0,
 		}),
-		[initial]
+		[animationInitialState]
 	);
 
 	// Determine if item should be visible
 	const isItemVisible = useCallback(
 		(index: number) => {
-			const { start, end } = visibleRange;
+			const { start, end } = currentVisibleRange;
 			return start === -1 || (index >= start && index <= end) ? 0 : index < start ? 2 : 1;
 		},
-		[visibleRange]
+		[currentVisibleRange]
 	);
 	const noItems = useMemo(() => {
 		return (
@@ -311,7 +322,7 @@ function MainLocal() {
 				<label>{textData._Main._MainLocal.NoMods}</label>
 			</div>
 		);
-	}, [modList, source]);
+	}, [modList.length, textData._Main._MainLocal.NoMods]);
 	// info(conflicts);
 	return (
 		<>
@@ -342,7 +353,7 @@ function MainLocal() {
 					<motion.div
 						layout
 						className="min-h-fit card-grid grid justify-center w-full py-4"
-						key={keyRef.current}
+						key={currentKey}
 						initial={{ opacity: 0, pointerEvents: "none" }}
 						animate={{ opacity: 1, pointerEvents: "auto" }}
 						exit={{ opacity: 0, pointerEvents: "none" }}
@@ -353,14 +364,14 @@ function MainLocal() {
 
 							return (
 								<motion.div
-									key={mod.path + keyRef.current}
+									key={mod.path + currentKey}
 									layout
 									variants={animationVariants()}
 									initial="hidden"
 									animate="visible"
 									exit="exit"
 									transition={transitionConfig(index)}
-									onMouseUp={(e: any) => handleClick(e, mod)}
+									onMouseUp={(e) => void handleClick(e.nativeEvent, mod)}
 									onContextMenu={preventContextMenu}
 								>
 									{isVisible ? (
@@ -373,6 +384,8 @@ function MainLocal() {
 											hasUpdate={updateObj[mod.path]}
 											updateAvl={textData.UpdateAvl}
 											inConflict={conflicts.mods[mod.path] ?? -1}
+											isBlacklisted={isModBlacklisted(mod.tags)}
+											blacklistedLabel={(textData as { Blacklisted?: string }).Blacklisted || "Blacklisted"}
 										/>
 									)}
 								</motion.div>

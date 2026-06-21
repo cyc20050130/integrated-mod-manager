@@ -2,22 +2,22 @@ import { Button } from "@/components/ui/button";
 import { DialogContent } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { savePreviewImageFromData } from "@/utils/filesys";
+import { Mod } from "@/utils/types";
 import { UploadIcon } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 function ModPreview({
 	item,
 	setDialogType,
-	isBlank,
+	isBlank: _isBlank,
 }: {
-	item: any;
+	item: Mod;
 	setDialogType: (type: string) => void;
 	isBlank: boolean;
 }) {
-	console.log(isBlank)
 	const onDrop = useCallback(
 		async (acceptedFiles: File[]) => {
-			if (acceptedFiles.length == 0) return;
+			if (acceptedFiles.length === 0) return;
 			const file = acceptedFiles[0];
 			const extension = file.type.split("/").pop() || "png";
 			// Read file as ArrayBuffer and convert to Uint8Array
@@ -63,9 +63,7 @@ function ModPreview({
 									const file = new File([blob], "clipboard_image", { type: blob.type });
 									if (file && file.type.startsWith("image/")) onDrop([file]);
 								})
-								.catch((err) => {
-									console.error("Failed to fetch image from URL:", err);
-								});
+								.catch(() => undefined);
 						}
 					});
 				}
@@ -75,12 +73,14 @@ function ModPreview({
 		return () => {
 			document.removeEventListener("paste", handlePaste);
 		};
-	}, []);
+	}, [onDrop]);
 
 	return (
 		<DialogContent className=" select-none min-w-136 min-h-0">
 			<Tooltip>
-				<TooltipTrigger></TooltipTrigger>
+				<TooltipTrigger asChild>
+					<span aria-hidden="true" />
+				</TooltipTrigger>
 				<TooltipContent className="opacity-0"></TooltipContent>
 			</Tooltip>
 

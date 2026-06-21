@@ -1,5 +1,5 @@
 {
-	"version": "3.1.0",
+	"version": "3.2.19",
 	"game": "",
 	"custom": 0,
 	"sourceDir": "",
@@ -8,9 +8,27 @@
 		"launch": 0,
 		"hotReload": 1,
 		"onlineType": "Mod",
-		"customCategories": {}
+		"customCategories": {},
+		"download": {
+			"maxConcurrentDownloads": 1,
+			"maxConcurrentExtracts": 2,
+			"requestRetries": 3,
+			"connectTimeoutSec": 10,
+			"stallTimeoutSec": 25,
+			"maxRequeueRounds": 3,
+			"progressIntervalMs": 700,
+			"progressBytesThresholdKB": 256,
+			"backoffBaseMs": 2000
+		}
 	},
 	"data": {},
+	"downloads": {
+		"queue": [],
+		"downloading": [],
+		"extracting": [],
+		"completed": [],
+		"failed": []
+	},
 	"presets": [],
 	"categories": [],
 	"updatedAt": 1760002867805

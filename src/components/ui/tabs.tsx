@@ -31,7 +31,7 @@ function TabsList({
 function TabsTrigger({
   className,nbg2=false,
   ...props
-}: any) {
+}: React.ComponentProps<typeof TabsPrimitive.Trigger> & { nbg2?: boolean }) {
   return (
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"

@@ -18,6 +18,12 @@ import { useAtom, useAtomValue } from "jotai";
 import { CheckCircleIcon, ChevronLeftIcon, CircleIcon, FolderIcon, InfoIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 type keys = "category" | "enable" | "data" | "modData" | "presetData";
+type ProgressState = {
+	started: boolean;
+	index: number;
+	actions: keys[];
+	max: number;
+};
 
 function Remove() {
 	const [removeOpen, setRemoveOpen] = useAtom(REMOVE_OPEN);
@@ -34,10 +40,10 @@ function Remove() {
 	const [settings, setSettings] = useAtom(SETTINGS);
 	const textData = useAtomValue(TEXT_DATA);
 	const [disableButtons, setDisableButtons] = useState(false);
-	const [progress, setProgress] = useState({
+	const [progress, setProgress] = useState<ProgressState>({
 		started: false,
 		index: 0,
-		actions: [] as keys[],
+		actions: [],
 		max: 0,
 	});
 	const dict = {
@@ -93,7 +99,7 @@ function Remove() {
 	useEffect(() => {
 		if (progress.started && progress.index == progress.max) {
 			let time = 5;
-			let timer = null as any;
+			let timer: HTMLElement | null = null;
 			setInterval(async () => {
 				if (!timer) timer = document.getElementById("reloadTimer");
 				if (timer && time >= 0) timer.innerText = textData._LeftSideBar._components._RemoveIMM.AppRL.replace("<s/>", Math.ceil(time).toString());
@@ -105,7 +111,7 @@ function Remove() {
 				time -= 0.1;
 			}, 100);
 		}
-	}, [progress]);
+	}, [progress, setSettings, textData._LeftSideBar._components._RemoveIMM.AppRL]);
 	return (
 		<Dialog open={removeOpen || progress.started} onOpenChange={setRemoveOpen}>
 			<DialogContent
@@ -145,6 +151,7 @@ function Remove() {
 								>
 									{"1234".split("").map((item, index) => (
 										<div
+											key={`flat-${item}`}
 											className={"w-full flex  flex-col"}
 											style={{
 												backgroundColor: index % 2 == 0 ? "#1b1b1b50" : "#31313150",
@@ -167,6 +174,7 @@ function Remove() {
 								>
 									{categories.slice(0, 2).map((item, index) => (
 										<div
+											key={item._sName}
 											className={"w-full flex  flex-col"}
 											style={{
 												backgroundColor: index % 2 == 0 ? "#1b1b1b50" : "#31313150",
@@ -229,8 +237,10 @@ function Remove() {
 						<div className="flex w-full items-center justify-between">
 							<label className="w-2/5 flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+									<TooltipTrigger asChild>
+										<span className="inline-flex items-center justify-center">
+											<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent className="max-w-48 justify-center text-center">
 										{textData._LeftSideBar._components._RemoveIMM.IMMTip}
@@ -254,8 +264,10 @@ function Remove() {
 						<div className="flex w-full items-center justify-between">
 							<label className="w-2/5 flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+									<TooltipTrigger asChild>
+										<span className="inline-flex items-center justify-center">
+											<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent className="max-w-48 justify-center text-center">
 										{textData._LeftSideBar._components._RemoveIMM.ModTip}
@@ -279,8 +291,10 @@ function Remove() {
 						<div className="flex w-full items-center justify-between">
 							<label className="w-2/5 flex items-center gap-1">
 								<Tooltip>
-									<TooltipTrigger>
-										<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+									<TooltipTrigger asChild>
+										<span className="inline-flex items-center justify-center">
+											<InfoIcon className="inline-block w-4 h-4 mb-0.75" />
+										</span>
 									</TooltipTrigger>
 									<TooltipContent className="max-w-48 justify-center text-center">
 										{textData._LeftSideBar._components._RemoveIMM.PresetTip}
@@ -311,11 +325,11 @@ function Remove() {
 									{textData._LeftSideBar._components._RemoveIMM.Recheck}
 								</div>
 								<div className="w-full">
-									{Object.keys(dict).map((key: any) => (
+									{(Object.keys(dict) as keys[]).map((key) => (
 										<div key={key} className="flex w-full items-center justify-between">
-											<Label>{dict[key as keys].title}</Label>
+											<Label>{dict[key].title}</Label>
 											<Label className="text-muted-foreground">
-												{dict[key as keys].options[removeSettings[key as keys] as any]}
+												{dict[key].options[Number(removeSettings[key])]}
 											</Label>
 										</div>
 									))}
@@ -325,12 +339,12 @@ function Remove() {
 									<AlertDialogAction>{textData.Cancel}</AlertDialogAction>
 									<AlertDialogCancel
 										onClick={() => {
-											const prg = {
+											const prg: ProgressState = {
 												started: true,
-												actions: [] as keys[],
+												actions: [],
 												max: 0,
 												index: 0,
-											} as any;
+											};
 											const stg = removeSettings;
 
 											if (stg.data == "1") {

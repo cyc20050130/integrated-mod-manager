@@ -47,7 +47,7 @@ function BottomBar() {
 				<div
 					onWheel={(e) => {
 						if (e.deltaX != 0) return;
-						let target = e.currentTarget as HTMLDivElement;
+						const target = e.currentTarget as HTMLDivElement;
 						target.scrollTo({
 							left: target.scrollLeft + e.deltaY,
 							// behavior: "smooth",

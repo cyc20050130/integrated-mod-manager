@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { deleteCategory, saveConfigs } from "@/utils/filesys";
 import { setCategories } from "@/utils/init";
+import { Category, CustomCategory } from "@/utils/types";
 
 import { CATEGORIES, SETTINGS, TEXT_DATA } from "@/utils/vars";
 import { Label } from "@radix-ui/react-dropdown-menu";
@@ -12,11 +13,26 @@ import { useAtom, useAtomValue } from "jotai";
 import { EditIcon, RefreshCwIcon, TrashIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
-function useDebouncedCallback<T extends (...args: any[]) => void>(callback: T, delay = 200) {
-	const timerRef = useRef<number | null>(null);
+type ManageCategoryState = Category & { index: number; creating?: boolean; _sAltIconUrl?: string; name?: string };
+
+const EMPTY_ALERT_DATA: ManageCategoryState = {
+	_idRow: -1,
+	_sName: "",
+	_nItemCount: 0,
+	_nCategoryCount: 0,
+	_sUrl: "",
+	_sIconUrl: "",
+	_sAltIconUrl: "",
+	index: -1,
+};
+
+function useDebouncedCallback<T extends (...args: string[]) => void>(callback: T, delay = 200) {
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	return useCallback(
 		(...args: Parameters<T>) => {
-			if (timerRef.current) clearTimeout(timerRef.current);
+			if (timerRef.current) {
+				clearTimeout(timerRef.current);
+			}
 			timerRef.current = setTimeout(() => {
 				callback(...args);
 			}, delay);
@@ -26,25 +42,16 @@ function useDebouncedCallback<T extends (...args: any[]) => void>(callback: T, d
 }
 function ManageCategories() {
 	const [alertOpen, setAlertOpen] = useState(false);
-	const [alertData, setAlertData] = useState({
-		_idRow: -1,
-		_sName: "",
-		_nItemCount: 0,
-		_nCategoryCount: 0,
-		_sUrl: "",
-		_sIconUrl: "",
-		_sAltIconUrl: "",
-		index: -1,
-	} as any);
+	const [alertData, setAlertData] = useState(EMPTY_ALERT_DATA);
 	const [settings, setSettings] = useAtom(SETTINGS);
-	const customCategories = settings.game.customCategories || ({} as any);
+	const customCategories: Record<string, CustomCategory> = settings.game.customCategories || {};
 	const textData = useAtomValue(TEXT_DATA);
 	const categories = useAtomValue(CATEGORIES);
 	const categorySet = new Set(categories.map((cat) => cat._sName));
 	const debouncedIconUpdate = useDebouncedCallback((value: string) => {
-		setAlertData((prev: any) => {
+		setAlertData((prev) => {
 			const curData = { ...prev };
-			if (curData._idRow) {
+			if (curData._idRow > -1) {
 				if (curData._sAltIconUrl && curData._sAltIconUrl === value) {
 					curData._sAltIconUrl = "";
 				} else if (curData._sIconUrl !== value && (!curData._sAltIconUrl || curData._sAltIconUrl.length === 0)) {
@@ -58,7 +65,9 @@ function ManageCategories() {
 	return (
 		<DialogContent>
 			<Tooltip>
-				<TooltipTrigger></TooltipTrigger>
+				<TooltipTrigger asChild>
+					<span aria-hidden="true" />
+				</TooltipTrigger>
 				<TooltipContent className="opacity-0"></TooltipContent>
 			</Tooltip>
 			<AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
@@ -77,7 +86,7 @@ function ManageCategories() {
 							defaultValue={alertData._sName}
 							disabled={!alertData.creating}
 							onChange={(e) => {
-								setAlertData((prev: any) => ({ ...prev, _sName: e.target.value }));
+								setAlertData((prev) => ({ ...prev, _sName: e.target.value }));
 							}}
 							placeholder={textData._RightSideBar._components._ManageCategories.CatName}
 							style={{
@@ -86,39 +95,42 @@ function ManageCategories() {
 							className=" disabled:border-0 max-w-80 text-ellipsis overflow-hidden text-center break-words"
 						/>
 						<Tooltip>
-							<TooltipTrigger
-								className="-mt-9  self-end duration-200"
-								style={{
-									opacity: !alertData._sUrl && !alertData.creating ? 1 : 0,
-									pointerEvents: !alertData._sUrl && !alertData.creating ? "auto" : "none",
-								}}
-								onClick={async () => {
-									const success = await deleteCategory(alertData._sName);
-									if (success) {
-										delete customCategories[alertData._sName];
-										setSettings((prev) => ({
-											...prev,
-											game: {
-												...prev.game,
-												customCategories,
-											},
-										}));
-										saveConfigs();
-										setCategories();
-										setAlertOpen(false);
-									} else {
-										const deleteWarning = document.getElementById("deleteWarning");
-										if (deleteWarning) {
-											deleteWarning.style.opacity = "1";
-											setTimeout(() => {
-												deleteWarning.style.opacity = "0";
-												deleteWarning.style.pointerEvents = "none";
-											}, 3000);
+							<TooltipTrigger asChild>
+								<span
+									className="-mt-9 self-end duration-200"
+									style={{
+										opacity: !alertData._sUrl && !alertData.creating ? 1 : 0,
+										pointerEvents: !alertData._sUrl && !alertData.creating ? "auto" : "none",
+									}}
+									onClick={async () => {
+										const success = await deleteCategory(alertData._sName);
+										if (success) {
+											const nextCustomCategories = { ...customCategories };
+											delete nextCustomCategories[alertData._sName];
+											setSettings((prev) => ({
+												...prev,
+												game: {
+													...prev.game,
+													customCategories: nextCustomCategories,
+												},
+											}));
+											saveConfigs();
+											setCategories();
+											setAlertOpen(false);
+										} else {
+											const deleteWarning = document.getElementById("deleteWarning");
+											if (deleteWarning) {
+												deleteWarning.style.opacity = "1";
+												setTimeout(() => {
+													deleteWarning.style.opacity = "0";
+													deleteWarning.style.pointerEvents = "none";
+												}, 3000);
+											}
 										}
-									}
-								}}
-							>
-								<TrashIcon className="h-5 p-0.5 w-5 text-destructive cursor-pointer hover:text-accent/70" />
+									}}
+								>
+									<TrashIcon className="h-5 p-0.5 w-5 text-destructive cursor-pointer hover:text-accent/70" />
+								</span>
 							</TooltipTrigger>
 							<TooltipContent>{textData._RightSideBar._components._ManageCategories.DeleteCat}</TooltipContent>
 						</Tooltip>
@@ -146,17 +158,19 @@ function ManageCategories() {
 							/>
 
 							<Tooltip>
-								<TooltipTrigger
-									className="-mt-9 self-end -mr-6.5 duration-200"
-									style={{
-										opacity: alertData._sAltIconUrl ? 1 : 0,
-										pointerEvents: alertData._sAltIconUrl ? "auto" : "none",
-									}}
-									onClick={() => {
-										debouncedIconUpdate(alertData._sAltIconUrl || "");
-									}}
-								>
-									<RefreshCwIcon className="h-5 p-0.5 w-5 text-accent cursor-pointer hover:text-accent/70" />
+								<TooltipTrigger asChild>
+									<span
+										className="-mt-9 self-end -mr-6.5 duration-200"
+										style={{
+											opacity: alertData._sAltIconUrl ? 1 : 0,
+											pointerEvents: alertData._sAltIconUrl ? "auto" : "none",
+										}}
+										onClick={() => {
+											debouncedIconUpdate(alertData._sAltIconUrl || "");
+										}}
+									>
+										<RefreshCwIcon className="h-5 p-0.5 w-5 text-accent cursor-pointer hover:text-accent/70" />
+									</span>
 								</TooltipTrigger>
 								<TooltipContent>{textData._RightSideBar._components._ManageCategories.Reset}</TooltipContent>
 							</Tooltip>
@@ -178,18 +192,20 @@ function ManageCategories() {
 								if (alertData._sName.trim().length === 0 || (alertData.creating && categorySet.has(alertData._sName))) {
 									return;
 								}
+								const nextCustomCategories = { ...customCategories };
 								if (alertData._sUrl && !alertData._sAltIconUrl) {
-									delete customCategories[alertData._sName];
-								} else
-									customCategories[alertData._sName] = {
+									delete nextCustomCategories[alertData._sName];
+								} else {
+									nextCustomCategories[alertData._sName] = {
 										_sIconUrl: alertData._sIconUrl,
 										...(alertData._sAltIconUrl ? { _sAltIconUrl: alertData._sAltIconUrl } : {}),
 									};
+								}
 								setSettings((prev) => ({
 									...prev,
 									game: {
 										...prev.game,
-										customCategories,
+										customCategories: nextCustomCategories,
 									},
 								}));
 								saveConfigs();
@@ -210,7 +226,7 @@ function ManageCategories() {
 					<div
 						key={cat._sName}
 						onClick={() => {
-							setAlertData(cat);
+							setAlertData({ ...cat, index: -1, _sAltIconUrl: cat._sAltIconUrl || "", creating: false });
 							setAlertOpen(true);
 						}}
 						className="button-like border-1 bg-button hover:bg-accent/30 active:bg-accent/50 active:scale-90 group w-80 zzz-fg-text data-zzz:mt-1 flex items-center gap-2 p-2 duration-300 rounded-md select-none"
@@ -240,7 +256,7 @@ function ManageCategories() {
 					variant="outline"
 					className="w-full"
 					onClick={() => {
-						setAlertData({ _sName: "", _sIconUrl: "", _sAltIconUrl: "", creating: true });
+						setAlertData({ ...EMPTY_ALERT_DATA, creating: true });
 						setAlertOpen(true);
 					}}
 				>

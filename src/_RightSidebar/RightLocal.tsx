@@ -9,6 +9,7 @@ import {
 	ONLINE,
 	openConflict,
 	SELECTED,
+	SETTINGS,
 	SOURCE,
 	TEXT_DATA,
 } from "@/utils/vars";
@@ -25,14 +26,22 @@ import {
 	SearchIcon,
 	Settings2Icon,
 	SwordsIcon,
+	TriangleAlertIcon,
 	TrashIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { GAME_GB_IDS, GAMES, managedSRC } from "@/utils/consts";
-import { getImageUrl, handleImageError, handleInAppLink, join } from "@/utils/utils";
+import {
+	getImageUrl,
+	handleImageError,
+	handleInAppLink,
+	isRouteBlacklisted,
+	join,
+	normalizeModRoute,
+	withBlacklistTag,
+} from "@/utils/utils";
 import { Sidebar, SidebarContent, SidebarGroup } from "@/components/ui/sidebar";
-// @ts-ignore: no type declarations available for this optional Tauri plugin
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -47,7 +56,7 @@ import {
 	selectPath,
 } from "@/utils/filesys";
 import { Label } from "@/components/ui/label";
-import { Games, Mod } from "@/utils/types";
+import { Games, Mod, ModHotKeys } from "@/utils/types";
 import ManageCategories from "./components/ManageCategories";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -63,35 +72,89 @@ import { info } from "@/lib/logger";
 import ModPreviewCrop from "./components/ModPreviewCrop";
 import ModPreview from "./components/ModPreview";
 
-let text = "";
-let curUrlIndex = 0;
-let cachcedDetails: any = {};
+type ModDetails = {
+	keys: ModHotKeys[];
+	files: Record<string, ModHotKeys[]>;
+};
+
+type StoredVarValue = Partial<Pick<ModHotKeys, "pref" | "reset" | "name">> & {
+	state?: string | null;
+};
+
+type StoredVarMap = Record<string, Record<string, StoredVarValue>>;
+
+const EMPTY_DETAILS: ModDetails = { keys: [], files: {} };
+const cachedDetails: Record<string, ModDetails> = {};
 const timeKey = Date.now().toString();
+
+function mergeHotkeyWithStoredData(hotkey: ModHotKeys, modData?: StoredVarMap): ModHotKeys {
+	const fileEntry = modData?.[hotkey.file]?.[hotkey.target];
+	const namespaceEntry = hotkey.namespace ? modData?.namespace?.[hotkey.target] : undefined;
+	const mergedEntry = namespaceEntry ?? fileEntry;
+
+	return {
+		...hotkey,
+		pref: mergedEntry?.pref ?? hotkey.pref,
+		reset: fileEntry?.reset ?? hotkey.reset,
+		name: fileEntry?.name || hotkey.name || hotkey.target,
+		state: mergedEntry?.state ?? hotkey.state ?? null,
+	};
+}
+
+function formatDetails(details: ModDetails, modData?: StoredVarMap): ModDetails {
+	const keys = details.keys
+		.map((key) => {
+			const merged = mergeHotkeyWithStoredData(key, modData);
+			return {
+				...merged,
+				key: formatHotkeyDisplay(normalizeHotkey(merged.key)),
+			};
+		})
+		.sort((a, b) => a.key.localeCompare(b.key));
+
+	const files = Object.fromEntries(
+		Object.entries(details.files).map(([file, hotkeys]) => [file, hotkeys.map((key) => mergeHotkeyWithStoredData(key, modData))])
+	);
+
+	return { keys, files };
+}
+
+function getTextValue(textData: Record<string, unknown>, key: string, fallback: string) {
+	const value = textData[key];
+	return typeof value === "string" && value.trim() ? value : fallback;
+}
 function RightLocal() {
 	const [tab, setTab] = useState<"notes" | "hotkeys">("hotkeys");
 	const setOnline = useSetAtom(ONLINE);
 	const game = useAtomValue(GAME);
 	const initDone = useAtomValue(INIT_DONE);
+	const textData = useAtomValue(TEXT_DATA);
 	// const setSettings = useSetAtom(SETTINGS);
 
 	const [urls, setUrls] = useState<string[]>([]);
+	const lastHandledUrlRef = useRef<string | null>(null);
+	const switchGameToast = textData._Toasts.SwitchGame;
 	const handleURLGame = useCallback(
 		async (urls: string[]) => {
 			const final = urls[urls.length - 1];
 			if (final) getCurrentWebviewWindow()?.setFocus();
 			if (final.includes("/game/")) {
-				const url: any = final.split("/game/");
-				url[1] = url[1].split("/");
-				const urlGame = GAME_GB_IDS[url[1].shift()];
+				const [prefix, rest = ""] = final.split("/game/");
+				const pathParts = rest.split("/");
+				const gameSlug = pathParts.shift() ?? "";
+				const gameId = Number.parseInt(gameSlug, 10);
+				const urlGame = Number.isFinite(gameId) && Object.prototype.hasOwnProperty.call(GAME_GB_IDS, gameId)
+					? GAME_GB_IDS[gameId]
+					: undefined;
 				info(`urlGame: ${urlGame} game: ${game}`);
-				url[1] = url[1].join("/");
-				urls[urls.length - 1] = url.join("/");
+				const nextUrl = [prefix, pathParts.join("/")].join("/");
+				urls[urls.length - 1] = nextUrl;
 				if (urlGame && urlGame != game) {
 					addToast({
-						message: textData._Toasts.SwitchGame.replace("<game/>", urlGame),
+						message: switchGameToast.replace("<game/>", urlGame),
 					});
 					sessionStorage.setItem("imm-deep-link-game", urlGame);
-					console.log("Setting deep link game in sessionStorage:", urls[urls.length - 1]);
+					info("Setting deep link game in sessionStorage:", urls[urls.length - 1]);
 					sessionStorage.setItem("imm-session-timestamp", timeKey);
 					sessionStorage.setItem("imm-deep-link-url", urls[urls.length - 1]);
 					window.location.reload();
@@ -108,7 +171,7 @@ function RightLocal() {
 				}
 			}
 		},
-		[game]
+		[game, switchGameToast]
 	);
 	useEffect(() => {
 		if (!game) {
@@ -123,7 +186,7 @@ function RightLocal() {
 			// as the CLI args (returned by getCurrent) persist for the process lifetime.
 			const initialUrls = await getCurrent();
 			const isDeepLinkHandled = sessionStorage.getItem("deep-link-initial-handled");
-			console.log("Initial URLs:", initialUrls, "Handled:", isDeepLinkHandled);
+			info("Initial URLs:", initialUrls, "Handled:", isDeepLinkHandled);
 			if (initialUrls && !isDeepLinkHandled) {
 				info("Launched with URLs:", initialUrls);
 				sessionStorage.setItem("deep-link-initial-handled", "true");
@@ -149,18 +212,21 @@ function RightLocal() {
 	}, [handleURLGame, game]);
 	useEffect(() => {
 		if (!initDone) return;
-		console.log("Checking URLs after init:", sessionStorage.getItem("imm-deep-link-url"), urls);
-		if (sessionStorage.getItem("imm-deep-link-url") && timeKey != sessionStorage.getItem("imm-session-timestamp")) {
-			const url = sessionStorage.getItem("imm-deep-link-url")!;
+		const pendingUrl = sessionStorage.getItem("imm-deep-link-url");
+		info("Checking URLs after init:", pendingUrl, urls);
+		if (pendingUrl && timeKey != sessionStorage.getItem("imm-session-timestamp")) {
+			const url = pendingUrl;
 			info("Processing pending deep link URL from sessionStorage:", url);
 			handleInAppLink(url);
 			sessionStorage.removeItem("imm-deep-link-url");
+			lastHandledUrlRef.current = url;
 			return;
 		}
-		if (urls.length === 0 || curUrlIndex >= urls.length) return;
+		const nextUrl = urls[urls.length - 1];
+		if (!nextUrl || nextUrl === lastHandledUrlRef.current) return;
 		info("Processing URLs after init:", urls);
-		handleInAppLink(urls[urls.length - 1]);
-		setUrls([]);
+		handleInAppLink(nextUrl);
+		lastHandledUrlRef.current = nextUrl;
 	}, [urls, initDone]);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [dialogType, setDialogType] = useState("");
@@ -170,7 +236,7 @@ function RightLocal() {
 			let activeEl = document.activeElement;
 			if (activeEl?.tagName === "BUTTON") activeEl = null;
 			if (activeEl === document.body || activeEl === null) {
-				let text = event.clipboardData?.getData("Text");
+				const text = event.clipboardData?.getData("Text");
 				if (text?.startsWith("http")) {
 					event.preventDefault();
 					handleInAppLink(text);
@@ -186,19 +252,33 @@ function RightLocal() {
 	// const decor = useAtomValue(SETTINGS).global.winType
 	const [modList, setModList] = useAtom(MOD_LIST);
 	const [selected, setSelected] = useAtom(SELECTED);
-	const textData = useAtomValue(TEXT_DATA);
 	const [data, setData] = useAtom(DATA);
-	const [item, setItem] = useState<Mod | undefined>();
+	const [settings, setSettings] = useAtom(SETTINGS);
 
 	const [alertOpen, setAlertOpen] = useState(false);
 	const [popoverOpen, setPopoverOpen] = useState(false);
-	const [details, setDetails] = useState<any>({});
-	useEffect(() => {
-		if (!alertOpen) {
+	const [detailCache, setDetailCache] = useState<Record<string, ModDetails>>(() => ({ ...cachedDetails }));
+	const item = selected ? modList.find((mod) => mod.path == selected) : undefined;
+	const category = item
+		? (() => {
+				const cat = categories.find((entry) => entry._sName == item.parent) || { _sName: "-1", _sIconUrl: "" };
+				return { name: cat._sName, icon: cat._sIconUrl };
+			})()
+		: { name: "-1", icon: "" };
+	const storedVars = (item ? data[item.path]?.vars : undefined) as StoredVarMap | undefined;
+	const rawDetails = item ? detailCache[item.path] ?? { keys: item.keys || [], files: item.files || {} } : EMPTY_DETAILS;
+	const details = formatDetails(rawDetails, storedVars);
+	const handleAlertOpenChange = useCallback((open: boolean) => {
+		setAlertOpen(open);
+		if (!open) {
 			setDeleteItemData(null);
 		}
-	}, [alertOpen]);
-	function manageCategoriesButton({ title = textData._RightSideBar._components._ManageCategories.ManageCat }: any) {
+	}, []);
+	function manageCategoriesButton({
+		title = textData._RightSideBar._components._ManageCategories.ManageCat,
+	}: {
+		title?: string;
+	}) {
 		return (
 			<Button
 				onClick={() => {
@@ -213,15 +293,13 @@ function RightLocal() {
 			</Button>
 		);
 	}
-	const [category, setCategory] = useState({ name: "-1", icon: "" });
 	const lastUpdated = useAtomValue(LAST_UPDATED);
 	function renameMod(path: string, newPath: string) {
 		changeModName(path, newPath)
 			.then((newPath) => {
 				if (newPath) {
 					const name = newPath.split("\\").pop();
-					name &&
-						newPath &&
+					if (name) {
 						setModList((prev) => {
 							return prev.map((m) => {
 								if (m.path == path) {
@@ -230,6 +308,7 @@ function RightLocal() {
 								return m;
 							});
 						});
+					}
 					setSelected(newPath);
 				}
 			})
@@ -241,89 +320,138 @@ function RightLocal() {
 			});
 	}
 	useEffect(() => {
-		text = "";
-		if (selected) {
-			const mod = { ...modList.find((m) => m.path == selected) } as Mod;
-			text = mod?.note || "";
-			if (mod) {
-				setItem(mod);
-				if (cachcedDetails[mod.path]) {
-					setDetails(cachcedDetails[mod.path]);
-				} else {
-					setDetails({
-						keys: item?.keys || [],
-						files: item?.files || {},
-					});
-				}
-				getModDetails(mod.path).then((details) => {
-					// cachcedDetails[mod.path] = details;
-					const modData = data[mod.path]?.vars;
-					if (modData) {
-						details.keys = details.keys.map((key: any) => {
-							if (modData[key.file] && modData[key.file][key.target]) {
-								key.pref = modData[key.file][key.target].pref;
-								key.reset = modData[key.file][key.target].reset;
-								key.name = modData[key.file][key.target].name || key.target;
-								key.state = modData[key.file][key.target].state || null;
-							}
-							if (key.namespace && modData["namespace"] && modData["namespace"][key.target]) {
-								key.pref = modData["namespace"][key.target].pref;
-								key.state = modData["namespace"][key.target].state || null;
-							}
-							return key;
-						});
-						Object.keys(details.files).forEach((file) => {
-							details.files[file] = details.files[file].map((key: any) => {
-								if (modData[file] && modData[file][key.target]) {
-									key.pref = modData[file][key.target].pref;
-									key.reset = modData[file][key.target].reset;
-									key.name = modData[file][key.target].name || key.target;
-									key.state = modData[file][key.target].state || null;
-								}
-								if (key.namespace && modData["namespace"] && modData["namespace"][key.target]) {
-									key.pref = modData["namespace"][key.target].pref;
-									key.state = modData["namespace"][key.target].state || null;
-								}
-								return key;
-							});
-						});
-					}
-					details.keys = details.keys
-						.map((key: any) => ({ ...key, key: formatHotkeyDisplay(normalizeHotkey(key.key)) }))
-						.sort((a: any, b: any) => a.key.localeCompare(b.key));
-
-					setDetails(details);
-					cachcedDetails[mod.path] = details;
-				});
+		if (!item || detailCache[item.path]) {
+			return;
+		}
+		let active = true;
+		getModDetails(item.path).then((nextDetails) => {
+			if (!active) {
 				return;
 			}
-		}
-		setItem(undefined);
-	}, [selected, modList, data]);
-	useEffect(() => {
-		if (item) {
-			const cat = categories.find((c) => c._sName == item.parent) || { _sName: "-1", _sIconUrl: "" };
-			setCategory({ name: cat._sName, icon: cat._sIconUrl });
-		} else {
-			setCategory({ name: "-1", icon: "" });
-		}
-	}, [item, modList]);
+			cachedDetails[item.path] = nextDetails;
+			setDetailCache((prev) => ({
+				...prev,
+				[item.path]: nextDetails,
+			}));
+		});
+		return () => {
+			active = false;
+		};
+	}, [detailCache, item]);
 	const tags = new Set(item?.tags || []);
+	const textLookup = textData as Record<string, unknown>;
+	const blacklistCopy = useMemo(
+		() => ({
+			label: getTextValue(textLookup, "Blacklisted", "Blacklisted"),
+			add: getTextValue(textLookup, "BlacklistMod", "Blacklist Mod"),
+			remove: getTextValue(textLookup, "RemoveFromBlacklist", "Remove Blacklist"),
+			addedToast: getTextValue(textLookup, "BlacklistedAdded", "Mod added to blacklist."),
+			removedToast: getTextValue(textLookup, "BlacklistedRemoved", "Mod removed from blacklist."),
+		}),
+		[textLookup]
+	);
+	const sourceRoute = normalizeModRoute(item?.source);
+	const isCurrentBlacklisted = item?.source
+		? tags.has("blacklisted") || isRouteBlacklisted(settings.global.onlineBlacklist, game, sourceRoute)
+		: tags.has("blacklisted");
+	const syncRouteBlacklistState = useCallback(
+		(route: string, blacklisted: boolean) => {
+			if (!route) return;
+			setData((prev) => {
+				const next = { ...prev };
+				Object.entries(prev).forEach(([path, modData]) => {
+					if (normalizeModRoute(modData.source) !== route) return;
+					next[path] = {
+						...modData,
+						tags: withBlacklistTag(modData.tags, blacklisted),
+					};
+				});
+				return next;
+			});
+			setModList((prev) =>
+				prev.map((mod) =>
+					normalizeModRoute(mod.source) === route ? { ...mod, tags: withBlacklistTag(mod.tags, blacklisted) } : mod
+				)
+			);
+		},
+		[setData, setModList]
+	);
+	const toggleBlacklist = useCallback(() => {
+		if (!item) return;
+		const nextBlacklisted = !isCurrentBlacklisted;
+		if (sourceRoute) {
+			setSettings((prev) => {
+				const filtered = (prev.global.onlineBlacklist || []).filter(
+					(entry) => !(entry.game === game && normalizeModRoute(entry.route || entry.source) === sourceRoute)
+				);
+				return {
+					...prev,
+					global: {
+						...prev.global,
+						onlineBlacklist: nextBlacklisted
+							? [
+									...filtered,
+									{
+										game,
+										route: sourceRoute,
+										source: item.source || "",
+										name: item.name,
+										createdAt: Date.now(),
+									},
+								]
+							: filtered,
+					},
+				};
+			});
+			syncRouteBlacklistState(sourceRoute, nextBlacklisted);
+		} else {
+			setData((prev) => {
+				return {
+					...prev,
+					[item.path]: {
+						...prev[item.path],
+						tags: withBlacklistTag(prev[item.path]?.tags, nextBlacklisted),
+					},
+				};
+			});
+			setModList((prev) =>
+				prev.map((mod) =>
+					mod.path === item.path ? { ...mod, tags: withBlacklistTag(mod.tags, nextBlacklisted) } : mod
+				)
+			);
+		}
+		saveConfigs();
+		addToast({
+			type: nextBlacklisted ? "error" : "success",
+			message: nextBlacklisted ? blacklistCopy.addedToast : blacklistCopy.removedToast,
+		});
+	}, [
+		blacklistCopy.addedToast,
+		blacklistCopy.removedToast,
+		game,
+		isCurrentBlacklisted,
+		item,
+		setData,
+		setModList,
+		setSettings,
+		sourceRoute,
+		syncRouteBlacklistState,
+	]);
 	//info(item?.keys);
 	return (
 		<Sidebar side="right" className="pt-8 duration-300">
 			<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
 				{dialogType == "edit-mod-config" && details ? (
-					<ModPreferences item={item} details={details} />
+					item ? <ModPreferences item={item} details={details} /> : null
 				) : dialogType == "preview-crop" ? (
-					<ModPreviewCrop item={item} setDialogType={setDialogType} />
+					item ? <ModPreviewCrop key={item.path} item={item} setDialogType={setDialogType} /> : null
 				) : dialogType.startsWith("preview") ? (
-					<ModPreview item={item} setDialogType={setDialogType} isBlank={dialogType == "preview-blank"} />
+					item ? <ModPreview item={item} setDialogType={setDialogType} isBlank={dialogType == "preview-blank"} /> : null
 				) : (
 					<ManageCategories />
 				)}
 			</Dialog>
-			<AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
+			<AlertDialog open={alertOpen} onOpenChange={handleAlertOpenChange}>
 				<AlertDialogContent>
 					<div className="max-w-96 flex flex-col items-center gap-6 mt-6 text-center">
 						<div className="max-w-96 text-xl text-gray-200 wrap-break-words">
@@ -393,11 +521,8 @@ function RightLocal() {
 									className="aspect-square max-h-6"
 									variant="destructive"
 									onClick={() => {
-										setDeleteItemData((prev) => {
-											if (prev) return prev;
-											setAlertOpen(true);
-											return item;
-										});
+										setDeleteItemData(item);
+										setAlertOpen(true);
 									}}
 								>
 									<TrashIcon className="max-h-3" />
@@ -429,7 +554,7 @@ function RightLocal() {
 								const next = e.currentTarget.nextElementSibling as HTMLDivElement;
 								if (next && item?.path) {
 									next.style.opacity = "1";
-									let nextChild = next.firstElementChild as HTMLButtonElement;
+									const nextChild = next.firstElementChild as HTMLButtonElement;
 									if (nextChild) {
 										nextChild.innerText = "Set Preview Image";
 									}
@@ -547,19 +672,29 @@ function RightLocal() {
 									<Input
 										onBlur={(e) => {
 											if (item && e.currentTarget.value !== item?.source) {
+												const nextSource = e.currentTarget.value;
+												const nextRoute = normalizeModRoute(nextSource);
+												const nextBlacklisted = nextRoute
+													? isRouteBlacklisted(settings.global.onlineBlacklist, game, nextRoute)
+													: tags.has("blacklisted");
 												setData((prev) => {
 													prev[item.path] = {
 														...prev[item.path],
-														source: e.currentTarget.value,
+														source: nextSource,
 														updatedAt: Date.now(),
 														viewedAt: 0,
+														tags: withBlacklistTag(prev[item.path]?.tags, nextBlacklisted),
 													};
 													return { ...prev };
 												});
 												setModList((prev) => {
 													return prev.map((m) => {
 														if (m.path == item.path) {
-															return { ...m, source: e.currentTarget.value };
+															return {
+																...m,
+																source: nextSource,
+																tags: withBlacklistTag(m.tags, nextBlacklisted),
+															};
 														}
 														return m;
 													});
@@ -584,8 +719,10 @@ function RightLocal() {
 											}}
 										>
 											<Tooltip>
-												<TooltipTrigger>
-													<LinkIcon className=" w-4 h-4" />
+												<TooltipTrigger asChild>
+													<span className="flex items-center justify-center">
+														<LinkIcon className=" w-4 h-4" />
+													</span>
 												</TooltipTrigger>
 												<TooltipContent className="flex items-center justify-center w-20">
 													<p className="max-w-20 w-full text-center">
@@ -611,8 +748,10 @@ function RightLocal() {
 												className="bg-pat2"
 											>
 												<Tooltip>
-													<TooltipTrigger>
-														<SearchIcon className=" w-4 h-4 pointer-events-none" />
+													<TooltipTrigger asChild>
+														<span className="flex items-center justify-center">
+															<SearchIcon className=" w-4 h-4 pointer-events-none" />
+														</span>
 													</TooltipTrigger>
 													<TooltipContent className="w-15 flex items-center justify-center">
 														<p className="max-w-15 w-full text-center">
@@ -626,13 +765,19 @@ function RightLocal() {
 									{}
 								</div>
 							</div>
+							{item && isCurrentBlacklisted && (
+								<div className="mx-1 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+									<TriangleAlertIcon className="h-4 w-4 min-w-4" />
+									<span>{blacklistCopy.label}</span>
+								</div>
+							)}
 							<div className="bg-pat1 flex justify-between w-full px-1 rounded-lg">
 								<Label className="bg-input/0 flex items-center justify-center hover:bg-input/0 h-10 w-28.5 text-accent ">
 									{textData._Tags.Tags}
 								</Label>
 								<div className="w-48.5 flex gap-1 justify-evenly items-center px-1">
 									<Tooltip>
-										<TooltipTrigger>
+										<TooltipTrigger asChild>
 											<Button
 												onClick={() => {
 													if (!item) return;
@@ -675,7 +820,7 @@ function RightLocal() {
 										</TooltipContent>
 									</Tooltip>
 									<Tooltip>
-										<TooltipTrigger>
+										<TooltipTrigger asChild>
 											<Button
 												onClick={() => {
 													if (!item) return;
@@ -720,6 +865,18 @@ function RightLocal() {
 											{new Set(item?.tags || []).has("nsfw") ? textData._Tags.UnmarkNSFW : textData._Tags.MarkNSFW}
 										</TooltipContent>
 									</Tooltip>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												onClick={toggleBlacklist}
+												className="aspect-square flex flex-col h-8"
+												variant={isCurrentBlacklisted ? "outline" : "destructive"}
+											>
+												<TriangleAlertIcon className="w-3.5 h-3.5" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>{isCurrentBlacklisted ? blacklistCopy.remove : blacklistCopy.add}</TooltipContent>
+									</Tooltip>
 								</div>
 							</div>
 						</div>
@@ -732,7 +889,15 @@ function RightLocal() {
 						}}
 					>
 						<div className=" flex flex-col w-full h-full p-2 overflow-hidden">
-							<Tabs defaultValue={tab} onValueChange={(val: any) => setTab(val)} className=" w-full min-h-full">
+							<Tabs
+								defaultValue={tab}
+								onValueChange={(val) => {
+									if (val === "notes" || val === "hotkeys") {
+										setTab(val);
+									}
+								}}
+								className=" w-full min-h-full"
+							>
 								<TabsList className="bg-background/0 w-full h-8 gap-2">
 									<TabsTrigger
 										value="hotkeys"
@@ -771,7 +936,7 @@ function RightLocal() {
 										{tab == "hotkeys" ? (
 											<div className="text-gray-300 h-full max-h-[calc(100vh-32.75rem)] flex flex-col w-full overflow-y-scroll overflow-x-hidden">
 												{item &&
-													details?.keys?.map((hotkey: any, index: number) => (
+													details.keys.map((hotkey, index) => (
 														<div
 															key={index + item.path}
 															className={
@@ -802,7 +967,6 @@ function RightLocal() {
 											<div className="w-full h-full p-2">
 												<textarea
 													onBlur={(e) => {
-														text = e.currentTarget.value;
 														if (item && e.currentTarget.value !== item?.note) {
 															setData((prev) => {
 																prev[item.path] = {
@@ -826,7 +990,7 @@ function RightLocal() {
 													style={{ backgroundColor: "#fff0" }}
 													key={item?.note}
 													placeholder={textData._RightSideBar._RightLocal.NoNotes}
-													defaultValue={text}
+													defaultValue={item?.note || ""}
 												/>
 											</div>
 										)}

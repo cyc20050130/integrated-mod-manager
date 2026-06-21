@@ -1,6 +1,7 @@
 import {
 	CATEGORIES,
 	DATA,
+	DOWNLOAD_LIST,
 	ERR,
 	FIRST_LOAD,
 	GAME,
@@ -41,12 +42,162 @@ import { join, setHotreload, stopWindowMonitoring } from "./hotreload";
 import { registerGlobalHotkeys } from "./hotkeyUtils";
 import TEXT from "@/textData.json";
 import { unregisterAll } from "@tauri-apps/plugin-global-shortcut";
-import { isOlderThanOneDay, safeLoadJson, setImageServer } from "./utils";
+import { compareVersions, safeLoadJson, sanitizeGlobalSettings, setImageServer } from "./utils";
 import { addToast } from "@/_Toaster/ToastProvider";
-import { Category, Games, Preset, Settings } from "./types";
+import { Category, DownloadList, GameSettings, Games, GlobalSettings, ModDataObj, Preset, Settings } from "./types";
+import { toResumableDownloadList, withNormalizedDownloadSettings } from "./downloads";
 import { resetPageCounts } from "@/_Main/MainOnline";
 import { info } from "@/lib/logger";
+import { syncIniStateOnce } from "./iniStateSync";
 // import { v2_0_4_migration } from "./filesys";
+
+type RuntimeGlobalConfig = GlobalSettings & { version?: string; updatedAt?: string; notice?: number };
+type RuntimeGameConfig = {
+	version: string;
+	game: Games;
+	custom: 0 | 1;
+	sourceDir: string;
+	targetDir: string;
+	settings: GameSettings;
+	data: ModDataObj;
+	downloads: DownloadList;
+	presets: Preset[];
+	categories: Category[];
+	updatedAt: number | string;
+};
+type RuntimeGame = Exclude<Games, "">;
+type LegacySettings = {
+	opacity?: number;
+	type?: number;
+	bgType?: number;
+	nsfw?: number;
+	toggle?: number;
+	clientDate?: string;
+	lang?: string;
+	launch?: number;
+	hotReload?: number;
+	onlineType?: string;
+};
+type LegacyConfig = {
+	version?: string;
+	settings?: LegacySettings;
+	data?: Record<string, unknown>;
+	presets?: Preset[];
+};
+type XXMIImporter = {
+	Importer: {
+		importer_folder?: string;
+		run_pre_launch: string;
+		run_post_load: string;
+	};
+};
+type XXMIConfig = {
+	Importers: Record<string, XXMIImporter | undefined>;
+};
+type UpdateNotice = {
+	heading?: string;
+	subheading?: string;
+	ignoreable?: number;
+	timer?: number;
+	ver?: string;
+	id?: number;
+};
+type UpdateBodyContent = {
+	notice?: UpdateNotice;
+	[key: string]: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readJsonText<T>(jsonText: string): T {
+	return JSON.parse(jsonText) as T;
+}
+
+function normalizeUpdateBodyEntry(value: unknown): UpdateBodyContent {
+	return isRecord(value) ? (value as UpdateBodyContent) : {};
+}
+
+function getErrorMessage(error: unknown) {
+	if (error instanceof Error) return error.message;
+	return String(error || "Update check failed");
+}
+
+function isNativeRuntimePath(pathLike: string) {
+	return /^[a-zA-Z]:[\\/]/.test(pathLike) || pathLike.startsWith("\\\\");
+}
+
+async function safeExists(pathLike: string) {
+	if (!isNativeRuntimePath(pathLike)) {
+		return await pathExistsNative(pathLike);
+	}
+	try {
+		return await exists(pathLike);
+	} catch (error) {
+		info(`[IMM] exists() check failed for ${pathLike}:`, error);
+		return await pathExistsNative(pathLike);
+	}
+}
+
+async function safeReadTextFile(pathLike: string) {
+	if (!isNativeRuntimePath(pathLike)) {
+		return await readTextFileNative(pathLike);
+	}
+	try {
+		return await readTextFile(pathLike);
+	} catch (error) {
+		info(`[IMM] readTextFile() failed for ${pathLike}:`, error);
+		return await readTextFileNative(pathLike);
+	}
+}
+
+async function safeWriteTextFile(pathLike: string, contents: string) {
+	if (!isNativeRuntimePath(pathLike)) {
+		await writeTextFileNative(pathLike, contents);
+		return true;
+	}
+	try {
+		await writeTextFile(pathLike, contents);
+		return true;
+	} catch (error) {
+		info(`[IMM] writeTextFile() failed for ${pathLike}:`, error);
+		try {
+			await writeTextFileNative(pathLike, contents);
+			return true;
+		} catch (nativeError) {
+			info(`[IMM] native writeTextFile() failed for ${pathLike}:`, nativeError);
+			return false;
+		}
+	}
+}
+
+async function pathExistsNative(pathLike: string) {
+	try {
+		return await invoke<boolean>("path_exists_native", { path: pathLike });
+	} catch (error) {
+		info(`[IMM] native exists() check failed for ${pathLike}:`, error);
+		return false;
+	}
+}
+
+async function readTextFileNative(pathLike: string) {
+	return invoke<string>("read_text_file_native", { path: pathLike });
+}
+
+async function writeTextFileNative(pathLike: string, contents: string) {
+	return invoke<void>("write_text_file_native", { path: pathLike, contents });
+}
+
+function getDefaultXxmiDirCandidatesFromAppData(appDataDir: string) {
+	const normalized = String(appDataDir || "").replaceAll("/", "\\").replace(/\\+$/g, "");
+	if (!normalized) return [] as string[];
+	const directCandidate = join(normalized, "XXMI Launcher");
+	const parentParts = normalized.split("\\").filter(Boolean).slice(0, -1);
+	const siblingCandidate = parentParts.length ? join(...parentParts, "XXMI Launcher") : "";
+	return Array.from(new Set([directCandidate, siblingCandidate].filter(Boolean)));
+}
+
 let paths = {
 	"": "",
 	exe: "",
@@ -69,16 +220,16 @@ let isInPrePostLaunch = {
 export function getPaths() {
 	return paths;
 }
-let config: any = { ...defConfig };
-let configXX: any = { ...defConfigXX };
+let config: RuntimeGlobalConfig = sanitizeGlobalSettings({ ...defConfig }) as RuntimeGlobalConfig;
+let configXX: RuntimeGameConfig = { ...defConfigXX } as RuntimeGameConfig;
 let dataDir = "";
 let appData = "";
 let prevGame = "";
 let categories: Category[] = [];
 let isInitialized = false;
-async function getXXMIConfig(path = store.get(XXMI_DIR)) {
+async function getXXMIConfig(path = store.get(XXMI_DIR)): Promise<XXMIConfig | null> {
 	try {
-		return JSON.parse(await readTextFile(join(path, "XXMI Launcher Config.json")));
+		return readJsonText<XXMIConfig>(await readTextFileNative(join(path, "XXMI Launcher Config.json")));
 	} catch (e) {
 		info("[IMM] Failed to read XXMI Launcher config:", e);
 		return null;
@@ -87,31 +238,32 @@ async function getXXMIConfig(path = store.get(XXMI_DIR)) {
 export async function setPrePostLaunch(game: Games, value: boolean) {
 	const data = await getXXMIConfig();
 	if (!data) return;
-	if (!data.Importers[game + "MI"]) return;
+	const importer = data.Importers[game + "MI"];
+	if (!importer) return;
 	const cmd = `start imm://mode/${game.toLowerCase()}`;
 	if (value) {
-		if (!data.Importers[game + "MI"].Importer.run_pre_launch.includes(cmd))
-			data.Importers[game + "MI"].Importer.run_pre_launch = [
+		if (!importer.Importer.run_pre_launch.includes(cmd))
+			importer.Importer.run_pre_launch = [
 				cmd,
-				...data.Importers[game + "MI"].Importer.run_pre_launch.split(" && "),
+				...importer.Importer.run_pre_launch.split(" && "),
 			]
 				.filter((x: string) => x.trim() !== "")
 				.join(" && ");
 	} else {
-		if (data.Importers[game + "MI"].Importer.run_pre_launch.includes(cmd)) {
-			data.Importers[game + "MI"].Importer.run_pre_launch = data.Importers[game + "MI"].Importer.run_pre_launch
+		if (importer.Importer.run_pre_launch.includes(cmd)) {
+			importer.Importer.run_pre_launch = importer.Importer.run_pre_launch
 				.split(" && ")
 				.filter((x: string) => x.trim() !== cmd)
 				.join(" && ");
 		}
-		if (data.Importers[game + "MI"].Importer.run_post_load.includes(cmd)) {
-			data.Importers[game + "MI"].Importer.run_post_load = data.Importers[game + "MI"].Importer.run_post_load
+		if (importer.Importer.run_post_load.includes(cmd)) {
+			importer.Importer.run_post_load = importer.Importer.run_post_load
 				.split(" && ")
 				.filter((x: string) => x.trim() !== cmd)
 				.join(" && ");
 		}
 	}
-	await writeTextFile(join(store.get(XXMI_DIR), "XXMI Launcher Config.json"), JSON.stringify(data, null, 2));
+	await writeTextFileNative(join(store.get(XXMI_DIR), "XXMI Launcher Config.json"), JSON.stringify(data, null, 2));
 }
 export async function readXXMIConfig(path: string) {
 	paths = {
@@ -137,15 +289,13 @@ export async function readXXMIConfig(path: string) {
 		if (!data) return;
 		info("[IMM] Loaded XXMI Launcher config:", data);
 		GAMES.forEach((game) => {
-			if (data.Importers[game + "MI"]) {
-				const xxPath = (data.Importers[game + "MI"].Importer.importer_folder || "").replace(/\\/g, "/");
+			const importer = data.Importers[game + "MI"];
+			if (importer) {
+				const xxPath = (importer.Importer.importer_folder || "").replace(/\\/g, "/");
 				info(`[IMM] Resolved ${game}MI path:`, xxPath);
 				paths[game as Games] = xxPath == `${game}MI/` ? join(path, `${game}MI`) : join(...xxPath.split("/"));
 				const startCmd = `start imm://mode/${game.toLowerCase()}`;
-				if (
-					data.Importers[game + "MI"].Importer?.run_pre_launch.includes(startCmd) ||
-					data.Importers[game + "MI"].Importer?.run_post_load.includes(startCmd)
-				)
+				if (importer.Importer.run_pre_launch.includes(startCmd) || importer.Importer.run_post_load.includes(startCmd))
 					isInPrePostLaunch[game as Games] = true;
 			}
 		});
@@ -160,82 +310,105 @@ export function getDataDir() {
 export function getPrevGame() {
 	return prevGame;
 }
-export const window = getCurrentWebviewWindow();
+const hasTauriWindowRuntime =
+	typeof globalThis !== "undefined" &&
+	typeof globalThis.window !== "undefined" &&
+	"__TAURI_INTERNALS__" in globalThis.window;
+
+export const window = hasTauriWindowRuntime ? getCurrentWebviewWindow() : null;
 export function changeWindowTitle(title: string) {
-	window.setTitle(title);
+	window?.setTitle(title);
 }
 export async function setWindowType(type: number) {
 	if (type == 0) {
 		// if (await window.isMaximized())
-		window.unmaximize();
+		await window?.unmaximize();
 		// window.setFullscreen(false);
 		// window.setDecorations(true);
 		// currentMonitor().then((x) => {
 		// 	if (x?.size) window.setSize(new PhysicalSize(x.size.width * 0.8, x.size.height * 0.8));
 		// });
 	} else if (type == 1) {
-		window.unmaximize();
+		await window?.unmaximize();
 		// window.setFullscreen(false);
 		// window.setDecorations(false);
 		// currentMonitor().then((x) => {
 		// 	if (x?.size) window.setSize(new PhysicalSize(x.size.width * 0.8, x.size.height * 0.8));
 		// });
 	} else if (type == 2) {
-		window.maximize();
+		await window?.maximize();
 		// window.setFullscreen(true);
 	}
 }
-invoke<string>("get_image_server_url").then((url) => {
-	setImageServer(url + "/preview");
-});
-export async function updateConfig(oconfig = null as any) {
-	if (!oconfig) oconfig = JSON.parse(await readTextFile("config.json"));
+if (hasTauriWindowRuntime) {
+	invoke<string>("get_image_server_url").then((url) => {
+		setImageServer(url + "/preview");
+	});
+}
+export async function updateConfig(oconfig: LegacyConfig | null = null): Promise<RuntimeGlobalConfig> {
+	if (!oconfig) oconfig = readJsonText<LegacyConfig>(await safeReadTextFile("config.json"));
 	info("[IMM] Updating config from:", oconfig);
-	if (oconfig.version >= "2.1.0") return oconfig;
-	let config = {
+	if (compareVersions(oconfig.version || "0.0.0", "2.1.0") >= 0) {
+		return sanitizeGlobalSettings(oconfig as RuntimeGlobalConfig) as RuntimeGlobalConfig;
+	}
+	const legacySettings = oconfig.settings || {};
+	const config: RuntimeGlobalConfig = {
 		version: VERSION,
 		updatedAt: new Date().toISOString(),
-		bgOpacity: oconfig.settings.opacity || 1,
+		bgOpacity: legacySettings.opacity || 1,
 		winOpacity: 1,
-		winType: oconfig.settings.type || 0,
-		bgType: oconfig.settings.bgType || 2,
+		winType: (legacySettings.type || 0) as 0 | 1 | 2,
+		bgType: (legacySettings.bgType || 2) as 0 | 1 | 2,
 		listType: 0,
-		nsfw: oconfig.settings.nsfw || 1,
-		toggleClick: oconfig.settings.toggle || 2,
-		ignore: "2.0.4",
-		clientDate: oconfig.settings.clientDate || "",
+		nsfw: (legacySettings.nsfw || 1) as 0 | 1 | 2,
+		toggleClick: (legacySettings.toggle || 2) as 0 | 2,
+		ignore: "",
+		clientDate: legacySettings.clientDate || "",
 		XXMI: "",
-		lang: oconfig.settings.lang || "",
-		game: "",
+		lang: (legacySettings.lang || "") as RuntimeGlobalConfig["lang"],
+		game: "" as Games,
+		preReleases: false,
+		chkModUpdates: true,
+		onlineBlacklist: [],
+		wuwaModFixer: { ...defConfig.wuwaModFixer },
 	};
-	let data = oconfig.data || {};
-	let keys = Object.keys(data);
-	for (let key of keys) {
+	const data = { ...(oconfig.data || {}) } as Record<string, unknown>;
+	const keys = Object.keys(data);
+	for (const key of keys) {
 		if (key.startsWith("\\")) {
 			data[key.substring(1)] = data[key];
 			delete data[key];
 		}
 	}
-	let presets = oconfig.presets.map((preset: Preset) => {
-		let newPreset: Preset = { name: preset.name || "Preset", data: [], hotkey: preset?.hotkey || "" };
+	const presets = (oconfig.presets || []).map((preset: Preset) => {
+		const newPreset: Preset = { name: preset.name || "Preset", data: [], hotkey: preset?.hotkey || "" };
 		if (preset.data && Array.isArray(preset.data)) {
 			newPreset.data = preset.data.map((item: string) => (item.startsWith("\\") ? item.substring(1) : item));
 		}
 		return newPreset;
 	});
-	await writeTextFile(
+	await safeWriteTextFile(
 		`configWW.json`,
 		JSON.stringify(
 			{
 				version: VERSION,
 				categories: [],
 				settings: {
-					launch: oconfig.settings.launch || 0,
-					hotReload: oconfig.settings.hotReload || 1,
-					onlineType: oconfig.settings.onlineType || "Mod",
+					launch: (legacySettings.launch || 0) as 0 | 1 | 2,
+					hotReload: (legacySettings.hotReload || 1) as 0 | 1 | 2,
+					onlineType: legacySettings.onlineType || "Mod",
+					customCategories: {},
+					download: { ...defConfigXX.settings.download },
 				},
-				data: oconfig.data || {},
+				data,
 				presets: presets || [],
+				downloads: {
+					queue: [],
+					downloading: [],
+					extracting: [],
+					completed: [],
+					failed: [],
+				},
 				updatedAt: new Date().getTime(),
 			},
 			null,
@@ -252,7 +425,7 @@ export async function verifyGameDir(game: Games) {
 		sourceDir: "",
 	};
 	try {
-		(await readTextFile(join(XXPath, "d3dx.ini"))).split("\n").forEach((line: string) => {
+		(await safeReadTextFile(join(XXPath, "d3dx.ini"))).split("\n").forEach((line: string) => {
 			const [key, value] = line.split("=").map((x: string) => x.trim());
 			if (key == "include_recursive") {
 				const isPath = value.slice(1, 3) == ":\\";
@@ -267,19 +440,39 @@ export async function verifyGameDir(game: Games) {
 	}
 	return dirs;
 }
-export async function initGame(game: Games, status = true) {
+export async function initGame(game: RuntimeGame, status = true) {
 	info(`[IMM] Initializing game: ${game}...`);
 	store.set(ONLINE_DATA, {});
-	if (await exists(`config${game}.json`)) {
-		configXX = JSON.parse(await readTextFile(`config${game}.json`));
-	} else configXX = { ...defConfigXX };
-	const defKeys = Object.keys(defConfigXX);
-	defKeys.forEach((key) => {
-		if (!(key in configXX)) {
-			(configXX as any)[key] = (defConfigXX as any)[key];
-		}
-	});
-	configXX.game = game;
+	const savedConfig = (await safeExists(`config${game}.json`))
+		? readJsonText<Partial<RuntimeGameConfig>>(await safeReadTextFile(`config${game}.json`))
+		: {};
+	const mergedSettings = {
+		...defConfigXX.settings,
+		...(savedConfig.settings || {}),
+		customCategories: {
+			...defConfigXX.settings.customCategories,
+			...(savedConfig.settings?.customCategories || {}),
+		},
+		download: {
+			...defConfigXX.settings.download,
+			...(savedConfig.settings?.download || {}),
+		},
+	} as GameSettings;
+	configXX = {
+		...defConfigXX,
+		...savedConfig,
+		version: VERSION,
+		game,
+		settings: withNormalizedDownloadSettings(mergedSettings),
+		data: (savedConfig.data || {}) as ModDataObj,
+		downloads: toResumableDownloadList(savedConfig.downloads || defConfigXX.downloads),
+		presets: savedConfig.presets || [],
+		categories: savedConfig.categories || [],
+		custom: (savedConfig.custom ?? defConfigXX.custom) as 0 | 1,
+		sourceDir: savedConfig.sourceDir || defConfigXX.sourceDir,
+		targetDir: savedConfig.targetDir || defConfigXX.targetDir,
+		updatedAt: savedConfig.updatedAt || defConfigXX.updatedAt,
+	};
 	if (configXX.settings.launch === 2 && !isInPrePostLaunch[game]) configXX.settings.launch = 0;
 	else if (isInPrePostLaunch[game]) configXX.settings.launch = 2;
 	switchGameTheme(game);
@@ -289,25 +482,26 @@ export async function initGame(game: Games, status = true) {
 	} else {
 		dataDir = configXX.targetDir;
 	}
-	writeTextFile(`config${game}.json`, JSON.stringify(configXX, null, 2));
-	apiClient.setGame(game as any);
+	await safeWriteTextFile(`config${game}.json`, JSON.stringify(configXX, null, 2));
+	apiClient.setGame(game);
 	await setCategories(game, status);
 	invoke("set_window_icon", { game });
 	// Validate source and target dirs
-	if (configXX.sourceDir && !(await exists(join(configXX.sourceDir)))) configXX.sourceDir = "";
-	if (configXX.targetDir && !(await exists(configXX.targetDir))) configXX.targetDir = "";
-	status && store.set(MAIN_FUNC_STATUS, "Validating source and target directories");
+	if (configXX.sourceDir && !(await pathExistsNative(join(configXX.sourceDir)))) configXX.sourceDir = "";
+	if (configXX.targetDir && !(await pathExistsNative(configXX.targetDir))) configXX.targetDir = "";
+	if (status) store.set(MAIN_FUNC_STATUS, "Validating source and target directories");
 	info("[IMM] Validating source and target directories...", configXX.sourceDir, configXX.targetDir);
 	store.set(SOURCE, configXX.sourceDir || "");
 	store.set(TARGET, configXX.targetDir || "");
-	store.set(XXMI_MODE, configXX.custom || 0);
+	store.set(XXMI_MODE, (configXX.custom || 0) as 0 | 1);
 	store.set(
 		SETTINGS,
 		(prev) => ({ global: { ...prev.global, game }, game: { ...prev.game, ...configXX.settings } }) as Settings
 	);
 	store.set(TYPES, apiClient.generic.types);
-	store.set(DATA, configXX.data || {});
+	store.set(DATA, configXX.data || ({} as ModDataObj));
 	store.set(PRESETS, configXX.presets || []);
+	store.set(DOWNLOAD_LIST, toResumableDownloadList(configXX.downloads));
 	return configXX;
 }
 store.sub(SETTINGS, async () => {
@@ -345,32 +539,31 @@ export async function setCategories(game = prevGame, status = true) {
 	if (!game) return;
 	prevGame = game;
 	try {
-		status && store.set(MAIN_FUNC_STATUS, "Fetching game categories from Gamebanana");
+		if (status) store.set(MAIN_FUNC_STATUS, "Fetching game categories from Gamebanana");
 		categories = await apiClient.categories();
 		//info("Fetched categories:", categories);
 		if (!categories || categories.length == 0) throw "No categories found, please verify the directories again";
 	} catch (e) {
-		status && store.set(MAIN_FUNC_STATUS, "Unable to reach Gamebanana");
+		if (status) store.set(MAIN_FUNC_STATUS, "Unable to reach Gamebanana");
 		info("[IMM] Failed to fetch categories from API, using local config if available.", e);
 		categories =
 			configXX.categories && configXX.categories.length > 0
 				? configXX.categories
 				: [...apiClient.categoryList, ...apiClient.generic.categories];
-	} finally {
-		//info("Using categories:", categories,apiClient.categoryList,configXX.categories);
-		if (!categories || categories.length == 0) return;
-		info("[IMM] Finalized categories:", categories);
-		const catObj: { [key: string]: Category } = {};
-		categories.forEach((cat) => {
-			catObj[cat._sName] = cat;
-		});
-		const customCats = configXX.settings.customCategories || {};
-		for (let key of Object.keys(customCats)) {
-			catObj[key] = { ...catObj[key], _sName: key, ...customCats[key] };
-		}
-		categories = Object.values(catObj).map((cat) => ({ ...cat, _sIconUrl: cat._sIconUrl || "/who.jpg" }));
-		store.set(CATEGORIES, categories);
 	}
+	//info("Using categories:", categories,apiClient.categoryList,configXX.categories);
+	if (!categories || categories.length == 0) return;
+	info("[IMM] Finalized categories:", categories);
+	const catObj: { [key: string]: Category } = {};
+	categories.forEach((cat) => {
+		catObj[cat._sName] = cat;
+	});
+	const customCats = (configXX.settings.customCategories || {}) as Record<string, Partial<Category>>;
+	for (const key of Object.keys(customCats)) {
+		catObj[key] = { ...(catObj[key] || ({} as Category)), _sName: key, ...customCats[key] };
+	}
+	categories = Object.values(catObj).map((cat) => ({ ...cat, _sIconUrl: cat._sIconUrl || "/who.jpg" }));
+	store.set(CATEGORIES, categories);
 }
 function removeHelpers() {
 	stopWindowMonitoring();
@@ -378,7 +571,8 @@ function removeHelpers() {
 	resetPageCounts();
 }
 export async function launchGame() {
-	if (await exists(config.XXMI))
+	await syncIniStateOnce("launch-game");
+	if (await pathExistsNative(config.XXMI))
 		isGameProcessRunning(config.game).then((running) => {
 			if (!running) {
 				executeXXMI(join(config.XXMI, "Resources\\Bin\\XXMI Launcher.exe"));
@@ -391,7 +585,7 @@ export async function launchGame() {
 }
 async function initHelpers() {
 	info("[IMM] Initializing helpers...");
-	if (configXX.settings.launch == 1 && GAMES.includes(config.game)) {
+	if (configXX.settings.launch == 1 && GAMES.includes(config.game as RuntimeGame)) {
 		launchGame();
 	}
 	setHotreload(configXX.settings.hotReload as 0 | 1 | 2, config.game, configXX.targetDir);
@@ -401,9 +595,9 @@ async function initHelpers() {
 export async function checkWWMM() {
 	info("[IMM] Checking for WWMM config...");
 	const wwmmPath = await path.join(await path.localDataDir(), "Wuwa Mod Manager (WWMM)", "config.json");
-	if (await exists(wwmmPath)) {
+	if (await safeExists(wwmmPath)) {
 		//info('exists')
-		return (await readTextFile(wwmmPath)) || null;
+		return (await safeReadTextFile(wwmmPath)) || null;
 	}
 	return null;
 }
@@ -415,47 +609,48 @@ export async function maintainBackups() {
 	mkdir("backups", { recursive: true });
 	const backupPath = "backups\\AUTO_";
 	for (const file of files) {
-		if (await exists(file)) {
+		if (await safeExists(file)) {
 			try {
-				const data = JSON.parse(await readTextFile(file));
+				const data = JSON.parse(await safeReadTextFile(file));
 				delete data.categories;
-				if (await exists(backupPath + file + ".bak")) {
+				if (await safeExists(backupPath + file + ".bak")) {
 					try {
-						const backupData = JSON.parse(await readTextFile(backupPath + file + ".bak"));
+						const backupData = readJsonText<Record<string, unknown>>(await safeReadTextFile(backupPath + file + ".bak"));
 						if (
 							backupData.updatedAt &&
-							new Date().getTime() - new Date(backupData.updatedAt).getTime() > 24 * 60 * 60 * 1000
+							new Date().getTime() - new Date(String(backupData.updatedAt)).getTime() > 24 * 60 * 60 * 1000
 						) {
 							info(`[IMM] Creating backup for: ${file}...`);
-							try {
-								remove(backupPath + file + ".bak.bak");
-							} catch {}
-							await writeTextFile(backupPath + file + ".bak.bak", await readTextFile(backupPath + file + ".bak"));
-							await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
+							await remove(backupPath + file + ".bak.bak").catch(() => undefined);
+							const currentBackupText = await safeReadTextFile(backupPath + file + ".bak");
+							await safeWriteTextFile(backupPath + file + ".bak.bak", currentBackupText);
+							await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 						}
 					} catch {
 						info(`[IMM] Detected corrupted backup file: ${file}.bak, creating new backup...`);
-						await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
+						await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 					}
 				} else {
 					info(`[IMM] Creating initial backup for: ${file}...`);
-					await writeTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
+					await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
 				}
-			} catch (e) {
+			} catch {
 				info(`[IMM] Detected corrupted config file: ${file}, restoring from backup...`);
 				store.set(MAIN_FUNC_STATUS, `Config file corrupted, restoring from backup`);
-				if (await exists(backupPath + file + ".bak")) {
+				if (await safeExists(backupPath + file + ".bak")) {
 					try {
-						const backupData = JSON.parse(await readTextFile(backupPath + file + ".bak"));
-						await writeTextFile(file, JSON.stringify(backupData, null, 2));
+						const backupData = readJsonText<Record<string, unknown>>(await safeReadTextFile(backupPath + file + ".bak"));
+						await safeWriteTextFile(file, JSON.stringify(backupData, null, 2));
 						info(`[IMM] Successfully restored backup for: ${file}`);
-					} catch (e) {
+					} catch {
 						info(`[IMM] Detected corrupted backup config file: ${file}.bak, restoring from secondary backup...`);
-						if (await exists(backupPath + file + ".bak.bak")) {
+						if (await safeExists(backupPath + file + ".bak.bak")) {
 							try {
-								const backupData2 = JSON.parse(await readTextFile(backupPath + file + ".bak.bak"));
-								await writeTextFile(file, JSON.stringify(backupData2, null, 2));
-								await writeTextFile(backupPath + file + ".bak", JSON.stringify(backupData2, null, 2));
+								const backupData2 = readJsonText<Record<string, unknown>>(
+									await safeReadTextFile(backupPath + file + ".bak.bak")
+								);
+								await safeWriteTextFile(file, JSON.stringify(backupData2, null, 2));
+								await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(backupData2, null, 2));
 								info(`[IMM] Successfully restored secondary backup for: ${file}`);
 							} catch (e) {
 								info(`[IMM] Failed to restore secondary backup for: ${file}:`, e);
@@ -488,129 +683,188 @@ export async function maintainBackups() {
 	}
 }
 let cwd = "";
+let runtimeDirPromise: Promise<string> | null = null;
 export function getCwd() {
 	return cwd;
 }
-export async function main(useGame = "" as Games) {
-	store.set(MAIN_FUNC_STATUS, "Initializing App");
-	isInitialized = false;
-	info("[IMM] Initializing application...");
-	invoke("get_username");
-	resetAtoms();
-	removeHelpers();
-	appData = await path.dataDir();
-	cwd = join(await path.localDataDir(), "Integrated Mod Manager (IMM)");
-	const XXMI = `${appData}\\XXMI Launcher`;
-	if (!(await exists("config.json"))) {
-		store.set(MAIN_FUNC_STATUS, "Creating default config.json");
-		info("[IMM] Creating default config.json...");
-		await writeTextFile("config.json", JSON.stringify(defConfig, null, 2));
-	}
-	await maintainBackups();
-	config = safeLoadJson(defConfig, JSON.parse(await readTextFile("config.json")));
-	if (config.version < "2.2.0") {
-		config.chkModUpdates = true;
-		config.bgType = 1;
-	}
-	info("[IMM] Loaded config:", config);
-	store.set(MAIN_FUNC_STATUS, "Config loaded");
-	const savedLang = store.get(SAVED_LANG);
-	if (!savedLang && config.lang) {
-		store.set(SAVED_LANG, config.lang);
-	}
-	config.lang = store.get(SAVED_LANG) || config.lang;
-	if (!config.XXMI && !config.game && !config.lang) {
-		store.set(MAIN_FUNC_STATUS, "First time setup detected, checking for WWMM");
-		info("[IMM] First time setup detected, checking for WWMM...");
-		store.set(FIRST_LOAD, true);
-		const temp = await checkWWMM();
-		if (temp) config = await updateConfig(JSON.parse(temp));
-	} else {
-		store.set(FIRST_LOAD, false);
-	}
-	apiClient.setClient(config.clientDate || "");
-	if ((config.XXMI == "" || !(await exists(config.XXMI))) && (await exists(XXMI))) {
-		config.XXMI = XXMI;
-	}
-	paths.XX = config.XXMI;
-	config.game = useGame || config.game;
-	if (sessionStorage.getItem("imm-deep-link-game")) {
-		config.game = sessionStorage.getItem("imm-deep-link-game") as Games;
-		config.game = GAMES.includes(config.game) ? config.game : "";
-		sessionStorage.removeItem("imm-deep-link-game");
-	}
-	if (config.game) apiClient.setGame(config.game);
-	if (config.version < "2.1.0") {
-		config = await updateConfig();
-	}
-	info("[IMM] Saving config...");
-	writeTextFile("config.json", JSON.stringify(config, null, 2));
-	await readXXMIConfig(config.XXMI || "");
-	store.set(MAIN_FUNC_STATUS, "Initializing game");
-	info("[IMM] Initializing game...");
-	if (config.game) configXX = await initGame(config.game);
-	info("[IMM] Setting window type...");
-	if (config.winType > 1) setWindowType(config.winType);
-	const bg = document.querySelector("body");
-	if (bg)
-		bg.style.backgroundColor = "color-mix(in oklab, var(--background) " + config.bgOpacity * 100 + "%, transparent)";
-
-	store.set(SETTINGS, (prev) => ({
-		global: { ...prev.global, ...config },
-		game: { ...prev.game, ...configXX.settings },
-	}));
-	initHelpers();
-	let update: Update | null = null;
-	try {
-		const timeoutPromise = new Promise<never>((_, reject) =>
-			setTimeout(() => reject(new Error("Update check timeout")), 2000)
+export function isAppInitialized() {
+	return isInitialized;
+}
+async function readRuntimeDataDir() {
+	if (!runtimeDirPromise) {
+		runtimeDirPromise = invoke<string>("get_runtime_data_dir").catch(async () =>
+			join(await path.localDataDir(), "Integrated Mod Manager (IMM) Data")
 		);
-		update = await Promise.race([check(), timeoutPromise]);
-	} catch (error) {
-		update = null;
 	}
-	if (update) {
-		let lang = config.lang || "en";
-		let parsedBody: any = {};
-		if (update.body) {
-			try {
-				parsedBody = JSON.parse(update.body);
-				parsedBody = parsedBody[lang as keyof typeof parsedBody] || parsedBody;
-			} catch (e) {
-				parsedBody = {};
-			}
+	return runtimeDirPromise;
+}
+function parseUpdateBody(update: Update | null, lang: string) {
+	if (!update?.body) return {};
+	try {
+		const parsed = readJsonText<unknown>(update.body);
+		if (!isRecord(parsed)) return {};
+		return normalizeUpdateBodyEntry(parsed[lang] ?? parsed);
+	} catch {
+		return {};
+	}
+}
+export async function refreshAppUpdateCheck(openUpdater = false) {
+	store.set(IMM_UPDATE, {
+		version: VERSION,
+		date: "",
+		body: "{}",
+		status: "checking",
+		raw: null,
+		error: "",
+	});
+	try {
+		const update = await check({ timeout: 15000 });
+		if (!update) {
+			store.set(IMM_UPDATE, {
+				version: VERSION,
+				date: "",
+				body: "{}",
+				status: "up_to_date",
+				raw: null,
+				error: "",
+			});
+			if (openUpdater) store.set(UPDATER_OPEN, true);
+			return null;
 		}
+
+		const lang = config.lang || "en";
+		const parsedBody = parseUpdateBody(update, lang);
 		const notice = parsedBody.notice || {};
 		const lastConfig = config.notice || 0;
 		let noticeOpen = false;
-		if (notice.id > 0 && notice.ver > VERSION) {
-			store.set(NOTICE, (prev: any) => ({ ...prev, ...notice }));
-			if (notice.id !== lastConfig || notice.ignoreable == 0) {
+		if ((notice.id ?? 0) > 0 && compareVersions(notice.ver || "0.0.0", VERSION) > 0) {
+			store.set(NOTICE, (prev) => ({ ...prev, ...notice }));
+			if ((notice.id ?? 0) !== lastConfig || notice.ignoreable == 0) {
 				noticeOpen = true;
-				store.set(NOTICE_OPEN, noticeOpen);
+				store.set(NOTICE_OPEN, true);
 			}
 		}
 
-		const show = config.preReleases || isOlderThanOneDay(update.date || "");
 		store.set(IMM_UPDATE, {
 			version: update.version,
 			date: update.date || "",
 			body: JSON.stringify(parsedBody) || "{}",
-			status: show ? "available" : "ignored",
+			status: "available",
 			raw: update,
+			error: "",
 		});
-		if (!noticeOpen && update.version > config.ignore && show) {
+		if (openUpdater || (!noticeOpen && compareVersions(update.version || "0.0.0", config.ignore || VERSION) > 0)) {
 			store.set(UPDATER_OPEN, true);
 		}
 		store.set(SETTINGS, (prev) => ({
 			...prev,
-			global: {
+			global: sanitizeGlobalSettings({
 				...prev.global,
-				notice: notice.id,
-				ignore: update.version,
-			},
+				notice: notice.id || prev.global.notice || 0,
+			}),
 		}));
+		return update;
+	} catch (error: unknown) {
+		store.set(IMM_UPDATE, {
+			version: VERSION,
+			date: "",
+			body: "{}",
+			status: "error",
+			raw: null,
+			error: getErrorMessage(error),
+		});
+		if (openUpdater) store.set(UPDATER_OPEN, true);
+		return null;
 	}
-	isInitialized = true;
-	store.set(MAIN_FUNC_STATUS, "fin");
+}
+export async function main(useGame = "" as Games) {
+	try {
+		store.set(MAIN_FUNC_STATUS, "Initializing App");
+		isInitialized = false;
+		info("[IMM] Initializing application...");
+		invoke("get_username");
+		resetAtoms();
+		removeHelpers();
+		appData = await path.dataDir();
+		cwd = await readRuntimeDataDir();
+		info("[IMM] Runtime data directory:", cwd);
+		const xxmiCandidates = getDefaultXxmiDirCandidatesFromAppData(appData);
+		if (!(await safeExists("config.json"))) {
+			store.set(MAIN_FUNC_STATUS, "Creating default config.json");
+			info("[IMM] Creating default config.json...");
+			await safeWriteTextFile("config.json", JSON.stringify(defConfig, null, 2));
+		}
+		await maintainBackups();
+		info("[IMM] Reading runtime config.json...");
+		const rawConfigText = await safeReadTextFile("config.json");
+		info("[IMM] Runtime config.json length:", rawConfigText.length);
+		const rawConfig = readJsonText<Record<string, unknown>>(rawConfigText);
+		config = sanitizeGlobalSettings(safeLoadJson(structuredClone(defConfig), rawConfig));
+		if (compareVersions(config.version || "0.0.0", "2.2.0") < 0) {
+			config.chkModUpdates = true;
+			config.bgType = 1;
+		}
+		config = sanitizeGlobalSettings(config);
+		info("[IMM] Loaded config:", config);
+		store.set(MAIN_FUNC_STATUS, "Config loaded");
+		const savedLang = store.get(SAVED_LANG);
+		if (!savedLang && config.lang) {
+			store.set(SAVED_LANG, config.lang);
+		}
+		config.lang = store.get(SAVED_LANG) || config.lang;
+		if (!config.XXMI && !config.game && !config.lang) {
+			store.set(MAIN_FUNC_STATUS, "First time setup detected, checking for WWMM");
+			info("[IMM] First time setup detected, checking for WWMM...");
+			store.set(FIRST_LOAD, true);
+			const temp = await checkWWMM();
+			if (temp) config = await updateConfig(JSON.parse(temp));
+		} else {
+			store.set(FIRST_LOAD, false);
+		}
+		apiClient.setClient(config.clientDate || "");
+		if (config.XXMI == "" || !(await safeExists(config.XXMI))) {
+			for (const candidate of xxmiCandidates) {
+				if (await pathExistsNative(candidate)) {
+					config.XXMI = candidate;
+					break;
+				}
+			}
+		}
+		paths.XX = config.XXMI;
+		config.game = useGame || config.game;
+		if (sessionStorage.getItem("imm-deep-link-game")) {
+			config.game = sessionStorage.getItem("imm-deep-link-game") as Games;
+			config.game = GAMES.includes(config.game) ? config.game : "";
+			sessionStorage.removeItem("imm-deep-link-game");
+		}
+		if (config.game) apiClient.setGame(config.game as RuntimeGame);
+		if (compareVersions(config.version || "0.0.0", "2.1.0") < 0) {
+			config = await updateConfig();
+		}
+		info("[IMM] Saving config...");
+		await safeWriteTextFile("config.json", JSON.stringify(config, null, 2));
+		await readXXMIConfig(config.XXMI || "");
+		store.set(MAIN_FUNC_STATUS, "Initializing game");
+		info("[IMM] Initializing game...");
+		if (config.game) configXX = await initGame(config.game as RuntimeGame);
+		info("[IMM] Setting window type...");
+		if (config.winType > 1) setWindowType(config.winType);
+		const bg = document.querySelector("body");
+		if (bg)
+			bg.style.backgroundColor = "color-mix(in oklab, var(--background) " + config.bgOpacity * 100 + "%, transparent)";
+
+		store.set(SETTINGS, (prev) => ({
+			global: sanitizeGlobalSettings({ ...prev.global, ...config }),
+			game: { ...prev.game, ...configXX.settings },
+		}));
+		initHelpers();
+		isInitialized = true;
+		store.set(MAIN_FUNC_STATUS, "fin");
+		void refreshAppUpdateCheck(false);
+	} catch (error) {
+		const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
+		info("[IMM] main() failed:", message);
+		store.set(MAIN_FUNC_STATUS, "Startup failed");
+		store.set(ERR, message);
+	}
 }

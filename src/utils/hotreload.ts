@@ -1,19 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { GAME_ID_MAP } from "./consts";
-import { exists, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { warn } from "@/lib/logger";
 
 export function join(...parts: string[]) {
-	let result = parts.join("\\").replace("/", "\\").replaceAll("\\\\", "\\");
+	let result = parts.join("\\").replaceAll("/", "\\").replaceAll("\\\\", "\\");
 	result = result.endsWith("\\") ? result.slice(0, -1) : result;
 	result = result.startsWith("\\") ? result.slice(1) : result;
 	return result;
 }
 export function updateIni(tgt: string, foreground = 0) {
-	tgt=tgt.split("\\").slice(0,-1).join("\\");
+	tgt = tgt.split("\\").slice(0, -1).join("\\");
 	const target = join(tgt, "d3dx.ini");
-	exists(target).then((res) => {
-		if (!res) return;
-		readTextFile(target).then((data) => {
+	invoke<boolean>("path_exists_native", { path: target })
+		.then((res) => {
+			if (!res) return;
+			return invoke<string>("read_text_file_native", { path: target });
+		})
+		.then((data) => {
+			if (!data) return;
 			let modified = false;
 			const lines = data.split("\n").map((line) => {
 				const trimmed = line.trim();
@@ -24,50 +28,32 @@ export function updateIni(tgt: string, foreground = 0) {
 				return line;
 			});
 			if (modified) {
-				writeTextFile(target, lines.join("\n"));
+				return invoke<void>("write_text_file_native", { path: target, contents: lines.join("\n") });
 			}
+			return undefined;
+		})
+		.catch((error) => {
+			warn("[IMM] Failed to update d3dx.ini hotreload setting:", error);
 		});
-	});
 }
 export async function setHotreload(enabled: 0 | 1 | 2, game: string, target: string): Promise<void> {
-	try {
-		if (enabled == 1) {
-			updateIni(target, 0);
-		} else {
-			updateIni(target, 1);
-		}
-		await invoke("set_hotreload", { enabled: enabled ? true : false });
-		if (enabled) {
-            //info("Setting hotreload for game:", { targetGame: enabled == 1 || !game ? 0 : GAME_ID_MAP[game] + 1 });
-			await invoke("set_window_target", { targetGame: enabled == 1 || !game ? 0 : GAME_ID_MAP[game] + 1 });
-			await startWindowMonitoring();
-		} else await stopWindowMonitoring();
-	} catch (error) {
-		// logger.error("Failed to set hotreload:", error);
-		throw error;
+	if (enabled == 1) {
+		updateIni(target, 0);
+	} else {
+		updateIni(target, 1);
 	}
+	await invoke("set_hotreload", { enabled: enabled ? true : false });
+	if (enabled) {
+		await invoke("set_window_target", { targetGame: enabled == 1 || !game ? 0 : GAME_ID_MAP[game] + 1 });
+		await startWindowMonitoring();
+	} else await stopWindowMonitoring();
 }
 export async function setChange(trigger = true): Promise<void> {
-	try {
-		await invoke("set_change", { trigger });
-	} catch (error) {
-		// logger.error("Failed to set change trigger:", error);
-		throw error;
-	}
+	await invoke("set_change", { trigger });
 }
 export async function startWindowMonitoring(): Promise<void> {
-	try {
-		await invoke("start_window_monitoring");
-	} catch (error) {
-		// logger.error("Failed to start window monitoring:", error);
-		throw error;
-	}
+	await invoke("start_window_monitoring");
 }
 export async function stopWindowMonitoring(): Promise<void> {
-	try {
-		await invoke("stop_window_monitoring");
-	} catch (error) {
-		// logger.error("Failed to stop window monitoring:", error);
-		throw error;
-	}
+	await invoke("stop_window_monitoring");
 }
