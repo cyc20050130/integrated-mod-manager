@@ -65,6 +65,11 @@ winapi = { version = "0.3.9", features = [
     "errhandlingapi",
     "winerror"
 ] }
+windows-sys = { version = "0.61.2", features = [
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_System_IO"
+] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"

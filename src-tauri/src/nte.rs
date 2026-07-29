@@ -367,12 +367,11 @@ pub(crate) fn durable_rename_bound_directory(
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
     use std::ptr;
-    use winapi::shared::minwindef::DWORD;
-    use winapi::um::fileapi::{
-        GetFinalPathNameByHandleW, SetFileInformationByHandle, FILE_RENAME_INFO,
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FileRenameInformation, NtSetInformationFile, FILE_RENAME_INFORMATION,
     };
-    use winapi::um::minwinbase::FileRenameInfo;
-    use winapi::um::winnt::HANDLE;
+    use windows_sys::Win32::Foundation::{RtlNtStatusToDosError, HANDLE};
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
     let destination = Path::new(destination_name);
     if destination.components().count() != 1
@@ -384,35 +383,14 @@ pub(crate) fn durable_rename_bound_directory(
         ));
     }
     let destination_parent_handle = destination_parent.as_raw_handle() as HANDLE;
-    let required =
-        unsafe { GetFinalPathNameByHandleW(destination_parent_handle, ptr::null_mut(), 0, 0) };
-    if required == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut encoded = vec![0u16; required as usize];
-    let written = unsafe {
-        GetFinalPathNameByHandleW(
-            destination_parent_handle,
-            encoded.as_mut_ptr(),
-            encoded.len() as DWORD,
-            0,
-        )
-    };
-    if written == 0 || written as usize >= encoded.len() {
-        return Err(std::io::Error::last_os_error());
-    }
-    encoded.truncate(written as usize);
-    if !encoded.ends_with(&['\\' as u16]) {
-        encoded.push('\\' as u16);
-    }
-    encoded.extend(destination_name.encode_wide());
-    if encoded.is_empty() || encoded.len() > (DWORD::MAX as usize / size_of::<u16>()) {
+    let encoded = destination_name.encode_wide().collect::<Vec<_>>();
+    if encoded.is_empty() || encoded.len() > (u32::MAX as usize / size_of::<u16>()) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "NTE bound rename destination name is too long",
         ));
     }
-    let header_bytes = offset_of!(FILE_RENAME_INFO, FileName);
+    let header_bytes = offset_of!(FILE_RENAME_INFORMATION, FileName);
     let payload_bytes = encoded
         .len()
         .checked_mul(size_of::<u16>())
@@ -425,27 +403,30 @@ pub(crate) fn durable_rename_bound_directory(
         })?;
     let word_bytes = size_of::<usize>();
     let mut storage = vec![0usize; payload_bytes.div_ceil(word_bytes)];
-    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
     unsafe {
-        (*info).ReplaceIfExists = 0;
-        (*info).RootDirectory = ptr::null_mut();
-        (*info).FileNameLength = (encoded.len() * size_of::<u16>()) as DWORD;
+        (*info).Anonymous.ReplaceIfExists = false;
+        (*info).RootDirectory = destination_parent_handle;
+        (*info).FileNameLength = (encoded.len() * size_of::<u16>()) as u32;
         ptr::copy_nonoverlapping(
             encoded.as_ptr(),
             (*info).FileName.as_mut_ptr(),
             encoded.len(),
         );
     }
+    let mut status = IO_STATUS_BLOCK::default();
     let renamed = unsafe {
-        SetFileInformationByHandle(
+        NtSetInformationFile(
             source.as_raw_handle() as HANDLE,
-            FileRenameInfo,
+            &mut status,
             info.cast(),
-            payload_bytes as DWORD,
+            payload_bytes as u32,
+            FileRenameInformation,
         )
     };
-    if renamed == 0 {
-        Err(std::io::Error::last_os_error())
+    if renamed < 0 {
+        let code = unsafe { RtlNtStatusToDosError(renamed) };
+        Err(std::io::Error::from_raw_os_error(code as i32))
     } else {
         Ok(())
     }

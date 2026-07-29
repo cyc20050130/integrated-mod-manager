@@ -2079,6 +2079,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "winapi",
+ "windows-sys 0.61.2",
  "zip 7.3.0",
 ]
 
