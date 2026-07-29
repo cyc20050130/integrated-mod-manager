@@ -33,5 +33,12 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Prepare Rust test temp directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path "${{ runner.temp }}\imm-rust-tests"
+
       - name: Test Rust library
+        env:
+          TEMP: ${{ runner.temp }}\imm-rust-tests
+          TMP: ${{ runner.temp }}\imm-rust-tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
