@@ -126,8 +126,7 @@ function Help({ setPage }: { setPage: (page: number) => void }) {
 							className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
 						>
 							{" "}
-							<img className="h-4" src="/GBLogo.png" />{" "}
-							<img className="h-3" src="/GBTitle.png" />
+							<img className="h-4" src="/GBLogo.png" /> <img className="h-3" src="/GBTitle.png" />
 						</a>
 						<label className="opacity-50">-</label>
 						<a
@@ -137,10 +136,7 @@ function Help({ setPage }: { setPage: (page: number) => void }) {
 							className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
 						>
 							{" "}
-							<img
-								className="h-6"
-								src="/DCLogoTitle.svg"
-							/>
+							<img className="h-6" src="/DCLogoTitle.svg" />
 						</a>
 					</div>
 				</footer>

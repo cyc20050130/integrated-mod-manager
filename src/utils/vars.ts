@@ -13,6 +13,7 @@ import {
 	Language,
 	Mod,
 	ModDataObj,
+	NteRegion,
 	OnlineData,
 	Preset,
 	PreviewBackfillState,
@@ -59,7 +60,7 @@ const MAIN_FUNC_STATUS = atom<string>("");
 const FIRST_LOAD = atom(false);
 const GAME = atom<Games>("");
 const LANG = atom<Language>("en");
-const SAVED_LANG = atomWithStorage<Language | "">("imm-lang","");
+const SAVED_LANG = atomWithStorage<Language | "">("imm-lang", "");
 const LAST_UPDATED = atom(Date.now());
 const SETTINGS = atom<Settings>({
 	global: {
@@ -111,6 +112,7 @@ const CATEGORIES = atom<Category[]>([]);
 const TYPES = atom<Category[]>([]);
 const XXMI_MODE = atom<0 | 1>(0);
 const XXMI_DIR = atom<string>("");
+const NTE_REGION = atom<NteRegion>(DEFAULTS.NTE_REGION);
 const LEFT_SIDEBAR_OPEN = atom(true);
 const RIGHT_SIDEBAR_OPEN = atom(true);
 const RIGHT_SLIDEOVER_OPEN = atom(false);
@@ -161,9 +163,9 @@ const CONFLICTS = atom({
 	mods: {} as Record<string, number>,
 });
 const CONFLICT_INDEX = atom(0);
-export function openConflict(index=-1) {
+export function openConflict(index = -1) {
 	store.set(CONFLICTS_OPEN, (prev) => {
-		if (!prev && index>=0) {
+		if (!prev && index >= 0) {
 			store.set(CONFLICT_INDEX, index);
 		}
 		return true;
@@ -212,6 +214,7 @@ export function resetAtoms() {
 	resetIfChanged(ONLINE_SORT, DEFAULTS.ONLINE_SORT);
 	resetIfChanged(ONLINE_SELECTED, DEFAULTS.ONLINE_SELECTED);
 	resetIfChanged(XXMI_MODE, DEFAULTS.XXMI_MODE);
+	resetIfChanged(NTE_REGION, DEFAULTS.NTE_REGION);
 	resetIfChanged(LINK_AUDIT_REPORT, DEFAULTS.LINK_AUDIT_REPORT);
 	resetIfChanged(LINK_AUDIT_RUNNING, DEFAULTS.LINK_AUDIT_RUNNING);
 	resetIfChanged(PREVIEW_BACKFILL_STATE, DEFAULTS.PREVIEW_BACKFILL_STATE);
@@ -226,6 +229,7 @@ export {
 	ERR,
 	XXMI_DIR,
 	XXMI_MODE,
+	NTE_REGION,
 	FIRST_LOAD,
 	HELP_OPEN,
 	WUWA_MOD_FIXER_OPEN,

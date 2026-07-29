@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { Label } from "@/components/ui/label";
 import { SidebarContent, SidebarGroup, SidebarGroupLabel } from "@/components/ui/sidebar";
 import { modRouteFromURL } from "@/utils/utils";
@@ -67,7 +68,11 @@ function LeftOnline() {
 				<SidebarContent
 					className="min-h-fit grid items-center justify-center w-full grid-cols-2 px-2"
 					style={{
-						gridTemplateColumns: leftSidebarOpen ? game=="WW"?"repeat(3, minmax(0, 1fr))":"" : "repeat(1, minmax(0, 1fr))",
+						gridTemplateColumns: leftSidebarOpen
+							? game == "WW"
+								? "repeat(3, minmax(0, 1fr))"
+								: ""
+							: "repeat(1, minmax(0, 1fr))",
 					}}
 				>
 					{types.map((category) => {
@@ -94,7 +99,7 @@ function LeftOnline() {
 									}}
 								>
 									{game == "GI" ? (
-										<img
+										<RemoteImage
 											src={category._sIconUrl}
 											className="aspect-square w-8 h-8 duration-200"
 											style={{
@@ -137,7 +142,6 @@ function LeftOnline() {
 						<FolderCheckIcon className="min-h-2 min-w-2 w-4 h-4" />
 						{installedItems.filter((item) => item.modStatus === 0).length}
 					</Label>
-					
 				</SidebarGroupLabel>
 				<SidebarContent className="min-w-14 flex flex-col items-center w-full h-full gap-2 pl-2 pr-1 mb-2 overflow-hidden overflow-y-auto duration-200">
 					<AnimatePresence initial={false}>
@@ -151,9 +155,8 @@ function LeftOnline() {
 										layout
 										transition={{ duration: 0.2 }}
 										key={item.name}
-										className=
-											"w-full min-h-12 button-like zzz-fg-text flex-col justify-center height-in overflow-hidden rounded-lg flex duration-200 bg-input/50 text-accent hover:bg-input/80"
-										
+										className="w-full min-h-12 button-like zzz-fg-text flex-col justify-center height-in overflow-hidden rounded-lg flex duration-200 bg-input/50 text-accent hover:bg-input/80"
+
 										onClick={(e) => {
 											if (e.target === e.currentTarget) {
 												setSelected(modRouteFromURL(item.source));

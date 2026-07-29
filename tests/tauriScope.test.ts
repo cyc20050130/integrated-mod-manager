@@ -27,41 +27,67 @@ function readJson<T>(relativePath: string) {
 	return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8")) as T;
 }
 
-test("desktop capability fs and opener scopes allow APPDATA for XXMI paths", () => {
+test("desktop capability does not expose broad renderer filesystem or path opener access", () => {
 	const capability = readJson<CapabilityConfig>("src-tauri/capabilities/default.json");
 	const permissions = capability.permissions || [];
-	const fsScope = permissions.find(
-		(permission) => typeof permission !== "string" && permission.identifier === "fs:scope"
-	) as Extract<CapabilityPermission, { identifier?: string }> | undefined;
-	const openerScope = permissions.find(
-		(permission) => typeof permission !== "string" && permission.identifier === "opener:allow-open-path"
-	) as Extract<CapabilityPermission, { identifier?: string }> | undefined;
+	const identifiers = permissions.map((permission) =>
+		typeof permission === "string" ? permission : permission.identifier || ""
+	);
 
-	assert.ok(fsScope);
-	assert.ok(openerScope);
-	assert.ok(Array.isArray(fsScope.allow));
-	assert.ok(Array.isArray(openerScope.allow));
-	assert.ok((fsScope.allow as string[]).includes("$APPDATA/**"));
-	assert.ok((openerScope.allow as Array<{ path?: string }>).some((entry) => entry.path === "$APPDATA/**"));
+	assert.equal(identifiers.includes("fs:read-all"), false);
+	assert.equal(identifiers.includes("fs:write-all"), false);
+	assert.equal(identifiers.includes("fs:scope"), false);
+	assert.equal(identifiers.includes("fs:allow-watch"), false);
+	assert.equal(identifiers.includes("opener:default"), false);
+	assert.equal(identifiers.includes("opener:allow-open-path"), false);
+	assert.equal(identifiers.includes("opener:allow-reveal-item-in-dir"), false);
+	assert.ok(identifiers.includes("fs:allow-read-text-file"));
+	assert.ok(identifiers.includes("fs:allow-write-text-file"));
+	assert.ok(identifiers.includes("opener:allow-default-urls"));
 });
 
-test("asset protocol scope allows APPDATA previews from XXMI-managed folders", () => {
+test("INI state sync uses a native persisted-config watcher instead of renderer fs watch", () => {
+	const renderer = readFileSync(new URL("../src/utils/iniStateSync.ts", import.meta.url), "utf8");
+	const native = readFileSync(new URL("../src-tauri/src/ini_watcher.rs", import.meta.url), "utf8");
+
+	assert.doesNotMatch(renderer, /@tauri-apps\/plugin-fs/);
+	assert.match(renderer, /invoke<string>\("start_ini_state_watch", \{ game \}\)/);
+	assert.match(renderer, /listen<\{ path\?: string \}>\("ini-state-changed"/);
+	assert.match(native, /config_dir\.join\(format!\("config\{game\}\.json"\)\)/);
+	assert.match(native, /RecursiveMode::NonRecursive/);
+	assert.match(native, /event_touches_ini/);
+});
+
+test("renderer does not call the generic path opener directly", () => {
+	const sourceFiles = [
+		"src/_Main/MainLocal.tsx",
+		"src/_RightSidebar/RightLocal.tsx",
+		"src/_LeftSidebar/components/Batch.tsx",
+		"src/utils/filesys.ts",
+		"src/utils/wuwaModFixer.ts",
+	];
+	for (const sourceFile of sourceFiles) {
+		const source = readFileSync(new URL(`../${sourceFile}`, import.meta.url), "utf8");
+		assert.doesNotMatch(source, /@tauri-apps\/plugin-opener/);
+		assert.doesNotMatch(source, /\bopenPath\s*\(/);
+	}
+});
+
+test("asset protocol scope is limited to the manager-controlled preview cache", () => {
 	const tauriConfig = readJson<TauriConfig>("src-tauri/tauri.conf.json");
 	const scope = tauriConfig.app?.security?.assetProtocol?.scope || [];
 
-	assert.ok(scope.includes("$APPDATA/**"));
+	assert.deepEqual(scope, ["$APPLOCALDATA/preview-cache/**"]);
 });
 
-test("desktop HTTP capability allows GameBanana without duplicate unscoped default", () => {
+test("desktop capability does not expose renderer HTTP access", () => {
 	const capability = readJson<CapabilityConfig>("src-tauri/capabilities/default.json");
 	const permissions = capability.permissions || [];
-	const rawHttpDefaults = permissions.filter((permission) => permission === "http:default");
-	const httpScope = permissions.find(
-		(permission) => typeof permission !== "string" && permission.identifier === "http:default"
-	) as Extract<CapabilityPermission, { identifier?: string }> | undefined;
-	const allowedUrls = (httpScope?.allow as Array<{ url?: string }> | undefined)?.map((entry) => entry.url) || [];
-
-	assert.equal(rawHttpDefaults.length, 0);
-	assert.ok(allowedUrls.includes("https://gamebanana.com/*"));
-	assert.ok(allowedUrls.includes("https://*.gamebanana.com/*"));
+	assert.equal(
+		permissions.some(
+			(permission) =>
+				permission === "http:default" || (typeof permission !== "string" && permission.identifier?.startsWith("http:"))
+		),
+		false
+	);
 });

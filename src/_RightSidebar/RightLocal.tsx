@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { RemoteImage } from "@/components/RemoteImage";
 import {
 	CATEGORIES,
 	DATA,
@@ -10,7 +11,6 @@ import {
 	openConflict,
 	SELECTED,
 	SETTINGS,
-	SOURCE,
 	TEXT_DATA,
 } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
@@ -30,7 +30,6 @@ import {
 	TrashIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { GAME_GB_IDS, GAMES, managedSRC } from "@/utils/consts";
 import {
 	getImageUrl,
@@ -51,6 +50,7 @@ import {
 	deleteMod,
 	getModDetails,
 	installFromArchives,
+	openManagedFolder,
 	refreshModList,
 	saveConfigs,
 	selectPath,
@@ -113,7 +113,10 @@ function formatDetails(details: ModDetails, modData?: StoredVarMap): ModDetails 
 		.sort((a, b) => a.key.localeCompare(b.key));
 
 	const files = Object.fromEntries(
-		Object.entries(details.files).map(([file, hotkeys]) => [file, hotkeys.map((key) => mergeHotkeyWithStoredData(key, modData))])
+		Object.entries(details.files).map(([file, hotkeys]) => [
+			file,
+			hotkeys.map((key) => mergeHotkeyWithStoredData(key, modData)),
+		])
 	);
 
 	return { keys, files };
@@ -143,9 +146,10 @@ function RightLocal() {
 				const pathParts = rest.split("/");
 				const gameSlug = pathParts.shift() ?? "";
 				const gameId = Number.parseInt(gameSlug, 10);
-				const urlGame = Number.isFinite(gameId) && Object.prototype.hasOwnProperty.call(GAME_GB_IDS, gameId)
-					? GAME_GB_IDS[gameId]
-					: undefined;
+				const urlGame =
+					Number.isFinite(gameId) && Object.prototype.hasOwnProperty.call(GAME_GB_IDS, gameId)
+						? GAME_GB_IDS[gameId]
+						: undefined;
 				info(`urlGame: ${urlGame} game: ${game}`);
 				const nextUrl = [prefix, pathParts.join("/")].join("/");
 				urls[urls.length - 1] = nextUrl;
@@ -247,7 +251,6 @@ function RightLocal() {
 		return () => document.removeEventListener("paste", handlePaste);
 	}, [dialogOpen, dialogType]);
 	const categories = useAtomValue(CATEGORIES);
-	const source = useAtomValue(SOURCE);
 	const [deleteItemData, setDeleteItemData] = useState<Mod | null>(null);
 	// const decor = useAtomValue(SETTINGS).global.winType
 	const [modList, setModList] = useAtom(MOD_LIST);
@@ -266,7 +269,9 @@ function RightLocal() {
 			})()
 		: { name: "-1", icon: "" };
 	const storedVars = (item ? data[item.path]?.vars : undefined) as StoredVarMap | undefined;
-	const rawDetails = item ? detailCache[item.path] ?? { keys: item.keys || [], files: item.files || {} } : EMPTY_DETAILS;
+	const rawDetails = item
+		? (detailCache[item.path] ?? { keys: item.keys || [], files: item.files || {} })
+		: EMPTY_DETAILS;
 	const details = formatDetails(rawDetails, storedVars);
 	const handleAlertOpenChange = useCallback((open: boolean) => {
 		setAlertOpen(open);
@@ -442,11 +447,17 @@ function RightLocal() {
 		<Sidebar side="right" className="pt-8 duration-300">
 			<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
 				{dialogType == "edit-mod-config" && details ? (
-					item ? <ModPreferences item={item} details={details} /> : null
+					item ? (
+						<ModPreferences item={item} details={details} />
+					) : null
 				) : dialogType == "preview-crop" ? (
-					item ? <ModPreviewCrop key={item.path} item={item} setDialogType={setDialogType} /> : null
+					item ? (
+						<ModPreviewCrop key={item.path} item={item} setDialogType={setDialogType} />
+					) : null
 				) : dialogType.startsWith("preview") ? (
-					item ? <ModPreview item={item} setDialogType={setDialogType} isBlank={dialogType == "preview-blank"} /> : null
+					item ? (
+						<ModPreview item={item} setDialogType={setDialogType} isBlank={dialogType == "preview-blank"} />
+					) : null
 				) : (
 					<ManageCategories />
 				)}
@@ -468,6 +479,11 @@ function RightLocal() {
 							className=" w-24"
 							onClick={async () => {
 								if (!deleteItemData) return;
+								try {
+									await deleteMod(deleteItemData.path);
+								} catch {
+									return;
+								}
 								setData((prev) => {
 									const newData = { ...prev };
 									if (deleteItemData.path) {
@@ -475,7 +491,6 @@ function RightLocal() {
 									}
 									return newData;
 								});
-								deleteMod(deleteItemData.path);
 								saveConfigs();
 								setModList((prev) => {
 									const newData = prev.filter((m) => m.path != deleteItemData.path);
@@ -498,7 +513,7 @@ function RightLocal() {
 								<Button
 									className="aspect-square max-h-6"
 									onClick={() => {
-										openPath(join(source, managedSRC, item.path));
+										void openManagedFolder("source", join(managedSRC, item.path));
 									}}
 								>
 									<ArrowUpRightFromSquareIcon className="max-h-3" />
@@ -547,7 +562,7 @@ function RightLocal() {
 						></img>
 						<img
 							id="preview"
-							
+
 							className="w-82 h-48 -mb-48 backdrop-blur-md bg-background/50 object-contain peer"
 							onError={(e) => {
 								handleImageError(e);
@@ -563,7 +578,10 @@ function RightLocal() {
 							src={`${getImageUrl(item?.path || "")}?${lastUpdated}`}
 						></img>
 						{item?.path && (
-							<div key={lastUpdated} className="w-82 h-48 flex items-center justify-center text-xs text-accent backdrop-blur-sm bg-background/20 opacity-0 pointer-events-none peer-hover:opacity-100 hover:opacity-100 duration-300">
+							<div
+								key={lastUpdated}
+								className="w-82 h-48 flex items-center justify-center text-xs text-accent backdrop-blur-sm bg-background/20 opacity-0 pointer-events-none peer-hover:opacity-100 hover:opacity-100 duration-300"
+							>
 								<Button
 									className="pointer-events-auto"
 									onClick={async (e) => {
@@ -603,7 +621,7 @@ function RightLocal() {
 													<>
 														{" "}
 														{category.name != "Uncategorized" && (
-															<img
+															<RemoteImage
 																className=" aspect-square scale-120 outline bg-accent/10 items-center justify-center h-full text-white rounded-full pointer-events-none"
 																onError={(e) => {
 																	e.currentTarget.src = "/who.jpg";
@@ -637,7 +655,7 @@ function RightLocal() {
 																}}
 																className="button-like zzz-fg-text data-zzz:mt-1"
 															>
-																<img
+																<RemoteImage
 																	className="aspect-square outline bg-accent/10 flex items-center justify-center h-12 text-white rounded-full pointer-events-none"
 																	onError={(e) => {
 																		e.currentTarget.src = "/who.jpg";
@@ -1024,7 +1042,8 @@ function RightLocal() {
 								onClick={async () => {
 									const files = (await selectPath({
 										multiple: true,
-										title: "Select .7z/.zip/.rar Archive(s) to Install Mod(s) From",
+										title: "Select ZIP archive(s) to install Mod(s) from",
+										filters: [{ name: "ZIP archives", extensions: ["zip"] }],
 									})) as string[] | null;
 									if (!files || files.length === 0) return;
 									installFromArchives(files || ([] as string[])).then(async () => {

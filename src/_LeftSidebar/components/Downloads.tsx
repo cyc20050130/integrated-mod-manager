@@ -6,7 +6,17 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { CATEGORIES, DATA, DOWNLOAD_LIST, GAME, LAST_UPDATED, LEFT_SIDEBAR_OPEN, MOD_LIST, SETTINGS, TEXT_DATA } from "@/utils/vars";
+import {
+	CATEGORIES,
+	DATA,
+	DOWNLOAD_LIST,
+	GAME,
+	LAST_UPDATED,
+	LEFT_SIDEBAR_OPEN,
+	MOD_LIST,
+	SETTINGS,
+	TEXT_DATA,
+} from "@/utils/vars";
 import { deriveNameFromFileName, formatBytes, sanitizeFileName } from "@/utils/utils";
 import {
 	cleanCancelledDownload,
@@ -114,7 +124,10 @@ function splitModPath(path: string, fallbackCategory: string) {
 	};
 }
 function toComparableName(value: string) {
-	return String(value || "").replaceAll("DISABLED_", "").trim().toLowerCase();
+	return String(value || "")
+		.replaceAll("DISABLED_", "")
+		.trim()
+		.toLowerCase();
 }
 function findBestLinkedEntry(item: DownloadItem, data: Record<string, DownloadDataEntry>, fallbackCategory: string) {
 	if (!item.source) return null;
@@ -242,27 +255,24 @@ function Downloads() {
 		}, 300);
 	}, []);
 
-	const scheduleProgressRefresh = useCallback(
-		(forceImmediate = false) => {
-			const now = performance.now();
-			if (forceImmediate && now - lastProgressFlushRef.current >= PROGRESS_REFRESH_INTERVAL_MS) {
-				lastProgressFlushRef.current = now;
-				setProgressSnapshot({ ...progressRef.current });
-				setProgressTick((tick) => tick + 1);
-				return;
-			}
-			if (progressFrameRef.current !== null) return;
-			progressFrameRef.current = window.requestAnimationFrame(() => {
-				progressFrameRef.current = null;
-				const current = performance.now();
-				if (current - lastProgressFlushRef.current < PROGRESS_REFRESH_INTERVAL_MS) return;
-				lastProgressFlushRef.current = current;
-				setProgressSnapshot({ ...progressRef.current });
-				setProgressTick((tick) => tick + 1);
-			});
-		},
-		[]
-	);
+	const scheduleProgressRefresh = useCallback((forceImmediate = false) => {
+		const now = performance.now();
+		if (forceImmediate && now - lastProgressFlushRef.current >= PROGRESS_REFRESH_INTERVAL_MS) {
+			lastProgressFlushRef.current = now;
+			setProgressSnapshot({ ...progressRef.current });
+			setProgressTick((tick) => tick + 1);
+			return;
+		}
+		if (progressFrameRef.current !== null) return;
+		progressFrameRef.current = window.requestAnimationFrame(() => {
+			progressFrameRef.current = null;
+			const current = performance.now();
+			if (current - lastProgressFlushRef.current < PROGRESS_REFRESH_INTERVAL_MS) return;
+			lastProgressFlushRef.current = current;
+			setProgressSnapshot({ ...progressRef.current });
+			setProgressTick((tick) => tick + 1);
+		});
+	}, []);
 
 	const enrichForDownload = useCallback(
 		(item: DownloadItem): DownloadItem => {
@@ -305,12 +315,12 @@ function Downloads() {
 		[categories, data]
 	);
 
-		const handleDownloadFailure = useCallback(
-			(itemKey: string, errorMessage: string, stage = "download") => {
-				removeFromExtracts(itemKey);
-				delete progressRef.current[itemKey];
-				setProgressSnapshot({ ...progressRef.current });
-				setDownloads((prev) => {
+	const handleDownloadFailure = useCallback(
+		(itemKey: string, errorMessage: string, stage = "download") => {
+			removeFromExtracts(itemKey);
+			delete progressRef.current[itemKey];
+			setProgressSnapshot({ ...progressRef.current });
+			setDownloads((prev) => {
 				const activeFromDownloading = prev.downloading.find((x) => x.key === itemKey);
 				const activeFromExtracting = prev.extracting.find((x) => x.key === itemKey);
 				const active = activeFromDownloading || activeFromExtracting;
@@ -337,18 +347,11 @@ function Downloads() {
 				}
 
 				const normalizedStage = String(stage || "download").toLowerCase();
-				const shouldRequeue =
-					normalizedStage === "download" && !isPermanentPathError(errorMessage);
+				const shouldRequeue = normalizedStage === "download" && !isPermanentPathError(errorMessage);
 				const rounds = (next.requeueRounds || 0) + 1;
 				if (shouldRequeue && rounds <= dlSettings.maxRequeueRounds) {
 					const retryAt = Date.now() + REQUEUE_COOLDOWN_MS;
-					const {
-						key: _oldKey,
-						path: _oldPath,
-						dlPath: _oldDlPath,
-						safeName: _oldSafeName,
-						...retryBase
-					} = next;
+					const { key: _oldKey, path: _oldPath, dlPath: _oldDlPath, safeName: _oldSafeName, ...retryBase } = next;
 					const retryItem: DownloadItem = {
 						...retryBase,
 						status: "pending",
@@ -376,7 +379,9 @@ function Downloads() {
 
 	const startDownload = useCallback(
 		async (item: DownloadItem) => {
-			const runtimeName = toSafeName(item.safeName || item.name || item.displayName || deriveNameFromFileName(item.fname));
+			const runtimeName = toSafeName(
+				item.safeName || item.name || item.displayName || deriveNameFromFileName(item.fname)
+			);
 			const key = item.key || createRuntimeKey(item, runtimeName);
 			let createdDlPath: string | null = null;
 			try {
@@ -432,6 +437,9 @@ function Downloads() {
 					key,
 					emit: true,
 					downloadOptions,
+					game,
+					expectedSize: item.expectedSize,
+					expectedHash: item.expectedHash,
 				});
 
 				if (item.preview) {
@@ -441,6 +449,7 @@ function Downloads() {
 						savePath: dlPath,
 						key: "link_preview_" + key,
 						emit: false,
+						game,
 						downloadOptions: {
 							...downloadOptions,
 							requestRetries: 1,
@@ -454,13 +463,13 @@ function Downloads() {
 				}
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				if (createdDlPath) void cleanCancelledDownload(createdDlPath);
+				if (createdDlPath && game !== "NTE") void cleanCancelledDownload(createdDlPath);
 				handleDownloadFailure(key, message, inferFailureStageFromMessage(message));
 			} finally {
 				startedKeysRef.current.delete(key);
 			}
 		},
-		[downloadOptions, handleDownloadFailure, scheduleSave, setData, setDownloads, setLastUpdated]
+		[downloadOptions, game, handleDownloadFailure, scheduleSave, setData, setDownloads, setLastUpdated]
 	);
 
 	useEffect(() => {
@@ -482,14 +491,15 @@ function Downloads() {
 		const ready = queueWithIndex.filter(({ item }) => (item.lastTriedAt || 0) <= now);
 		if (!ready.length) {
 			const nextRetryAt = Math.min(
-				...queueWithIndex
-					.map(({ item }) => item.lastTriedAt || 0)
-					.filter((retryAt) => retryAt > now)
+				...queueWithIndex.map(({ item }) => item.lastTriedAt || 0).filter((retryAt) => retryAt > now)
 			);
 			if (Number.isFinite(nextRetryAt)) {
-				retryWakeTimerRef.current = window.setTimeout(() => {
-					setQueueWakeTick((tick) => tick + 1);
-				}, Math.max(50, nextRetryAt - now));
+				retryWakeTimerRef.current = window.setTimeout(
+					() => {
+						setQueueWakeTick((tick) => tick + 1);
+					},
+					Math.max(50, nextRetryAt - now)
+				);
 			}
 			return;
 		}
@@ -556,14 +566,14 @@ function Downloads() {
 				}
 			});
 
-				const unlistenExt = await listen("ext", (event) => {
-					const payload = event.payload as DownloadExtEventPayload;
-					const key = String(payload.key || "");
-					if (!key) return;
-					delete progressRef.current[key];
-					setProgressSnapshot({ ...progressRef.current });
+			const unlistenExt = await listen("ext", (event) => {
+				const payload = event.payload as DownloadExtEventPayload;
+				const key = String(payload.key || "");
+				if (!key) return;
+				delete progressRef.current[key];
+				setProgressSnapshot({ ...progressRef.current });
 
-					setDownloads((prev) => {
+				setDownloads((prev) => {
 					const finished = prev.downloading.find((item) => item.key === key);
 					if (!finished) return prev;
 					addToExtracts(key, finished);
@@ -596,7 +606,10 @@ function Downloads() {
 				}
 
 				if (type === "auto") {
-					await validateModDownload(finished.dlPath || "");
+					if (!(await validateModDownload(finished.dlPath || ""))) {
+						handleDownloadFailure(key, textData._Toasts.ErrDownload, "validation");
+						return;
+					}
 					let persistedData: Record<string, DownloadDataEntry> = {};
 					setData((prev) => {
 						if (finished.path) {
@@ -629,7 +642,10 @@ function Downloads() {
 					});
 					modList(await refreshModList());
 				} else {
-					await validateModDownload(finished.dlPath || "", true);
+					if (!(await validateModDownload(finished.dlPath || "", true))) {
+						handleDownloadFailure(key, textData._Toasts.ErrDownload, "validation");
+						return;
+					}
 					let persistedDownloads = downloadsRef.current;
 					setDownloads((prev) => {
 						persistedDownloads = {
@@ -665,7 +681,7 @@ function Downloads() {
 		return () => {
 			unlisteners.forEach((unlisten) => unlisten());
 		};
-	}, [dialogOpen, handleDownloadFailure, modList, scheduleProgressRefresh, setData, setDownloads]);
+	}, [dialogOpen, handleDownloadFailure, modList, scheduleProgressRefresh, setData, setDownloads, textData]);
 
 	useEffect(() => {
 		return () => {
@@ -752,13 +768,13 @@ function Downloads() {
 		});
 	};
 
-		const cancelItem = (item: DownloadRow) => {
-			if (item.status === "downloading" && item.key) {
-				cancelRequestedRef.current.add(item.key);
-				removeFromExtracts(item.key);
-				delete progressRef.current[item.key];
-				setProgressSnapshot({ ...progressRef.current });
-				void invoke("cancel_download", { key: item.key }).catch(() => {});
+	const cancelItem = (item: DownloadRow) => {
+		if (item.status === "downloading" && item.key) {
+			cancelRequestedRef.current.add(item.key);
+			removeFromExtracts(item.key);
+			delete progressRef.current[item.key];
+			setProgressSnapshot({ ...progressRef.current });
+			void invoke("cancel_download", { key: item.key }).catch(() => {});
 			if (item.dlPath) void cleanCancelledDownload(item.dlPath);
 			setDownloads((prev) => ({
 				...prev,
@@ -855,7 +871,10 @@ function Downloads() {
 										</Label>
 									</div>
 								</div>
-								<div key={"down2" + JSON.stringify(downloadList[0])} className="fade-in min-h-12 flex items-center justify-center w-full gap-1 pointer-events-none">
+								<div
+									key={"down2" + JSON.stringify(downloadList[0])}
+									className="fade-in min-h-12 flex items-center justify-center w-full gap-1 pointer-events-none"
+								>
 									{Icons[firstItem?.status as keyof typeof Icons] || <FileQuestionIcon className="min-h-4 min-w-4" />}
 									<Label className="w-fit max-w-72 pr-2 pointer-events-none">
 										{firstItem?.status == "downloading"
@@ -972,13 +991,22 @@ function Downloads() {
 														variant="ghost"
 														size="sm"
 														onClick={() => cancelItem(item)}
-														className={item.status === "completed" || item.status === "failed" ? "hover:text-gray-300 data-zzz:border-0 text-gray-400" : "hover:text-destructive"}
+														className={
+															item.status === "completed" || item.status === "failed"
+																? "hover:text-gray-300 data-zzz:border-0 text-gray-400"
+																: "hover:text-destructive"
+														}
 													>
 														<X className="w-4 h-4" />
 													</Button>
 												)}
 												{item.status === "extracting" && (
-													<Button variant="ghost" size="sm" onClick={() => cancelExtract(item.key || "")} className="hover:text-destructive">
+													<Button
+														variant="ghost"
+														size="sm"
+														onClick={() => cancelExtract(item.key || "")}
+														className="hover:text-destructive"
+													>
 														<X className="w-4 h-4" />
 													</Button>
 												)}

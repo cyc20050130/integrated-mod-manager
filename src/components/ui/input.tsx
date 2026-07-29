@@ -7,8 +7,8 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
 			onKeyUp={(e) => {
 				if (e.key == "Enter") e.currentTarget.blur();
 			}}
-			onFocus={(e)=>{
-				e.currentTarget.select()
+			onFocus={(e) => {
+				e.currentTarget.select();
 			}}
 			data-slot="input"
 			className={cn(

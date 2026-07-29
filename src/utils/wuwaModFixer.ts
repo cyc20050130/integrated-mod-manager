@@ -1,7 +1,6 @@
 import { addToast } from "@/_Toaster/ToastProvider";
 import { invoke } from "@tauri-apps/api/core";
-import { exists, mkdir, readDir } from "@tauri-apps/plugin-fs";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { exists, readDir } from "@tauri-apps/plugin-fs";
 import { saveConfigs } from "./filesys";
 import { join } from "./hotreload";
 import { getCwd } from "./init";
@@ -39,7 +38,9 @@ function getStoredState(): WuwaModFixerState {
 }
 
 function normalizeVersionTag(version = "") {
-	return String(version || "").trim().replace(/^v/i, "");
+	return String(version || "")
+		.trim()
+		.replace(/^v/i, "");
 }
 
 function normalizeToolState(input?: Partial<WuwaModFixerState>): WuwaModFixerState {
@@ -187,12 +188,12 @@ export async function launchWuwaModFixer() {
 }
 
 export async function openWuwaModFixerFolder() {
-	const baseDir = await getBaseToolDir();
-	await mkdir(baseDir, { recursive: true });
-	return openPath(baseDir);
+	return invoke<void>("open_wuwa_mod_fixer_folder");
 }
 
-type WuwaModFixerText = { _Main?: { _components?: { _WuwaModFixer?: { Warning?: string; Missing?: string; LaunchFailed?: string } } } };
+type WuwaModFixerText = {
+	_Main?: { _components?: { _WuwaModFixer?: { Warning?: string; Missing?: string; LaunchFailed?: string } } };
+};
 
 export function getWuwaModFixerWarning(textData: WuwaModFixerText) {
 	return (

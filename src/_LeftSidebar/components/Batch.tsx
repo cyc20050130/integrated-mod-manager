@@ -1,6 +1,7 @@
 import { addToast } from "@/_Toaster/ToastProvider";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
@@ -11,9 +12,11 @@ import { managedSRC, managedTGT, RESTORE, UNCATEGORIZED } from "@/utils/consts";
 import {
 	addToBatchPreview,
 	changeModName,
+	deleteMod,
 	folderSelector,
 	guardedRemove,
 	guardedRename,
+	openManagedFolder,
 	refreshModList,
 	saveConfigs,
 	sourceBatchPreview,
@@ -22,7 +25,6 @@ import {
 import { join } from "@/utils/hotreload";
 import { setCategories } from "@/utils/init";
 import { CATEGORIES, MOD_LIST, SETTINGS, SOURCE, TARGET, TEXT_DATA } from "@/utils/vars";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
 	CheckIcon,
@@ -57,17 +59,17 @@ type BatchNode = {
 function editChild(name: string, parent: string[], treeData: BatchNode[], children: BatchNode[]): BatchNode[] {
 	return treeData
 		? treeData.map((node) => {
-			if (node.name === name && node.parent === parent.join("\\")) {
-				return {
-					...node,
-					children,
-				};
-			}
-			if (node.children) {
-				return { ...node, children: editChild(name, parent, node.children, children) };
-			}
-			return node;
-		})
+				if (node.name === name && node.parent === parent.join("\\")) {
+					return {
+						...node,
+						children,
+					};
+				}
+				if (node.children) {
+					return { ...node, children: editChild(name, parent, node.children, children) };
+				}
+				return node;
+			})
 		: [];
 }
 function getChildrenAtPath(nodes: BatchNode[], indexPath: number[]): BatchNode[] {
@@ -133,11 +135,27 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	const source = useAtomValue(SOURCE);
 	const target = useAtomValue(TARGET);
 	const categories = useAtomValue(CATEGORIES);
+	const isNte = settings.global.game === "NTE";
 
 	function resetSelectionState() {
 		setChecked(new Set());
 		setCurSelectedIndices([]);
 		prevSelectedIndices = [];
+	}
+	async function renameCheckedMods(newPaths: string[]) {
+		const renameOne = (newPath: string, index: number) =>
+			changeModName(
+				cleanChecked[index].replace(managedSRC + "\\", ""),
+				newPath,
+				!cleanChecked[index].startsWith(managedSRC)
+			);
+		if (isNte) {
+			for (let index = 0; index < newPaths.length; index += 1) {
+				await renameOne(newPaths[index], index);
+			}
+			return;
+		}
+		await Promise.all(newPaths.map(renameOne));
 	}
 
 	function handleDialogOpenChange(open: boolean) {
@@ -274,8 +292,8 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 							? `color-mix(in oklab, var(--warn) 20%, ${index % 2 === 0 ? "#1b1b1b50" : "#31313150"})`
 							: `color-mix(in oklab, var(--warn) 30%, ${index % 2 === 0 ? "#1b1b1b50" : "#31313150"})`
 						: index % 2 === 0
-						? "#1b1b1b50"
-						: "#31313150",
+							? "#1b1b1b50"
+							: "#31313150",
 				}}
 			>
 				<div
@@ -358,7 +376,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 								}}
 							/>
 							{item.icon ? (
-								<img
+								<RemoteImage
 									src={item.icon}
 									onError={(e) => {
 										e.currentTarget.src = "/who.jpg";
@@ -404,15 +422,15 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 								item.children && item.children.length > 0
 									? item.children
 									: [
-										{
-											depth: item.depth + 1,
-											isDir: false,
-											name: textData._LeftSideBar._components._Batch.EmptyFolder,
-											parent: item.path,
-											path: `${item.path}\\Loading...`,
-											isSkeleton: true,
-										},
-									],
+											{
+												depth: item.depth + 1,
+												isDir: false,
+												name: textData._LeftSideBar._components._Batch.EmptyFolder,
+												parent: item.path,
+												path: `${item.path}\\Loading...`,
+												isSkeleton: true,
+											},
+										],
 								depth + 1,
 								[...indices, index]
 							)}
@@ -470,21 +488,35 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 									if (!deleteValid || cleanChecked.length === 0) return;
 
 									setAlertOpen(false);
-									const promises = cleanChecked.map((modPath) => {
-										return guardedRemove(join(source, modPath), { recursive: true, allowedRoots: [source] });
-									});
+									const selectedPaths = isNte ? normalizeManagedMods(cleanChecked, treeData, categories) : cleanChecked;
 									addToast({
 										type: "success",
-										message: textData._Toasts.Deleting.replace("<length/>", promises.length.toString()),
+										message: textData._Toasts.Deleting.replace("<length/>", selectedPaths.length.toString()),
 									});
-									Promise.all(promises).then(() => {
+									try {
+										if (isNte) {
+											for (const modPath of selectedPaths) {
+												await deleteMod(modPath.replace(managedSRC + "\\", ""));
+											}
+										} else {
+											await Promise.all(
+												selectedPaths.map((modPath) =>
+													guardedRemove(join(source, modPath), { recursive: true, allowedRoots: [source] })
+												)
+											);
+										}
 										resetSelectionState();
 										setRefresh((prev) => prev + 1);
 										addToast({
 											type: "success",
-											message: textData._Toasts.SuccessfullyDeleted.replace("<length/>", promises.length.toString()),
+											message: textData._Toasts.SuccessfullyDeleted.replace(
+												"<length/>",
+												selectedPaths.length.toString()
+											),
 										});
-									});
+									} catch (deleteError) {
+										error("[IMM] NTE batch deletion failed:", deleteError);
+									}
 								}}
 							>
 								{textData._Main._MainLocal.Delete}
@@ -507,7 +539,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 					{textData._LeftSideBar._components._Batch.ContentFrom}
 					<label
 						onClick={() => {
-							openPath(source);
+							void openManagedFolder("source");
 						}}
 						className="hover:opacity-75 text-blue-300 duration-200 opacity-50 pointer-events-auto"
 					>
@@ -565,10 +597,11 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 						{textData._LeftSideBar._components._Settings._AutoReload.Enable}
 					</Button>
 					<Button
-						disabled={!deleteValid}
+						disabled={!moveValid}
 						onClick={() => {
-							const selected = [...cleanChecked];
-							folderSelector(source, textData._LeftSideBar._components._Batch.SelectDest).then((dest) => {
+							if (!moveValid) return;
+							const selected = isNte ? normalizeManagedMods(cleanChecked, treeData, categories) : [...cleanChecked];
+							folderSelector(source, textData._LeftSideBar._components._Batch.SelectDest).then(async (dest) => {
 								if (!dest) return;
 								if (selected.some((modPath) => dest.startsWith(join(source, modPath)))) {
 									addToast({
@@ -577,31 +610,46 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 									});
 									return;
 								}
-								const promises = selected.map((modPath) => {
-									const modName = modPath.split("\\").slice(-1)[0];
-									const newPath = dest + "\\" + modName;
-									return guardedRename(join(source, modPath), newPath, { allowedRoots: [source] });
-								});
 								addToast({
 									type: "success",
 									message: textData._Toasts.Moving.replace("<length/>", selected.length.toString()),
 								});
-								Promise.all(promises)
-									.then(() => {
-										resetSelectionState();
-										setRefresh((prev) => prev + 1);
-										addToast({
-											type: "success",
-											message: textData._Toasts.SuccessfullyMoved.replace("<length/>", selected.length.toString()),
-										});
-									})
-									.catch((e) => {
-										if (e.includes("The directory is not empty"))
-											addToast({
-												type: "error",
-												message: textData._Toasts.SameName,
-											});
+								try {
+									if (isNte) {
+										const managedRoot = join(source, managedSRC);
+										const normalizedDest = dest.toLowerCase();
+										const normalizedRoot = managedRoot.toLowerCase();
+										if (normalizedDest !== normalizedRoot && !normalizedDest.startsWith(normalizedRoot + "\\")) {
+											throw new Error("NTE Mods can only be moved inside the managed library.");
+										}
+										for (const modPath of selected) {
+											const modName = modPath.split("\\").slice(-1)[0];
+											const oldRelativePath = modPath.replace(managedSRC + "\\", "");
+											const newAbsolutePath = dest + "\\" + modName;
+											const newRelativePath = newAbsolutePath.slice(managedRoot.length).replace(/^\\+/, "");
+											await changeModName(oldRelativePath, newRelativePath);
+										}
+									} else {
+										await Promise.all(
+											selected.map((modPath) => {
+												const modName = modPath.split("\\").slice(-1)[0];
+												const newPath = dest + "\\" + modName;
+												return guardedRename(join(source, modPath), newPath, { allowedRoots: [source] });
+											})
+										);
+									}
+									resetSelectionState();
+									setRefresh((prev) => prev + 1);
+									addToast({
+										type: "success",
+										message: textData._Toasts.SuccessfullyMoved.replace("<length/>", selected.length.toString()),
 									});
+								} catch (moveError) {
+									if (String(moveError).includes("The directory is not empty")) {
+										addToast({ type: "error", message: textData._Toasts.SameName });
+									}
+									error("[IMM] Batch move failed:", moveError);
+								}
 							});
 						}}
 						className="w-34.5 "
@@ -675,37 +723,31 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											itemID="1"
 											key={newCategory}
 											value={newCategory}
-											onSelect={(currentValue) => {
+											onSelect={async (currentValue) => {
 												// renameMod(item.path, join(currentValue, item.name));
 												// setNewCategory(currentValue);
-												customCategories[currentValue] = {
-													_sIconUrl: "",
+												const nextCustomCategories = {
+													...customCategories,
+													[currentValue]: { _sIconUrl: "" },
 												};
 												setSettings((prev) => ({
 													...prev,
 													game: {
 														...prev.game,
-														customCategories,
+														customCategories: nextCustomCategories,
 													},
 												}));
-												saveConfigs();
+												await saveConfigs();
 												setCategories();
 												let mods = [...cleanChecked];
 												mods = mods.map((modPath) => `${currentValue}\\${modPath.split("\\").slice(-1)[0]}`);
-												info('Mods', { mods: mods });
-												const promises = mods.map((modPath, index) => {
-													info(cleanChecked[index], modPath, !cleanChecked[index].startsWith(managedSRC));
-													return changeModName(
-														cleanChecked[index].replace(managedSRC + "\\", ""),
-														modPath,
-														!cleanChecked[index].startsWith(managedSRC)
-													);
-												});
+												info("Mods", { mods: mods });
+												const movePromise = renameCheckedMods(mods);
 												addToast({
 													type: "success",
 													message: textData._Toasts.Moving.replace("<length/>", mods.length.toString()),
 												});
-												Promise.all(promises)
+												movePromise
 													.then(() => {
 														resetSelectionState();
 														setRefresh((prev) => prev + 1);
@@ -725,7 +767,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											}}
 											className="button-like zzz-fg-text data-wuwa:mt-0 mx-1 mt-1"
 										>
-											<img
+											<RemoteImage
 												className="aspect-square outline bg-accent/10 flex items-center justify-center h-6 text-white rounded-full pointer-events-none"
 												onError={(e) => {
 													e.currentTarget.src = "/who.jpg";
@@ -749,19 +791,12 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 													let mods = [...cleanChecked];
 													mods = mods.map((modPath) => `${currentValue}\\${modPath.split("\\").slice(-1)[0]}`);
 													info(mods);
-													const promises = mods.map((modPath, index) => {
-														info(cleanChecked[index], modPath, !cleanChecked[index].startsWith(managedSRC));
-														return changeModName(
-															cleanChecked[index].replace(managedSRC + "\\", ""),
-															modPath,
-															!cleanChecked[index].startsWith(managedSRC)
-														);
-													});
+													const movePromise = renameCheckedMods(mods);
 													addToast({
 														type: "success",
 														message: textData._Toasts.Moving.replace("<length/>", mods.length.toString()),
 													});
-													Promise.all(promises).then(() => {
+													movePromise.then(() => {
 														resetSelectionState();
 														setRefresh((prev) => prev + 1);
 														addToast({
@@ -773,7 +808,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 												}}
 												className="button-like zzz-fg-text data-zzz:mt-1"
 											>
-												<img
+												<RemoteImage
 													className="aspect-square outline bg-accent/10 flex items-center justify-center h-6 text-white rounded-full pointer-events-none"
 													onError={(e) => {
 														e.currentTarget.src = "/who.jpg";

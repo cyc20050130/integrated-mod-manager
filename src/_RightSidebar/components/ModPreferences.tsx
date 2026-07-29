@@ -88,7 +88,7 @@ function ModPreferences({ item, details }: { item: PreferenceItem; details: Pref
 		? Math.max(1, Math.ceil((details.files?.[selectedFile]?.length ?? 0) / pageLimit))
 		: 1;
 	const pageNo = Math.min(pageNoState, totalPages - 1);
-	const source = fileMode ? selectedFilePages[pageNo] ?? [] : (details.keys ?? []);
+	const source = fileMode ? (selectedFilePages[pageNo] ?? []) : (details.keys ?? []);
 	const { groups: keys, signature: keyListSignature } = buildPreferenceGroups(source);
 
 	async function refreshMod(path: string) {

@@ -14,8 +14,18 @@ export const DEFAULT_DOWNLOAD_SETTINGS: DownloadSettings = { ...DEFAULTS.SETTING
 export function normalizeDownloadSettings(input?: Partial<DownloadSettings> | null): DownloadSettings {
 	const source = input || {};
 	return {
-		maxConcurrentDownloads: clampInt(source.maxConcurrentDownloads, DEFAULT_DOWNLOAD_SETTINGS.maxConcurrentDownloads, 1, 3),
-		maxConcurrentExtracts: clampInt(source.maxConcurrentExtracts, DEFAULT_DOWNLOAD_SETTINGS.maxConcurrentExtracts, 1, 4),
+		maxConcurrentDownloads: clampInt(
+			source.maxConcurrentDownloads,
+			DEFAULT_DOWNLOAD_SETTINGS.maxConcurrentDownloads,
+			1,
+			3
+		),
+		maxConcurrentExtracts: clampInt(
+			source.maxConcurrentExtracts,
+			DEFAULT_DOWNLOAD_SETTINGS.maxConcurrentExtracts,
+			1,
+			4
+		),
 		requestRetries: clampInt(source.requestRetries, DEFAULT_DOWNLOAD_SETTINGS.requestRetries, 1, 5),
 		connectTimeoutSec: clampInt(source.connectTimeoutSec, DEFAULT_DOWNLOAD_SETTINGS.connectTimeoutSec, 3, 60),
 		stallTimeoutSec: clampInt(source.stallTimeoutSec, DEFAULT_DOWNLOAD_SETTINGS.stallTimeoutSec, 5, 180),
@@ -87,9 +97,7 @@ function normalizeItem(item: Record<string, unknown> | null | undefined): Downlo
 
 function normalizeItemArray(value: unknown): DownloadItem[] {
 	if (!Array.isArray(value)) return [];
-	const normalized = value
-		.map((item) => normalizeItem(item))
-		.filter((item): item is DownloadItem => Boolean(item));
+	const normalized = value.map((item) => normalizeItem(item)).filter((item): item is DownloadItem => Boolean(item));
 
 	const seen = new Set<string>();
 	return normalized.filter((item) => {

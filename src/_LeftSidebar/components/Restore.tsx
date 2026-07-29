@@ -1,5 +1,6 @@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { UNCATEGORIZED } from "@/utils/consts";
@@ -141,11 +142,11 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 														? selectedRestorePoint == index
 															? "var(--border)"
 															: index % 2 == 0
-															? "#1b1b1b50"
-															: "#31313150"
+																? "#1b1b1b50"
+																: "#31313150"
 														: selectedRestorePoint == index
-														? "var(--accent)"
-														: "",
+															? "var(--accent)"
+															: "",
 												color: game != "WW" && selectedRestorePoint == index ? "var(--background)" : "",
 												animation: game != "WW" && selectedRestorePoint == index ? "" : "none",
 											}}
@@ -201,7 +202,7 @@ function Restore({ leftSidebarOpen, disabled = false }: { leftSidebarOpen: boole
 										}
 									>
 										{item.icon ? (
-											<img
+											<RemoteImage
 												src={item.icon}
 												onError={(e) => {
 													e.currentTarget.src = "/who.jpg";

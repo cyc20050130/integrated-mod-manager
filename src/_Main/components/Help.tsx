@@ -19,7 +19,10 @@ function Help() {
 	return (
 		<Dialog open={helpOpen} onOpenChange={setHelpOpen}>
 			<DialogTrigger asChild>
-				<Button disabled={helpOpen} className="bg-sidebar flex gap-0.5 h-5 pointer-events-auto p-0 px-1 text-[10px] border">
+				<Button
+					disabled={helpOpen}
+					className="bg-sidebar flex gap-0.5 h-5 pointer-events-auto p-0 px-1 text-[10px] border"
+				>
 					<HelpCircle className="py-[1px]" />
 					{textData._Checklist._Help.Help}
 				</Button>
@@ -52,11 +55,11 @@ function Help() {
 												? selectedItem === index
 													? "var(--border)"
 													: index % 2 == 0
-													? "#1b1b1b50"
-													: "#31313150"
+														? "#1b1b1b50"
+														: "#31313150"
 												: selectedItem === index
-												? "var(--accent)"
-												: "",
+													? "var(--accent)"
+													: "",
 										color: game !== "WW" && selectedItem === index ? "var(--background)" : "",
 										animation: game !== "WW" && selectedItem === index ? "" : "none",
 									}}

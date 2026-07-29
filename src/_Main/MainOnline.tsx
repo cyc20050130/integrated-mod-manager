@@ -16,7 +16,7 @@ import {
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
 import CardOnline from "./components/CardOnline";
 
 import Carousel from "./components/Carousel";
@@ -35,20 +35,12 @@ type OnlineListResponse = {
 	};
 	_aRecords?: OnlineMod[];
 };
-const GAMEBANANA_HEADERS = {
-	Accept: "application/json,text/plain,*/*",
-	Referer: "https://gamebanana.com/",
-	"User-Agent": "IntegratedModManager/3.2 (+https://github.com/cyc20050130/integrated-mod-manager)",
-};
-
 async function fetchGameBananaJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-	let res: Response;
+	if (signal?.aborted) throw new DOMException("The request was aborted", "AbortError");
 	try {
-		res = await tauriFetch(url, {
-			headers: GAMEBANANA_HEADERS,
-			connectTimeout: 15000,
-			...(signal ? { signal } : {}),
-		});
+		const payload = await invoke<unknown>("fetch_gamebanana_json", { url });
+		if (signal?.aborted) throw new DOMException("The request was aborted", "AbortError");
+		return payload as T;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err || "Failed to fetch");
 		if (/failed to fetch/i.test(message)) {
@@ -56,17 +48,6 @@ async function fetchGameBananaJson<T>(url: string, signal?: AbortSignal): Promis
 		}
 		throw new Error(`无法连接 GameBanana：${message}`);
 	}
-
-	if (!res.ok) {
-		const body = await res.text().catch(() => "");
-		const isRateLimited = res.status === 429 || body.includes("1015") || body.toLowerCase().includes("rate limited");
-		const message = isRateLimited
-			? "GameBanana 当前对本机限流，在线列表暂停刷新。请稍后再试。"
-			: `在线列表请求失败：${res.status} ${res.statusText || ""}`.trim();
-		throw new Error(message);
-	}
-
-	return (await res.json()) as T;
 }
 
 export function resetPageCounts() {
@@ -182,24 +163,27 @@ function MainOnline() {
 		},
 		[game, onlinePath, onlineSort, onlineSource]
 	);
-	const nextPage = useCallback(async (url: string, cacheKey: string) => {
-		const data = await fetchGameBananaJson<OnlineListResponse>(url);
-		setOnlineData((prev) => {
-			const currentItems = (prev[cacheKey] as OnlineListItem[] | undefined) || [];
-			const legacyCards = shouldUseUnifiedWwOnline(game)
-				? extractLegacyOnlineCards(currentItems)
-				: ((currentItems as OnlineMod[]) || []);
-			const nextLegacyCards = [...legacyCards, ...(data._aRecords || [])];
-			return {
-				...prev,
-				[cacheKey]: shouldUseUnifiedList
-					? resolveUnifiedOnlineList(unifiedCardsRef.current[cacheKey], nextLegacyCards, {
-							appendLegacy: appendLegacyOnlineCards,
-						})
-					: nextLegacyCards,
-			};
-		});
-	}, [appendLegacyOnlineCards, game, setOnlineData, shouldUseUnifiedList]);
+	const nextPage = useCallback(
+		async (url: string, cacheKey: string) => {
+			const data = await fetchGameBananaJson<OnlineListResponse>(url);
+			setOnlineData((prev) => {
+				const currentItems = (prev[cacheKey] as OnlineListItem[] | undefined) || [];
+				const legacyCards = shouldUseUnifiedWwOnline(game)
+					? extractLegacyOnlineCards(currentItems)
+					: (currentItems as OnlineMod[]) || [];
+				const nextLegacyCards = [...legacyCards, ...(data._aRecords || [])];
+				return {
+					...prev,
+					[cacheKey]: shouldUseUnifiedList
+						? resolveUnifiedOnlineList(unifiedCardsRef.current[cacheKey], nextLegacyCards, {
+								appendLegacy: appendLegacyOnlineCards,
+							})
+						: nextLegacyCards,
+				};
+			});
+		},
+		[appendLegacyOnlineCards, game, setOnlineData, shouldUseUnifiedList]
+	);
 
 	const checkLoadMore = useCallback(async () => {
 		if (!containerRef.current || isLoading) return;
@@ -222,7 +206,10 @@ function MainOnline() {
 					await nextPage(apiClient.home({ page: pageCount[onlineCacheKey], type: onlineType }), onlineCacheKey);
 				} else if (onlinePath.startsWith("Skins") || onlinePath.startsWith("Other") || onlinePath.startsWith("UI")) {
 					const cat = onlinePath.split("&_sort=")[0];
-					await nextPage(apiClient.category({ cat, sort: onlineSort, page: pageCount[onlineCacheKey] }), onlineCacheKey);
+					await nextPage(
+						apiClient.category({ cat, sort: onlineSort, page: pageCount[onlineCacheKey] }),
+						onlineCacheKey
+					);
 				} else if (onlinePath.startsWith("search/")) {
 					const term = onlinePath.replace("search/", "").split("&_type=")[0];
 					if (term.trim().length == 0) return;
@@ -281,39 +268,41 @@ function MainOnline() {
 			checkLoadMore();
 		}, 50); // ~60fps
 	}, [checkLoadMore, updateVisibilityRange]);
-	const initialLoad = useCallback(async (url: string, cacheKey: string, controller: AbortController) => {
-		setIsLoading(true);
-		setOnlineLoadError("");
-		try {
-			const [data, unifiedCards] = await Promise.all([
-				fetchGameBananaJson<OnlineListResponse>(url, controller.signal)
-					.catch((err: unknown) => {
+	const initialLoad = useCallback(
+		async (url: string, cacheKey: string, controller: AbortController) => {
+			setIsLoading(true);
+			setOnlineLoadError("");
+			try {
+				const [data, unifiedCards] = await Promise.all([
+					fetchGameBananaJson<OnlineListResponse>(url, controller.signal).catch((err: unknown) => {
 						info("legacy online list unavailable", err);
 						setOnlineLoadError(err instanceof Error ? err.message : String(err || "在线列表请求失败"));
 						return null;
 					}),
-				fetchUnifiedCards(cacheKey),
-			]);
-			const legacyRecords = data?._aRecords || [];
-			max = data?._aMetadata?._nRecordCount ? data._aMetadata._nRecordCount / (data?._aMetadata?._nPerPage || 15) : 0;
-			setOnlineData((prev) => {
-				return {
-					...prev,
-					[cacheKey]: shouldUseUnifiedList
-						? resolveUnifiedOnlineList(unifiedCards, legacyRecords, {
-								appendLegacy: appendLegacyOnlineCards,
-							})
-						: legacyRecords,
-				};
-			});
-			setTimeout(() => {
-				void checkLoadMore();
-			}, 100);
-		} finally {
-			loadingCacheKeysRef.current.delete(cacheKey);
-			setIsLoading(false);
-		}
-	}, [appendLegacyOnlineCards, checkLoadMore, fetchUnifiedCards, game, setOnlineData, shouldUseUnifiedList]);
+					fetchUnifiedCards(cacheKey),
+				]);
+				const legacyRecords = data?._aRecords || [];
+				max = data?._aMetadata?._nRecordCount ? data._aMetadata._nRecordCount / (data?._aMetadata?._nPerPage || 15) : 0;
+				setOnlineData((prev) => {
+					return {
+						...prev,
+						[cacheKey]: shouldUseUnifiedList
+							? resolveUnifiedOnlineList(unifiedCards, legacyRecords, {
+									appendLegacy: appendLegacyOnlineCards,
+								})
+							: legacyRecords,
+					};
+				});
+				setTimeout(() => {
+					void checkLoadMore();
+				}, 100);
+			} finally {
+				loadingCacheKeysRef.current.delete(cacheKey);
+				setIsLoading(false);
+			}
+		},
+		[appendLegacyOnlineCards, checkLoadMore, fetchUnifiedCards, game, setOnlineData, shouldUseUnifiedList]
+	);
 	const initialLoadRef = useRef(initialLoad);
 	useEffect(() => {
 		initialLoadRef.current = initialLoad;
@@ -421,7 +410,6 @@ function MainOnline() {
 							exit={{ opacity: 0, y: 0 }}
 							transition={transitionConfig(0)}
 							className="aspect-video w-full max-w-175 duration-300 transition-[max-width] xl:max-w-3xl mb-4"
-							
 						>
 							<Carousel data={filteredBannerData || []} blur={nsfw == 1} onModClick={onModClick} />
 						</motion.div>

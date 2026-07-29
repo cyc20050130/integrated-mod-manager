@@ -1,11 +1,11 @@
 {
-	"version": "3.2.19",
-	"notes": "{\"major\":[],\"minor\":[\"Merged upstream window-state persistence behavior while keeping IMM 3.2.x portable update, native IO, and unified online features.\",\"Improved preview crop initialization, reset/apply guards, and save flow so edited previews return cleanly to the preview screen.\"],\"patch\":[\"Fixed conflict resolution so the dialog only advances after every requested disable succeeds.\",\"Reduced startup/runtime render loops by avoiding repeated empty conflict writes and duplicate atom resets.\",\"Hardened restore, updater, tooltip, dialog, and non-Tauri runtime guards to avoid invalid interactions and browser-only crashes.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.19 merges upstream UI stability fixes while preserving the 3.2.x portable updater, long-path IO, and unified online support.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.19\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-06-02T03:07:19Z",
+	"version": "3.2.20",
+	"notes": "{\"major\":[],\"minor\":[\"Added full Neverness to Everness Mod discovery and search through the scoped GameBanana provider.\",\"Added verified ZIP downloads, previews, updates, enable/disable, rename, delete, and crash-safe WAL recovery for NTE libraries.\"],\"patch\":[\"Fixed the Windows startup crash caused by an uninitialized rustls crypto provider.\",\"Replaced broad renderer file watching with a native persisted-config d3dx_user.ini watcher.\",\"Hardened archive extraction, remote media, filesystem capabilities, staging cleanup, and path identity checks.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.20 adds complete NTE Mod support and fixes the Windows startup crash.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.20\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-07-29T22:49:19Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOGxUUFdvb1N1U1JTOGJwZEpjbUF0L0RwWUxuYVpZQlVyMzlvcUd3dm9KVzFEa2R5blp4UURmU1JodHdjUG15WGRPT3VZeTNBWVcyeVdxU3dnaUZwcUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgwMzY5NjE3CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMTlfeDY0LXNldHVwLmV4ZQpCTUE2OXFIUGdBZ0xzU2xLV3hDQjhNRDNYaXBDQnZMdDVxR1V5VDlTcnZVdlFBUTAxYW0yeVA2Yy8xdUQwKzFKaUx5Qkxuc0lQeDBYVE5Hbi9JcWhEUT09Cg==",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.19/Integrated.Mod.Manager.IMM._3.2.19_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOG9OT1JFTWgxUEZmV0szRHkvRDVLUjZxVU91bnVjVEdHSzNoT3J5d051R2huOE1EQVp1Y0IyeStmMFlZNmRVeGUxV0xoRTFtTnB5eVV2NWJtS3hpaXcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1MzY1MzQ3CWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMjBfeDY0LXNldHVwLmV4ZQpwOHNxRmJMTEswQXY3TngwU2NPdHR0YzYwc1liTXl2YkJPQW1ldzVkQk5pMHdGZ0orRlJ3RUkxNXNTYlZxWmZUTVlrbjd6WDdnYlFVMEhUL3ZmbDBBUT09Cg==",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.20/Integrated.Mod.Manager.IMM._3.2.20_x64-setup.exe"
 		}
 	}
 }

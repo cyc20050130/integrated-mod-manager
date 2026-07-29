@@ -5,6 +5,8 @@ import { saveConfigs } from "./filesys";
 import { Category } from "./types";
 import { SETTINGS, store } from "./vars";
 import GAME_DATA from "@/gameData.json";
+import { invoke } from "@tauri-apps/api/core";
+import { buildNteCategoryUrl, buildNteHomeUrl, buildNteSearchUrl, normalizeNteCategories } from "./gameBananaNte";
 
 type HealthCheckResponse = {
 	client?: string;
@@ -47,7 +49,6 @@ function getCharIconURL(name: string) {
 	return `https://api.hakush.in/gi/UI/UI_AvatarIcon_${GI_CHAR_MAP[name] || name}.webp`;
 }
 const API_BASE_URL = "https://gamebanana.com/apiv11/";
-const HEALTH_CHECK = "https://health.wwmm.bhatt.jp/health";
 class ApiClient {
 	private GAME = "WW";
 	private CLIENT = "";
@@ -461,20 +462,23 @@ class ApiClient {
 		return this;
 	}
 
-	async makeRequest(endpoint: string, options: RequestInit = {}) {
-		const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
-
-		if (!response.ok) {
-			throw new Error(`API request failed: ${response.statusText}`);
-		}
-
-		return response.json();
+	async makeRequest<T = any>(endpoint: string, _options: RequestInit = {}): Promise<T> {
+		return await invoke<T>("fetch_gamebanana_json", { url: `${API_BASE_URL}${endpoint}` });
 	}
 
 	async categories() {
 		//info("Fetching categories...", await this.healthCheck());
 		this.healthCheck();
 		try {
+			if (this.GAME === "NTE") {
+				const profile = (await this.makeRequest(`Game/${this.id.game}/ProfilePage`)) as {
+					_aModRootCategories?: unknown;
+				};
+				const rootCategories = normalizeNteCategories(profile._aModRootCategories);
+				this.categoryList = rootCategories;
+				this.generic = { categories: rootCategories, types: rootCategories };
+				return rootCategories;
+			}
 			const fetchWithRetry = async (timeouts: number[] = [2000, 5000]): Promise<Category[]> => {
 				for (let i = 0; i < timeouts.length; i++) {
 					try {
@@ -522,12 +526,18 @@ class ApiClient {
 	}
 
 	home({ sort = "default", page = 1, type = "" }: { sort?: string; page?: number; type?: string }) {
+		if (this.GAME === "NTE") return buildNteHomeUrl({ sort, page, type });
 		return `${API_BASE_URL}Game/${this.id.game}/Subfeed?${
 			type ? `_csvModelInclusions=${type}&` : ""
 		}_sSort=${sort}&_nPage=${page}`;
 	}
 
 	category({ cat = "", sort = "default", page = 1 }) {
+		if (this.GAME === "NTE") {
+			const categoryName = cat.split("/").pop() || cat;
+			const category = this.generic.types.find((entry) => entry._sName === categoryName);
+			return buildNteCategoryUrl(category?._idRow || 0, page, sort);
+		}
 		return `${API_BASE_URL}Mod/Index?_nPerpage=15&_aFilters%5BGeneric_Category%5D=${(
 			(cat.split("/").length > 1
 				? this.categoryList.find((x) => x._sName == cat.split("/")[1])?._idRow
@@ -555,37 +565,29 @@ class ApiClient {
 		return this.makeRequest(`Post/${postId}/Posts?_nPage=1&_nPerpage=15`, signal ? { signal } : undefined);
 	}
 	search({ term = "", page = 1, type = "" }) {
+		if (this.GAME === "NTE") return buildNteSearchUrl(term, page, type || "Mod");
 		return `${API_BASE_URL}Util/Search/Results?_sModelName=${type}&_sOrder=best_match&_idGameRow=${
 			this.id.game
 		}&_sSearchString=${encodeURIComponent(term)}&_nPage=${page}`;
 	}
 
 	async healthCheck() {
-		// return VERSION+"/"+this.GAME+"/"+(this.CLIENT||("_"+Date.now()));
-		//info(this.CLIENT, VERSION, this.GAME, this.CLIENT);
-		const base = `${HEALTH_CHECK}/${VERSION || "2.0.1"}/${this.GAME || "WW"}`;
-		//info(base);
 		try {
-			if (this.CLIENT) fetch(`${base}/${this.CLIENT}`);
-			else {
-				fetch(`${base}/_${Date.now()}`)
-					.then((res) => res.json())
-					.then((data: HealthCheckResponse) => {
-						if (data.client) {
-							this.CLIENT = data.client;
-							store.set(SETTINGS, (prev) => ({
-								...prev,
-								global: { ...prev.global, clientDate: data.client || prev.global.clientDate || "" },
-							}));
-							saveConfigs();
-							// config.settings.clientDate = data.client;
-							// store.set(settingsDataAtom, config.settings as Settings);
-							// saveConfig();
-						}
-					});
+			const data = await invoke<HealthCheckResponse>("service_health_check", {
+				version: VERSION || "2.0.1",
+				game: this.GAME || "WW",
+				client: this.CLIENT || null,
+			});
+			if (!this.CLIENT && data.client) {
+				this.CLIENT = data.client;
+				store.set(SETTINGS, (prev) => ({
+					...prev,
+					global: { ...prev.global, clientDate: data.client || prev.global.clientDate || "" },
+				}));
+				await saveConfigs();
 			}
 		} catch {
-			//console.error("Health check failed:", error);
+			// Health reporting is best-effort and must never block startup.
 		}
 	}
 }

@@ -26,7 +26,7 @@ export default defineConfig({
 				manualChunks: {
 					//'react-vendor': ['react', 'react-dom'],
 					'ui-vendor': ['@radix-ui/react-accordion', '@radix-ui/react-alert-dialog', '@radix-ui/react-checkbox'],
-					'tauri-vendor': ['@tauri-apps/api', '@tauri-apps/plugin-dialog', '@tauri-apps/plugin-fs', '@tauri-apps/plugin-http'],
+					'tauri-vendor': ['@tauri-apps/api', '@tauri-apps/plugin-dialog', '@tauri-apps/plugin-fs'],
 					'state-vendor': ['jotai'],
 					'motion-vendor': ['motion', 'embla-carousel-react', 'embla-carousel-autoplay']
 				},

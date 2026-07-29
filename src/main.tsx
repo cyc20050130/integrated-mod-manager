@@ -8,7 +8,6 @@ import Decorations from "./utils/decorations";
 import { interceptConsole } from "@fltsci/tauri-plugin-tracing";
 import { invoke } from "@tauri-apps/api/core";
 
-
 /*export async function downloadLogs() {
 	const filePath = await save({
 		title: "Save logs as:",
@@ -29,7 +28,7 @@ import { invoke } from "@tauri-apps/api/core";
 window.addEventListener("keydown", (e) => {
 	if (e.key === "F8") {
 		e.preventDefault();
-		invoke('open_logs_folder');
+		invoke("open_logs_folder");
 	}
 });
 

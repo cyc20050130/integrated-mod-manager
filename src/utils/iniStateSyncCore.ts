@@ -21,7 +21,9 @@ type TrackedNamespacePrefix = {
 };
 
 function normalizeSlashes(value: string) {
-	return String(value || "").replaceAll("/", "\\").toLowerCase();
+	return String(value || "")
+		.replaceAll("/", "\\")
+		.toLowerCase();
 }
 
 function normalizeIniKey(value: string) {

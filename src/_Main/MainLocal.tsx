@@ -20,11 +20,10 @@ import { AnimatePresence, motion } from "motion/react";
 import CardLocal from "./components/CardLocal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isModBlacklisted, preventContextMenu } from "@/utils/utils";
-import { toggleMod } from "@/utils/filesys";
+import { openManagedFolder, toggleMod } from "@/utils/filesys";
 import MiniSearch from "minisearch";
-import { join, setChange } from "@/utils/hotreload";
+import { setChange } from "@/utils/hotreload";
 import { managedSRC } from "@/utils/consts";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { Mod } from "@/utils/types";
 import { addToast } from "@/_Toaster/ToastProvider";
 import { info } from "@/lib/logger";
@@ -340,7 +339,7 @@ function MainLocal() {
 						in{" "}
 						<label
 							onClick={() => {
-								openPath(join(source, managedSRC));
+								void openManagedFolder("source", managedSRC);
 							}}
 							className="hover:opacity-75 text-blue-300 duration-200 opacity-50 pointer-events-auto"
 						>

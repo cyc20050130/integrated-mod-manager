@@ -10,6 +10,7 @@ import {
 	MAIN_FUNC_STATUS,
 	NOTICE,
 	NOTICE_OPEN,
+	NTE_REGION,
 	ONLINE_DATA,
 	PRESETS,
 	resetAtoms,
@@ -33,6 +34,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { exists, mkdir, readTextFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
 import defConfig from "../default.json";
 import defConfigXX from "../defaultXX.json";
+import defConfigNTE from "../defaultNTE.json";
 import { apiClient } from "./api";
 import { GAMES, VERSION } from "./consts";
 import { switchGameTheme } from "./theme";
@@ -42,13 +44,24 @@ import { join, setHotreload, stopWindowMonitoring } from "./hotreload";
 import { registerGlobalHotkeys } from "./hotkeyUtils";
 import TEXT from "@/textData.json";
 import { unregisterAll } from "@tauri-apps/plugin-global-shortcut";
-import { compareVersions, safeLoadJson, sanitizeGlobalSettings, setImageServer } from "./utils";
+import { compareVersions, safeLoadJson, sanitizeGlobalSettings } from "./utils";
 import { addToast } from "@/_Toaster/ToastProvider";
-import { Category, DownloadList, GameSettings, Games, GlobalSettings, ModDataObj, Preset, Settings } from "./types";
+import {
+	Category,
+	DownloadList,
+	GameSettings,
+	Games,
+	GlobalSettings,
+	ModDataObj,
+	NteRegion,
+	Preset,
+	Settings,
+} from "./types";
 import { toResumableDownloadList, withNormalizedDownloadSettings } from "./downloads";
 import { resetPageCounts } from "@/_Main/MainOnline";
-import { info } from "@/lib/logger";
+import { error, info } from "@/lib/logger";
 import { syncIniStateOnce } from "./iniStateSync";
+import { loadNteConfigText, persistNteConfig, setNteConfigRevision } from "./nteConfigRevision";
 // import { v2_0_4_migration } from "./filesys";
 
 type RuntimeGlobalConfig = GlobalSettings & { version?: string; updatedAt?: string; notice?: number };
@@ -56,6 +69,7 @@ type RuntimeGameConfig = {
 	version: string;
 	game: Games;
 	custom: 0 | 1;
+	nteRegion?: NteRegion;
 	sourceDir: string;
 	targetDir: string;
 	settings: GameSettings;
@@ -141,6 +155,7 @@ async function safeExists(pathLike: string) {
 }
 
 async function safeReadTextFile(pathLike: string) {
+	if (pathLike.replaceAll("/", "\\") === "configNTE.json") return loadNteConfigText();
 	if (!isNativeRuntimePath(pathLike)) {
 		return await readTextFileNative(pathLike);
 	}
@@ -153,6 +168,10 @@ async function safeReadTextFile(pathLike: string) {
 }
 
 async function safeWriteTextFile(pathLike: string, contents: string) {
+	if (pathLike.replaceAll("/", "\\") === "configNTE.json") {
+		await persistNteConfig(contents);
+		return true;
+	}
 	if (!isNativeRuntimePath(pathLike)) {
 		await writeTextFileNative(pathLike, contents);
 		return true;
@@ -190,7 +209,9 @@ async function writeTextFileNative(pathLike: string, contents: string) {
 }
 
 function getDefaultXxmiDirCandidatesFromAppData(appDataDir: string) {
-	const normalized = String(appDataDir || "").replaceAll("/", "\\").replace(/\\+$/g, "");
+	const normalized = String(appDataDir || "")
+		.replaceAll("/", "\\")
+		.replace(/\\+$/g, "");
 	if (!normalized) return [] as string[];
 	const directCandidate = join(normalized, "XXMI Launcher");
 	const parentParts = normalized.split("\\").filter(Boolean).slice(0, -1);
@@ -207,6 +228,7 @@ let paths = {
 	SR: "",
 	XX: "",
 	EF: "",
+	NTE: "",
 };
 let isInPrePostLaunch = {
 	WW: false,
@@ -214,6 +236,7 @@ let isInPrePostLaunch = {
 	GI: false,
 	SR: false,
 	EF: false,
+	NTE: false,
 	"": false,
 };
 
@@ -243,10 +266,7 @@ export async function setPrePostLaunch(game: Games, value: boolean) {
 	const cmd = `start imm://mode/${game.toLowerCase()}`;
 	if (value) {
 		if (!importer.Importer.run_pre_launch.includes(cmd))
-			importer.Importer.run_pre_launch = [
-				cmd,
-				...importer.Importer.run_pre_launch.split(" && "),
-			]
+			importer.Importer.run_pre_launch = [cmd, ...importer.Importer.run_pre_launch.split(" && ")]
 				.filter((x: string) => x.trim() !== "")
 				.join(" && ");
 	} else {
@@ -275,6 +295,7 @@ export async function readXXMIConfig(path: string) {
 		SR: "",
 		XX: "",
 		EF: "",
+		NTE: "",
 	};
 	isInPrePostLaunch = {
 		WW: false,
@@ -282,6 +303,7 @@ export async function readXXMIConfig(path: string) {
 		GI: false,
 		SR: false,
 		EF: false,
+		NTE: false,
 		"": false,
 	};
 	if (path && path != "") {
@@ -339,11 +361,6 @@ export async function setWindowType(type: number) {
 		await window?.maximize();
 		// window.setFullscreen(true);
 	}
-}
-if (hasTauriWindowRuntime) {
-	invoke<string>("get_image_server_url").then((url) => {
-		setImageServer(url + "/preview");
-	});
 }
 export async function updateConfig(oconfig: LegacyConfig | null = null): Promise<RuntimeGlobalConfig> {
 	if (!oconfig) oconfig = readJsonText<LegacyConfig>(await safeReadTextFile("config.json"));
@@ -442,42 +459,45 @@ export async function verifyGameDir(game: Games) {
 }
 export async function initGame(game: RuntimeGame, status = true) {
 	info(`[IMM] Initializing game: ${game}...`);
+	const defaultGameConfig = game === "NTE" ? defConfigNTE : defConfigXX;
 	store.set(ONLINE_DATA, {});
 	const savedConfig = (await safeExists(`config${game}.json`))
 		? readJsonText<Partial<RuntimeGameConfig>>(await safeReadTextFile(`config${game}.json`))
 		: {};
+	if (game === "NTE") setNteConfigRevision(savedConfig.updatedAt);
 	const mergedSettings = {
-		...defConfigXX.settings,
+		...defaultGameConfig.settings,
 		...(savedConfig.settings || {}),
 		customCategories: {
-			...defConfigXX.settings.customCategories,
+			...defaultGameConfig.settings.customCategories,
 			...(savedConfig.settings?.customCategories || {}),
 		},
 		download: {
-			...defConfigXX.settings.download,
+			...defaultGameConfig.settings.download,
 			...(savedConfig.settings?.download || {}),
 		},
 	} as GameSettings;
 	configXX = {
-		...defConfigXX,
+		...defaultGameConfig,
 		...savedConfig,
 		version: VERSION,
 		game,
 		settings: withNormalizedDownloadSettings(mergedSettings),
 		data: (savedConfig.data || {}) as ModDataObj,
-		downloads: toResumableDownloadList(savedConfig.downloads || defConfigXX.downloads),
+		downloads: toResumableDownloadList(savedConfig.downloads || defaultGameConfig.downloads),
 		presets: savedConfig.presets || [],
 		categories: savedConfig.categories || [],
-		custom: (savedConfig.custom ?? defConfigXX.custom) as 0 | 1,
-		sourceDir: savedConfig.sourceDir || defConfigXX.sourceDir,
-		targetDir: savedConfig.targetDir || defConfigXX.targetDir,
-		updatedAt: savedConfig.updatedAt || defConfigXX.updatedAt,
+		custom: game === "NTE" ? 1 : ((savedConfig.custom ?? defaultGameConfig.custom) as 0 | 1),
+		...(game === "NTE" ? { nteRegion: (savedConfig.nteRegion ?? "auto") as NteRegion } : {}),
+		sourceDir: savedConfig.sourceDir || defaultGameConfig.sourceDir,
+		targetDir: savedConfig.targetDir || defaultGameConfig.targetDir,
+		updatedAt: savedConfig.updatedAt || (game === "NTE" ? new Date().toISOString() : defaultGameConfig.updatedAt),
 	};
 	if (configXX.settings.launch === 2 && !isInPrePostLaunch[game]) configXX.settings.launch = 0;
 	else if (isInPrePostLaunch[game]) configXX.settings.launch = 2;
 	switchGameTheme(game);
 
-	if (!configXX.custom) {
+	if (game !== "NTE" && !configXX.custom) {
 		configXX = { ...configXX, ...(await verifyGameDir(game)) };
 	} else {
 		dataDir = configXX.targetDir;
@@ -488,12 +508,13 @@ export async function initGame(game: RuntimeGame, status = true) {
 	invoke("set_window_icon", { game });
 	// Validate source and target dirs
 	if (configXX.sourceDir && !(await pathExistsNative(join(configXX.sourceDir)))) configXX.sourceDir = "";
-	if (configXX.targetDir && !(await pathExistsNative(configXX.targetDir))) configXX.targetDir = "";
+	if (game !== "NTE" && configXX.targetDir && !(await pathExistsNative(configXX.targetDir))) configXX.targetDir = "";
 	if (status) store.set(MAIN_FUNC_STATUS, "Validating source and target directories");
 	info("[IMM] Validating source and target directories...", configXX.sourceDir, configXX.targetDir);
 	store.set(SOURCE, configXX.sourceDir || "");
 	store.set(TARGET, configXX.targetDir || "");
 	store.set(XXMI_MODE, (configXX.custom || 0) as 0 | 1);
+	store.set(NTE_REGION, configXX.nteRegion || "auto");
 	store.set(
 		SETTINGS,
 		(prev) => ({ global: { ...prev.global, game }, game: { ...prev.game, ...configXX.settings } }) as Settings
@@ -571,6 +592,31 @@ function removeHelpers() {
 	resetPageCounts();
 }
 export async function launchGame() {
+	if (config.game === "NTE") {
+		const suffix = "\\Client\\WindowsNoEditor\\HT\\Content\\Paks\\~mods";
+		const configuredTarget = store.get(TARGET) || configXX.targetDir;
+		const normalizedTarget = String(configuredTarget || "")
+			.replaceAll("/", "\\")
+			.replace(/\\+$/g, "");
+		const gameRoot = normalizedTarget.toLowerCase().endsWith(suffix.toLowerCase())
+			? normalizedTarget.slice(0, -suffix.length)
+			: "";
+		if (!gameRoot) {
+			addToast({ type: "error", message: store.get(TEXT_DATA)._Checklist.NTEGameRootNotConfigured });
+			return;
+		}
+		try {
+			await invoke("launch_nte_game", {
+				gameRoot,
+				region: store.get(NTE_REGION) || configXX.nteRegion || null,
+			});
+			addToast({ type: "info", message: "Launching Game" });
+		} catch (launchError) {
+			error("[IMM] Unable to launch NTE:", launchError);
+			addToast({ type: "error", message: store.get(TEXT_DATA)._Toasts.ErrOcc });
+		}
+		return;
+	}
 	await syncIniStateOnce("launch-game");
 	if (await pathExistsNative(config.XXMI))
 		isGameProcessRunning(config.game).then((running) => {
@@ -586,9 +632,14 @@ export async function launchGame() {
 async function initHelpers() {
 	info("[IMM] Initializing helpers...");
 	if (configXX.settings.launch == 1 && GAMES.includes(config.game as RuntimeGame)) {
-		launchGame();
+		void launchGame().catch((launchError) => {
+			error("[IMM] Automatic game launch failed:", launchError);
+			addToast({ type: "error", message: store.get(TEXT_DATA)._Toasts.ErrOcc });
+		});
 	}
-	setHotreload(configXX.settings.hotReload as 0 | 1 | 2, config.game, configXX.targetDir);
+	if (config.game !== "NTE") {
+		setHotreload(configXX.settings.hotReload as 0 | 1 | 2, config.game, configXX.targetDir);
+	}
 
 	registerGlobalHotkeys();
 }
@@ -615,7 +666,9 @@ export async function maintainBackups() {
 				delete data.categories;
 				if (await safeExists(backupPath + file + ".bak")) {
 					try {
-						const backupData = readJsonText<Record<string, unknown>>(await safeReadTextFile(backupPath + file + ".bak"));
+						const backupData = readJsonText<Record<string, unknown>>(
+							await safeReadTextFile(backupPath + file + ".bak")
+						);
 						if (
 							backupData.updatedAt &&
 							new Date().getTime() - new Date(String(backupData.updatedAt)).getTime() > 24 * 60 * 60 * 1000
@@ -639,7 +692,9 @@ export async function maintainBackups() {
 				store.set(MAIN_FUNC_STATUS, `Config file corrupted, restoring from backup`);
 				if (await safeExists(backupPath + file + ".bak")) {
 					try {
-						const backupData = readJsonText<Record<string, unknown>>(await safeReadTextFile(backupPath + file + ".bak"));
+						const backupData = readJsonText<Record<string, unknown>>(
+							await safeReadTextFile(backupPath + file + ".bak")
+						);
 						await safeWriteTextFile(file, JSON.stringify(backupData, null, 2));
 						info(`[IMM] Successfully restored backup for: ${file}`);
 					} catch {

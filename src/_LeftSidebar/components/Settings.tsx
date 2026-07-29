@@ -2,6 +2,7 @@ import { skipPage } from "@/_Checklist/pages/Page3";
 import { addToast } from "@/_Toaster/ToastProvider";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
@@ -142,7 +143,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 		const ok = await exportLinkAuditReport(linkAuditReport);
 		if (ok) addToast({ type: "success", message: "Link scan report exported" });
 	};
-	
+
 	return (
 		<Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
 			<DialogTrigger asChild>
@@ -157,11 +158,12 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 			</DialogTrigger>
 			<DialogContent className="min-h-fit">
 				<AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
-					<AlertDialogContent className="game-font bg-background/50 backdrop-blur-xs border-border flex flex-col items-center gap-4 p-4 overflow-hidden border-2 rounded-lg"
-					style={{
-						minWidth:alertType === "xxmi"?"700px":"",
-						maxWidth:alertType === "xxmi"?"700px":""
-					}}
+					<AlertDialogContent
+						className="game-font bg-background/50 backdrop-blur-xs border-border flex flex-col items-center gap-4 p-4 overflow-hidden border-2 rounded-lg"
+						style={{
+							minWidth: alertType === "xxmi" ? "700px" : "",
+							maxWidth: alertType === "xxmi" ? "700px" : "",
+						}}
 					>
 						{alertType === "xxmi" ? (
 							<>
@@ -170,9 +172,11 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 										{textData._LeftSideBar._components._Settings._LaunchSettings.Note}
 									</div>
 									<img src="xxmi-warn.png" className="rounded-xl min-w-164 max-w-164" />
-									<div className="h-12 w-49  -ml-85.25 -mt-15.5 border border-accent animate-pulse rounded-lg"/>
-									
-									<div className="text-accent mt-6">{textData._LeftSideBar._components._Settings._LaunchSettings.Warn1}</div>
+									<div className="h-12 w-49  -ml-85.25 -mt-15.5 border border-accent animate-pulse rounded-lg" />
+
+									<div className="text-accent mt-6">
+										{textData._LeftSideBar._components._Settings._LaunchSettings.Warn1}
+									</div>
 									<div className="text-accent">{textData._LeftSideBar._components._Settings._LaunchSettings.Warn2}</div>
 								</div>
 								<div className="flex justify-center w-full gap-4 mt-4">
@@ -452,7 +456,11 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 															setAlertOpen(true);
 														}}
 													>
-														<img src={lang.Flag} alt={lang.Name} className="hover:scale-120 w-6 h-6 duration-200" />
+														<RemoteImage
+															src={lang.Flag}
+															alt={lang.Name}
+															className="hover:scale-120 w-6 h-6 duration-200"
+														/>
 														<span
 															className="text-accent whitespace-nowrap absolute mt-12 overflow-hidden duration-200"
 															style={{
@@ -539,13 +547,18 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 													<TooltipContent>
 														<div className="flex flex-col gap-1">
 															<div>
-																<b>{textData._LeftSideBar._components._Settings._AutoReload.Disable} -</b> {textData._LeftSideBar._components._Settings._LaunchSettings.NoChanges}
+																<b>{textData._LeftSideBar._components._Settings._AutoReload.Disable} -</b>{" "}
+																{textData._LeftSideBar._components._Settings._LaunchSettings.NoChanges}
 															</div>
 															<div>
 																<b>IMM -</b> {textData._LeftSideBar._components._Settings._LaunchSettings.LaunchGame}
 															</div>
 															<div>
-																<b>{settings.global.game}MI -</b> {textData._LeftSideBar._components._Settings._LaunchSettings.LaunchIMM.replace("<game/>", settings.global.game)}
+																<b>{settings.global.game}MI -</b>{" "}
+																{textData._LeftSideBar._components._Settings._LaunchSettings.LaunchIMM.replace(
+																	"<game/>",
+																	settings.global.game
+																)}
 															</div>
 														</div>
 													</TooltipContent>
@@ -611,10 +624,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											</div>
 										</div>
 									</div>
-										<div className="min-w-1/2 justify-evenly flex flex-col min-h-full gap-2 pr-2">
-											<div className="flex flex-col w-full gap-2">
-												{textData._LeftSideBar._components._Settings.ImportExport}
-												<div className="flex justify-start w-full gap-2 pr-2">
+									<div className="min-w-1/2 justify-evenly flex flex-col min-h-full gap-2 pr-2">
+										<div className="flex flex-col w-full gap-2">
+											{textData._LeftSideBar._components._Settings.ImportExport}
+											<div className="flex justify-start w-full gap-2 pr-2">
 												<Button
 													// disabled={disabled}
 													onClick={importConfig}
@@ -623,128 +636,133 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 													<DownloadIcon className="w-4 h-4" />
 													{textData._LeftSideBar._components._Settings._ImportExport.Import}
 												</Button>
-													<Button onClick={()=>exportConfig(settings,textData)} className="h-9 w-1/2 text-sm">
-														<UploadIcon className="w-4 h-4" />
-														{textData._LeftSideBar._components._Settings._ImportExport.Export}
-													</Button>
-												</div>
+												<Button onClick={() => exportConfig(settings, textData)} className="h-9 w-1/2 text-sm">
+													<UploadIcon className="w-4 h-4" />
+													{textData._LeftSideBar._components._Settings._ImportExport.Export}
+												</Button>
 											</div>
-											<div className="flex flex-col w-full gap-2">
-												<div className="flex items-center gap-1">Link Integrity (Review Only)</div>
-												<div className="flex justify-start w-full gap-2 pr-2">
-													<Button onClick={triggerLinkScan} className="h-9 w-1/2 text-sm" disabled={linkAuditRunning}>
-														{linkAuditRunning ? "Scanning..." : "Scan All Games"}
-													</Button>
-													<Button
-														onClick={exportScanReport}
-														className="h-9 w-1/2 text-sm"
-														disabled={!linkAuditReport || linkAuditRunning}
-													>
-														Export JSON
-													</Button>
-												</div>
-												<div className="text-[11px] text-muted-foreground">
-													{linkAuditReport
-														? `matched ${linkAuditReport.summary.matched} | unlinked ${linkAuditReport.summary.unlinked} | orphans ${linkAuditReport.summary.orphans} | suggestions ${linkAuditReport.summary.suggestedMappings}`
-														: "No scan report yet"}
-												</div>
-												<div className="text-[11px] text-muted-foreground">
-													{previewBackfillState.running
-														? `preview backfill running: ${previewBackfillState.completed}/${previewBackfillState.queued} done, ${previewBackfillState.failed} failed, cooldown skips ${previewBackfillState.skippedCooldown}`
-														: `preview backfill last run: ${
-																previewBackfillState.lastRunAt
-																	? new Date(previewBackfillState.lastRunAt).toLocaleString()
-																	: "never"
-															}`}
-												</div>
-												{linkAuditReport && linkAuditReport.games.some((g) => g.suggestedMappings.length > 0) && (
-													<div className="max-h-28 overflow-y-auto border rounded-md px-2 py-1 text-xs">
-														{linkAuditReport.games.map((g) => (
-															<div key={g.game} className="mb-2">
-																<div className="text-accent">{g.game} suggestions ({g.suggestedMappings.length})</div>
-																{g.suggestedMappings.slice(0, 6).map((s) => (
-																	<div key={`${g.game}_${s.localPath}_${s.candidateDataPath}`} className="text-muted-foreground">
-																		{`${s.localPath} <= ${s.candidateDataPath} (${Math.round(s.confidence * 100)}%)`}
-																	</div>
-																))}
+										</div>
+										<div className="flex flex-col w-full gap-2">
+											<div className="flex items-center gap-1">Link Integrity (Review Only)</div>
+											<div className="flex justify-start w-full gap-2 pr-2">
+												<Button onClick={triggerLinkScan} className="h-9 w-1/2 text-sm" disabled={linkAuditRunning}>
+													{linkAuditRunning ? "Scanning..." : "Scan All Games"}
+												</Button>
+												<Button
+													onClick={exportScanReport}
+													className="h-9 w-1/2 text-sm"
+													disabled={!linkAuditReport || linkAuditRunning}
+												>
+													Export JSON
+												</Button>
+											</div>
+											<div className="text-[11px] text-muted-foreground">
+												{linkAuditReport
+													? `matched ${linkAuditReport.summary.matched} | unlinked ${linkAuditReport.summary.unlinked} | orphans ${linkAuditReport.summary.orphans} | suggestions ${linkAuditReport.summary.suggestedMappings}`
+													: "No scan report yet"}
+											</div>
+											<div className="text-[11px] text-muted-foreground">
+												{previewBackfillState.running
+													? `preview backfill running: ${previewBackfillState.completed}/${previewBackfillState.queued} done, ${previewBackfillState.failed} failed, cooldown skips ${previewBackfillState.skippedCooldown}`
+													: `preview backfill last run: ${
+															previewBackfillState.lastRunAt
+																? new Date(previewBackfillState.lastRunAt).toLocaleString()
+																: "never"
+														}`}
+											</div>
+											{linkAuditReport && linkAuditReport.games.some((g) => g.suggestedMappings.length > 0) && (
+												<div className="max-h-28 overflow-y-auto border rounded-md px-2 py-1 text-xs">
+													{linkAuditReport.games.map((g) => (
+														<div key={g.game} className="mb-2">
+															<div className="text-accent">
+																{g.game} suggestions ({g.suggestedMappings.length})
 															</div>
-														))}
-													</div>
-												)}
-											</div>
-											<div className="flex flex-col w-full gap-2">
-												<div className="flex items-center gap-1">Download Queue (Advanced)</div>
-												<div className="grid grid-cols-2 gap-2">
-													<div className="flex flex-col gap-1">
-														<label className="text-xs text-muted-foreground">Downloads</label>
-														<Input
-															type="number"
-															min={1}
-															max={3}
-															value={settings.game.download.maxConcurrentDownloads}
-															onChange={(e) => setDownloadNumber("maxConcurrentDownloads", 1, 3, e.currentTarget.value)}
-														/>
-													</div>
-													<div className="flex flex-col gap-1">
-														<label className="text-xs text-muted-foreground">Extracts</label>
-														<Input
-															type="number"
-															min={1}
-															max={4}
-															value={settings.game.download.maxConcurrentExtracts}
-															onChange={(e) => setDownloadNumber("maxConcurrentExtracts", 1, 4, e.currentTarget.value)}
-														/>
-													</div>
-													<div className="flex flex-col gap-1">
-														<label className="text-xs text-muted-foreground">Request retries</label>
-														<Input
-															type="number"
-															min={1}
-															max={5}
-															value={settings.game.download.requestRetries}
-															onChange={(e) => setDownloadNumber("requestRetries", 1, 5, e.currentTarget.value)}
-														/>
-													</div>
-													<div className="flex flex-col gap-1">
-														<label className="text-xs text-muted-foreground">Requeue rounds</label>
-														<Input
-															type="number"
-															min={1}
-															max={8}
-															value={settings.game.download.maxRequeueRounds}
-															onChange={(e) => setDownloadNumber("maxRequeueRounds", 1, 8, e.currentTarget.value)}
-														/>
-													</div>
-													<div className="flex flex-col gap-1">
-														<label className="text-xs text-muted-foreground">Connect timeout (s)</label>
-														<Input
-															type="number"
-															min={3}
-															max={60}
-															value={settings.game.download.connectTimeoutSec}
-															onChange={(e) => setDownloadNumber("connectTimeoutSec", 3, 60, e.currentTarget.value)}
-														/>
-													</div>
-													<div className="flex flex-col gap-1">
-														<label className="text-xs text-muted-foreground">Stall timeout (s)</label>
-														<Input
-															type="number"
-															min={5}
-															max={180}
-															value={settings.game.download.stallTimeoutSec}
-															onChange={(e) => setDownloadNumber("stallTimeoutSec", 5, 180, e.currentTarget.value)}
-														/>
-													</div>
+															{g.suggestedMappings.slice(0, 6).map((s) => (
+																<div
+																	key={`${g.game}_${s.localPath}_${s.candidateDataPath}`}
+																	className="text-muted-foreground"
+																>
+																	{`${s.localPath} <= ${s.candidateDataPath} (${Math.round(s.confidence * 100)}%)`}
+																</div>
+															))}
+														</div>
+													))}
+												</div>
+											)}
+										</div>
+										<div className="flex flex-col w-full gap-2">
+											<div className="flex items-center gap-1">Download Queue (Advanced)</div>
+											<div className="grid grid-cols-2 gap-2">
+												<div className="flex flex-col gap-1">
+													<label className="text-xs text-muted-foreground">Downloads</label>
+													<Input
+														type="number"
+														min={1}
+														max={3}
+														value={settings.game.download.maxConcurrentDownloads}
+														onChange={(e) => setDownloadNumber("maxConcurrentDownloads", 1, 3, e.currentTarget.value)}
+													/>
+												</div>
+												<div className="flex flex-col gap-1">
+													<label className="text-xs text-muted-foreground">Extracts</label>
+													<Input
+														type="number"
+														min={1}
+														max={4}
+														value={settings.game.download.maxConcurrentExtracts}
+														onChange={(e) => setDownloadNumber("maxConcurrentExtracts", 1, 4, e.currentTarget.value)}
+													/>
+												</div>
+												<div className="flex flex-col gap-1">
+													<label className="text-xs text-muted-foreground">Request retries</label>
+													<Input
+														type="number"
+														min={1}
+														max={5}
+														value={settings.game.download.requestRetries}
+														onChange={(e) => setDownloadNumber("requestRetries", 1, 5, e.currentTarget.value)}
+													/>
+												</div>
+												<div className="flex flex-col gap-1">
+													<label className="text-xs text-muted-foreground">Requeue rounds</label>
+													<Input
+														type="number"
+														min={1}
+														max={8}
+														value={settings.game.download.maxRequeueRounds}
+														onChange={(e) => setDownloadNumber("maxRequeueRounds", 1, 8, e.currentTarget.value)}
+													/>
+												</div>
+												<div className="flex flex-col gap-1">
+													<label className="text-xs text-muted-foreground">Connect timeout (s)</label>
+													<Input
+														type="number"
+														min={3}
+														max={60}
+														value={settings.game.download.connectTimeoutSec}
+														onChange={(e) => setDownloadNumber("connectTimeoutSec", 3, 60, e.currentTarget.value)}
+													/>
+												</div>
+												<div className="flex flex-col gap-1">
+													<label className="text-xs text-muted-foreground">Stall timeout (s)</label>
+													<Input
+														type="number"
+														min={5}
+														max={180}
+														value={settings.game.download.stallTimeoutSec}
+														onChange={(e) => setDownloadNumber("stallTimeoutSec", 5, 180, e.currentTarget.value)}
+													/>
 												</div>
 											</div>
-											<div className="flex items-center gap-1">
-												{textData._LeftSideBar._components._Settings.HotKey}
-												<Tooltip>
-													<TooltipTrigger asChild>
-														<span className="inline-flex items-center justify-center">
-															<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
-														</span>
-													</TooltipTrigger>
+										</div>
+										<div className="flex items-center gap-1">
+											{textData._LeftSideBar._components._Settings.HotKey}
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<span className="inline-flex items-center justify-center">
+														<InfoIcon className="text-muted-foreground hover:text-gray-300 w-4 h-4" />
+													</span>
+												</TooltipTrigger>
 												<TooltipContent>
 													<div className="flex flex-col gap-1">
 														<div>{textData._LeftSideBar._components._Settings._HotKey.HKMsg1}</div>
@@ -770,7 +788,10 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 										<div className="max-h-51 flex flex-col w-full h-full gap-1 p-2 ml-2 overflow-x-hidden overflow-y-auto">
 											{presets.length > 0 ? (
 												presets.map((preset, index) => (
-													<div key={preset.name || `preset-${index}`} className="flex flex-col items-center justify-between w-full h-16 gap-2">
+													<div
+														key={preset.name || `preset-${index}`}
+														className="flex flex-col items-center justify-between w-full h-16 gap-2"
+													>
 														<Input
 															className="w-full text-muted-foreground text-ellipsis h-10 p-0 overflow-hidden break-words border-0"
 															style={{ backgroundColor: "#0000" }}

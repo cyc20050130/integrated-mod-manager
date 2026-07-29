@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { EyeOffIcon, LoaderIcon, MessageSquareIcon, PlusIcon, ThumbsUpIcon, TriangleAlertIcon } from "lucide-react";
-import { getTimeDifference, handleImageError } from "@/utils/utils";
+import { getTimeDifference } from "@/utils/utils";
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 
 interface CardOnlineProps {
 	_sName: string;
@@ -41,12 +42,12 @@ const Online = React.memo((data: CardOnlineProps) => {
 	return (
 		<div className="card-generic card-online">
 			<div className="relative min-h-full overflow-hidden rounded-t-lg data-gi:rounded-none">
-				<img
+				<RemoteImage
 					className="fadein flex min-h-full w-full items-center justify-center object-cover duration-200 pointer-events-none"
 					src={backgroundImage}
+					fallbackSrc="/who.jpg"
 					loading="lazy"
 					decoding="async"
-					onError={(e) => handleImageError(e, true)}
 					style={{
 						filter: needsBlur ? "brightness(0.5) blur(4px)" : "brightness(1)",
 					}}

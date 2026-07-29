@@ -4,10 +4,10 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri_plugin_tracing::tracing;
 use std::sync::RwLock;
 #[cfg(windows)]
 use std::time::Duration;
+use tauri_plugin_tracing::tracing;
 #[cfg(windows)]
 use winapi::um::{
     handleapi::CloseHandle,
@@ -30,7 +30,6 @@ static MONITORING_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CHANGE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
-
 static MOD_MANAGER_TITLE: &str = "Integrated Mod Manager";
 static WINDOW_TARGET: RwLock<String> = RwLock::new(String::new());
 static WW_TITLE: &str = "wuthering waves  ";
@@ -243,8 +242,7 @@ fn check_process_running(title: &str) -> bool {
         let process_count = (bytes_needed as usize) / std::mem::size_of::<u32>();
         let target_title_lower = title.to_lowercase();
 
-        for i in 0..process_count {
-            let process_id = process_ids[i];
+        for &process_id in process_ids.iter().take(process_count) {
             if process_id == 0 {
                 continue;
             }
@@ -267,6 +265,76 @@ fn check_process_running(title: &str) -> bool {
 
         false
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn is_any_process_executable_running(executable_names: &[&str]) -> Result<bool, String> {
+    use winapi::shared::winerror::ERROR_NO_MORE_FILES;
+    use winapi::um::errhandlingapi::GetLastError;
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::tlhelp32::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let targets = executable_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(format!(
+                "Unable to snapshot Windows processes for the NTE safety check: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snapshot, &mut entry) == 0 {
+            let error = GetLastError();
+            CloseHandle(snapshot);
+            if error == ERROR_NO_MORE_FILES {
+                return Ok(false);
+            }
+            return Err(format!(
+                "Unable to enumerate Windows processes for the NTE safety check: {}",
+                std::io::Error::from_raw_os_error(error as i32)
+            ));
+        }
+        loop {
+            let length = entry
+                .szExeFile
+                .iter()
+                .position(|character| *character == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let executable = OsString::from_wide(&entry.szExeFile[..length])
+                .to_string_lossy()
+                .to_ascii_lowercase();
+            if targets.iter().any(|target| target == &executable) {
+                CloseHandle(snapshot);
+                return Ok(true);
+            }
+            if Process32NextW(snapshot, &mut entry) == 0 {
+                let error = GetLastError();
+                CloseHandle(snapshot);
+                if error == ERROR_NO_MORE_FILES {
+                    return Ok(false);
+                }
+                return Err(format!(
+                    "Windows process enumeration failed during the NTE safety check: {}",
+                    std::io::Error::from_raw_os_error(error as i32)
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn is_any_process_executable_running(
+    _executable_names: &[&str],
+) -> Result<bool, String> {
+    Ok(false)
 }
 
 #[cfg(windows)]
@@ -413,7 +481,7 @@ fn send_f10_with_legacy_keybd_event() -> Result<(), String> {
 
         std::thread::sleep(Duration::from_millis(10));
 
-        keybd_event(VK_F10 as u8, scan_code, KEYEVENTF_KEYUP as u32, 0);
+        keybd_event(VK_F10 as u8, scan_code, KEYEVENTF_KEYUP, 0);
 
         tracing::debug!(
             "F10 sent via legacy keybd_event with scan code: {}",

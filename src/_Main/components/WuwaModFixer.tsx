@@ -4,14 +4,7 @@ import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { MOD_LIST, GAME, SETTINGS, TEXT_DATA, WUWA_MOD_FIXER_OPEN } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import {
-	CircleAlert,
-	FolderOpenIcon,
-	Loader2Icon,
-	RefreshCwIcon,
-	RotateCcwIcon,
-	WrenchIcon,
-} from "lucide-react";
+import { CircleAlert, FolderOpenIcon, Loader2Icon, RefreshCwIcon, RotateCcwIcon, WrenchIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
 	checkWuwaModFixerUpdate,
@@ -267,19 +260,36 @@ function WuwaModFixer() {
 					</div>
 
 					<div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-						<Button variant="outline" className="h-auto min-h-10 whitespace-normal py-2 text-center" disabled={busy} onClick={() => void openWuwaModFixerFolder()}>
+						<Button
+							variant="outline"
+							className="h-auto min-h-10 whitespace-normal py-2 text-center"
+							disabled={busy}
+							onClick={() => void openWuwaModFixerFolder()}
+						>
 							<FolderOpenIcon className="mr-1 h-4 w-4 shrink-0" />
 							<span className="leading-tight">{copy.folder}</span>
 						</Button>
-						<Button className="h-auto min-h-10 whitespace-normal py-2 text-center" disabled={busy} onClick={() => void refresh()}>
+						<Button
+							className="h-auto min-h-10 whitespace-normal py-2 text-center"
+							disabled={busy}
+							onClick={() => void refresh()}
+						>
 							<RotateCcwIcon className="mr-1 h-4 w-4 shrink-0" />
 							<span className="leading-tight">{copy.check}</span>
 						</Button>
-						<Button className="h-auto min-h-10 whitespace-normal py-2 text-center" disabled={busy || !result} onClick={() => void install()}>
+						<Button
+							className="h-auto min-h-10 whitespace-normal py-2 text-center"
+							disabled={busy || !result}
+							onClick={() => void install()}
+						>
 							<RotateCcwIcon className="mr-1 h-4 w-4 shrink-0" />
 							<span className="leading-tight">{copy.download}</span>
 						</Button>
-						<Button className="h-auto min-h-10 whitespace-normal py-2 text-center" disabled={busy || !installedExePath} onClick={() => void runFixer()}>
+						<Button
+							className="h-auto min-h-10 whitespace-normal py-2 text-center"
+							disabled={busy || !installedExePath}
+							onClick={() => void runFixer()}
+						>
 							<WrenchIcon className="mr-1 h-4 w-4 shrink-0" />
 							<span className="leading-tight">{copy.run}</span>
 						</Button>

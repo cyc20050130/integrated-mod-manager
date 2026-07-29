@@ -1,5 +1,6 @@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -73,7 +74,7 @@ function ManageCategories() {
 			<AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
 				<AlertDialogContent>
 					<div className="max-w-96 flex flex-col items-center gap-2 mt-6 text-center">
-						<img
+						<RemoteImage
 							className="aspect-square outline bg-accent/10 z-10 flex items-center justify-center h-20 text-white rounded-full pointer-events-none"
 							onError={(e) => {
 								e.currentTarget.src = "/who.jpg";
@@ -231,7 +232,7 @@ function ManageCategories() {
 						}}
 						className="button-like border-1 bg-button hover:bg-accent/30 active:bg-accent/50 active:scale-90 group w-80 zzz-fg-text data-zzz:mt-1 flex items-center gap-2 p-2 duration-300 rounded-md select-none"
 					>
-						<img
+						<RemoteImage
 							className="aspect-square outline bg-accent/10 z-10 flex items-center justify-center h-12 text-white rounded-full pointer-events-none"
 							onError={(e) => {
 								e.currentTarget.src = "/who.jpg";

@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { EmblaCarouselType } from "embla-carousel";
 import Blur from "./Filter";
 import { OnlineMod } from "@/utils/types";
+import { RemoteImage } from "@/components/RemoteImage";
 
 const dict = {
 	today: "the Day",
@@ -58,13 +59,16 @@ function Carousel({
 										onModClick(e, item);
 									}
 								}}
-								className=" aspect-video flex flex-col items-center justify-between overflow-hidden border rounded-lg"
-								style={{
-									backgroundImage: `url(${item._sImageUrl})`,
-									backgroundSize: "cover",
-									backgroundPosition: "center",
-								}}
+								className="relative aspect-video flex flex-col items-center justify-between overflow-hidden border rounded-lg"
 							>
+								<RemoteImage
+									src={item._sImageUrl}
+									fallbackSrc="/who.jpg"
+									className="absolute inset-0 h-full w-full object-cover pointer-events-none"
+									loading={index === 0 ? "eager" : "lazy"}
+									decoding="async"
+									alt=""
+								/>
 								<div className="text-accent -mb-18 z-10 flex justify-between w-full h-16 overflow-hidden rounded-lg pointer-events-none">
 									<label className="bg-background/50 backdrop-blur-md h-fit brightness-100 px-4 py-2 text-lg font-bold rounded-tl-lg rounded-br-lg">
 										Best of {dict[(item._sPeriod || "alltime") as keyof typeof dict]}{" "}

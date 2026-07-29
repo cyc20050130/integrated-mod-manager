@@ -7,6 +7,7 @@ import {
 	AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -102,7 +103,11 @@ function Remove() {
 			let timer: HTMLElement | null = null;
 			setInterval(async () => {
 				if (!timer) timer = document.getElementById("reloadTimer");
-				if (timer && time >= 0) timer.innerText = textData._LeftSideBar._components._RemoveIMM.AppRL.replace("<s/>", Math.ceil(time).toString());
+				if (timer && time >= 0)
+					timer.innerText = textData._LeftSideBar._components._RemoveIMM.AppRL.replace(
+						"<s/>",
+						Math.ceil(time).toString()
+					);
 				if (time <= 0) {
 					setSettings((prev) => ({ ...prev, global: { ...prev.global, game: "" } }));
 					await saveConfigs();
@@ -186,7 +191,7 @@ function Remove() {
 												}
 											>
 												{item._sIconUrl && (
-													<img
+													<RemoteImage
 														src={item._sIconUrl}
 														onError={(e) => {
 															e.currentTarget.src = "/who.jpg";
@@ -328,9 +333,7 @@ function Remove() {
 									{(Object.keys(dict) as keys[]).map((key) => (
 										<div key={key} className="flex w-full items-center justify-between">
 											<Label>{dict[key].title}</Label>
-											<Label className="text-muted-foreground">
-												{dict[key].options[Number(removeSettings[key])]}
-											</Label>
+											<Label className="text-muted-foreground">{dict[key].options[Number(removeSettings[key])]}</Label>
 										</div>
 									))}
 								</div>
@@ -442,10 +445,8 @@ function Remove() {
 								pointerEvents: progress.index == progress.max ? "auto" : "none",
 							}}
 						>
-							<div className=" my-6 text-accent text-3xl" >{textData._LeftSideBar._components._RemoveIMM.Thanks}</div>
-							<div id="reloadTimer">
-								{textData._LeftSideBar._components._RemoveIMM.AppRL.replace("<s/>", "5")}
-							</div>
+							<div className=" my-6 text-accent text-3xl">{textData._LeftSideBar._components._RemoveIMM.Thanks}</div>
+							<div id="reloadTimer">{textData._LeftSideBar._components._RemoveIMM.AppRL.replace("<s/>", "5")}</div>
 						</div>
 						<div className="absolute left-10 bottom-10">
 							<Button

@@ -26,8 +26,7 @@ function ModPreviewCrop({ item, setDialogType }: { item: Mod; setDialogType: (ty
 	const [offset, setOffset] = useState(initialOffset);
 	const [aspect, setAspect] = useState(initialAspect);
 	const [disabled, setDisabled] = useState(false);
-	const hasChanges =
-		scale !== initialScale || offset.x !== initialOffset.x || offset.y !== initialOffset.y;
+	const hasChanges = scale !== initialScale || offset.x !== initialOffset.x || offset.y !== initialOffset.y;
 
 	useEffect(() => {
 		setScale(initialScale);
@@ -133,9 +132,7 @@ function ModPreviewCrop({ item, setDialogType }: { item: Mod; setDialogType: (ty
 				>
 					<Undo2Icon /> Reset Changes
 				</Button>
-				<Button
-					onClick={() => setDialogType("preview")}
-				>
+				<Button onClick={() => setDialogType("preview")}>
 					<RefreshCcwIcon />
 					Change Image
 				</Button>

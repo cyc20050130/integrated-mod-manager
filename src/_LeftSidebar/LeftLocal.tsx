@@ -210,7 +210,10 @@ function LeftLocal() {
 							</div>
 							{filterParams.map((item) => {
 								return (
-									<div key={`filter-group-${item.key}-${item.sub || "root"}`} className="flex flex-row gap-4 items-center">
+									<div
+										key={`filter-group-${item.key}-${item.sub || "root"}`}
+										className="flex flex-row gap-4 items-center"
+									>
 										<label className="min-w-24 text-center">{item.label}</label>
 										<div className="flex flex-row gap-1 w-full">
 											{[
@@ -307,7 +310,7 @@ function LeftLocal() {
 					<div
 						onClickCapture={async () => {
 							setCurrentPreset(-1);
-							applyPreset([]);
+							await applyPreset([]);
 							setModList(await refreshModList());
 						}}
 						className="min-w-fit hover:text-accent cursor-pointerx active:scale-95 text-accent/50 text-xs duration-200 select-none"

@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { GAMES, IMAGE_SERVER, managedSRC, VERSION } from "./consts";
+import { GAMES, VERSION } from "./consts";
 import {
 	DATA,
 	FILE_TO_DL,
@@ -12,7 +12,6 @@ import {
 	ONLINE_SELECTED,
 	RIGHT_SLIDEOVER_OPEN,
 	SETTINGS,
-	SOURCE,
 	store,
 } from "./vars";
 import { useAtom, useAtomValue } from "jotai";
@@ -26,12 +25,9 @@ import { getConfig } from "./filesys";
 import { computeModUpdateStatus } from "./modUpdateStatus";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { Games, GlobalSettings, InstalledItem, ModDataObj, OnlineBlacklistEntry, Settings } from "./types";
+export { getImageUrl } from "./imagePreview";
 
 export { join };
-let IMAGE_SERVER_URL = IMAGE_SERVER;
-export function setImageServer(url: string) {
-	IMAGE_SERVER_URL = url;
-}
 const reservedWindowsNames = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
 const illegalCharacters = /[<>:"/\\|?*]/g;
 type JsonRecord = Record<string, unknown>;
@@ -110,7 +106,10 @@ export function sanitizeFileName(input: string, options: SanitizeFileNameOptions
 	}
 
 	if (sanitized.length > maxLength) {
-		sanitized = sanitized.substring(0, maxLength).replace(/[. ]+$/g, "").trim();
+		sanitized = sanitized
+			.substring(0, maxLength)
+			.replace(/[. ]+$/g, "")
+			.trim();
 	}
 
 	if (sanitized.length === 0) {
@@ -146,21 +145,14 @@ export function preventContextMenu(event: React.MouseEvent): void {
 	event.preventDefault();
 	// event.currentTarget.dispatchEvent(new MouseEvent("mouseup", { button: 2, bubbles: true }));
 }
-let src = "";
 let check = true;
 // let lastUpdated = 0;
 // store.sub(LAST_UPDATED, () => {
 // 	lastUpdated = Date.now();
 // });
-store.sub(SOURCE, () => {
-	src = store.get(SOURCE);
-});
 store.sub(SETTINGS, () => {
 	check = store.get(SETTINGS).global.chkModUpdates;
 });
-export function getImageUrl(path: string): string {
-	return `${IMAGE_SERVER_URL}/${src}/${managedSRC}/${path}`;
-}
 const PRIORITY_KEYS = ["Alt", "Ctrl", "Shift", "Capslock", "Tab", "Up", "Down", "Left", "Right"];
 const PRIORITY_SET = new Set(PRIORITY_KEYS);
 export function keySort(keys: string[]): string[] {
@@ -346,7 +338,9 @@ function sanitizeWuwaModFixerState(input: unknown) {
 		releaseUrl: typeof candidate.releaseUrl === "string" ? candidate.releaseUrl : "",
 	};
 }
-export function sanitizeGlobalSettings(input: unknown): GlobalSettings & { version?: string; updatedAt?: string; notice?: number } {
+export function sanitizeGlobalSettings(
+	input: unknown
+): GlobalSettings & { version?: string; updatedAt?: string; notice?: number } {
 	const candidate = (input || {}) as RawGlobalSettings;
 	const ignore =
 		typeof candidate.ignore === "string" && compareVersions(candidate.ignore || "0.0.0", VERSION) > 0
@@ -396,7 +390,11 @@ function loadCheckedCache(): CheckedCacheMap {
 		for (const [key, value] of Object.entries(parsed)) {
 			if (typeof value === "object" && value !== null && "updated" in value && "status" in value) {
 				const cacheEntry = value as Partial<CheckedCacheEntry>;
-				if (typeof cacheEntry.updated === "number" && typeof cacheEntry.status === "number" && now - cacheEntry.updated < oneHour) {
+				if (
+					typeof cacheEntry.updated === "number" &&
+					typeof cacheEntry.status === "number" &&
+					now - cacheEntry.updated < oneHour
+				) {
 					cleaned[key] = { updated: cacheEntry.updated, status: cacheEntry.status };
 				}
 			}
@@ -457,7 +455,10 @@ export function useInstalledItemsManager() {
 			if (!check) {
 				return 0;
 			}
-			if (Object.prototype.hasOwnProperty.call(checked, item.name) && now - (checked[item.name]?.updated || 0) < oneHour) {
+			if (
+				Object.prototype.hasOwnProperty.call(checked, item.name) &&
+				now - (checked[item.name]?.updated || 0) < oneHour
+			) {
 				info("[IMM] Mod status found in cache for", item.name);
 				modStatus = item.updated < checked[item.name].status ? (item.viewed < checked[item.name].status ? 2 : 1) : 0;
 			} else {

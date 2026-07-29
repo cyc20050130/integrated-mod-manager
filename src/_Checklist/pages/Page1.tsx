@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { LANG_LIST } from "@/utils/consts";
 import { resetWithBackup } from "@/utils/filesys";
 import TEXT from "@/textData.json";
@@ -18,7 +19,7 @@ function Page1({ setPage }: { setPage: (page: number) => void }) {
 	const languageKeys = ["en", "cn", "ru", "jp", "kr"] as const;
 	const [savedLang, setSavedLang] = useAtom(SAVED_LANG);
 	useEffect(() => {
-		if (savedLang && mainFuncStatus=="fin" && !timer) {
+		if (savedLang && mainFuncStatus == "fin" && !timer) {
 			timer = setTimeout(
 				() => {
 					setPage(1);
@@ -126,7 +127,7 @@ function Page1({ setPage }: { setPage: (page: number) => void }) {
 										setCurrentLangIndex(index);
 									}}
 								>
-									<img
+									<RemoteImage
 										onMouseEnter={() => {
 											if (interval) {
 												clearInterval(interval);
@@ -181,7 +182,10 @@ function Page1({ setPage }: { setPage: (page: number) => void }) {
 
 				<Button
 					className="w-fit "
-					style={{ opacity: mainFuncStatus !== "fin" || !!savedLang || currentLangIndex < 0 ? 0 : selectedIndex == -1 ? 0.5 : 1 }}
+					style={{
+						opacity:
+							mainFuncStatus !== "fin" || !!savedLang || currentLangIndex < 0 ? 0 : selectedIndex == -1 ? 0.5 : 1,
+					}}
 					disabled={selectedIndex == -1 || !!savedLang || currentLangIndex < 0 || mainFuncStatus !== "fin"}
 					onClick={() => {
 						setSavedLang(languageKeys[selectedIndex]);
@@ -191,12 +195,12 @@ function Page1({ setPage }: { setPage: (page: number) => void }) {
 					Confirm
 				</Button>
 				<div
-				className="duration-300 opacity-0"
-				style={{
-					opacity:mainFuncStatus === "fin" ? 0:0.5
-				}}
+					className="duration-300 opacity-0"
+					style={{
+						opacity: mainFuncStatus === "fin" ? 0 : 0.5,
+					}}
 				>
-					{mainFuncStatus==="fin"?"Initialization complete":mainFuncStatus}
+					{mainFuncStatus === "fin" ? "Initialization complete" : mainFuncStatus}
 				</div>
 			</div>
 		</div>

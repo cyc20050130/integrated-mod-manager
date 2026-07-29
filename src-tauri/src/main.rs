@@ -1,21 +1,21 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-#[cfg(not(dev))]
-use std::env;
 #[cfg(all(not(dev), target_os = "windows"))]
 use serde_json::{Map, Value};
 #[cfg(all(not(dev), target_os = "windows"))]
 use std::collections::HashSet;
+#[cfg(not(dev))]
+use std::env;
 #[cfg(all(not(dev), target_os = "windows"))]
 use std::fs;
 #[cfg(all(not(dev), target_os = "windows"))]
 use std::io;
 #[cfg(all(not(dev), target_os = "windows"))]
 use std::path::{Path, PathBuf};
-#[cfg(all(not(dev), target_os = "windows"))]
-use std::time::UNIX_EPOCH;
 #[cfg(all(not(dev), not(target_os = "windows")))]
 use std::path::{Path, PathBuf};
+#[cfg(all(not(dev), target_os = "windows"))]
+use std::time::UNIX_EPOCH;
 
 #[cfg(all(not(dev), target_os = "windows"))]
 const RUNTIME_DATA_DIR_NAME: &str = "Integrated Mod Manager (IMM) Data";
@@ -23,7 +23,10 @@ const RUNTIME_DATA_DIR_NAME: &str = "Integrated Mod Manager (IMM) Data";
 const LEGACY_RUNTIME_DIR_NAME: &str = "Integrated Mod Manager (IMM)";
 #[cfg(all(not(dev), target_os = "windows"))]
 fn path_priority(path: &Path, preferred_sources: &[PathBuf], backup_roots: &[PathBuf]) -> usize {
-    if let Some(index) = preferred_sources.iter().position(|source| path.starts_with(source)) {
+    if let Some(index) = preferred_sources
+        .iter()
+        .position(|source| path.starts_with(source))
+    {
         return index;
     }
     preferred_sources.len()
@@ -53,8 +56,8 @@ fn collect_backup_paths(file_name: &str, backup_roots: &[PathBuf]) -> Vec<PathBu
             };
             let name = entry.file_name().to_string_lossy().to_string();
             let matches_exact = exact_matches.iter().any(|candidate| candidate == &name);
-            let matches_manual =
-                name.ends_with(&format!("_{file_name}.bak")) || name.ends_with(&format!("_{file_name}.bak.bak"));
+            let matches_manual = name.ends_with(&format!("_{file_name}.bak"))
+                || name.ends_with(&format!("_{file_name}.bak.bak"));
             if file_type.is_file() && (matches_exact || matches_manual) {
                 candidates.push(entry.path());
             }
@@ -66,7 +69,11 @@ fn collect_backup_paths(file_name: &str, backup_roots: &[PathBuf]) -> Vec<PathBu
 }
 
 #[cfg(all(not(dev), target_os = "windows"))]
-fn collect_config_paths(file_name: &str, preferred_sources: &[PathBuf], backup_roots: &[PathBuf]) -> Vec<PathBuf> {
+fn collect_config_paths(
+    file_name: &str,
+    preferred_sources: &[PathBuf],
+    backup_roots: &[PathBuf],
+) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     for source in preferred_sources {
         let path = source.join(file_name);
@@ -96,8 +103,8 @@ fn read_json(path: &Path) -> Option<Value> {
 
 #[cfg(all(not(dev), target_os = "windows"))]
 fn write_json(path: &Path, value: &Value) -> io::Result<()> {
-    let payload =
-        serde_json::to_vec_pretty(value).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let payload = serde_json::to_vec_pretty(value)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     fs::write(path, payload)
 }
 
@@ -184,7 +191,10 @@ fn merge_mod_data_entry(dst: &mut Value, src: &Value) {
 
     for key in ["source", "note", "namespace"] {
         if let Some(src_value) = src_obj.get(key) {
-            merge_fill_missing(dst_obj.entry(key.to_string()).or_insert(Value::Null), src_value);
+            merge_fill_missing(
+                dst_obj.entry(key.to_string()).or_insert(Value::Null),
+                src_value,
+            );
         }
     }
 
@@ -202,13 +212,22 @@ fn merge_mod_data_entry(dst: &mut Value, src: &Value) {
     }
 
     if let Some(src_tags) = src_obj.get("tags") {
-        merge_string_array(dst_obj.entry("tags".to_string()).or_insert(Value::Null), src_tags);
+        merge_string_array(
+            dst_obj.entry("tags".to_string()).or_insert(Value::Null),
+            src_tags,
+        );
     }
     if let Some(src_vars) = src_obj.get("vars") {
-        merge_fill_missing(dst_obj.entry("vars".to_string()).or_insert(Value::Null), src_vars);
+        merge_fill_missing(
+            dst_obj.entry("vars".to_string()).or_insert(Value::Null),
+            src_vars,
+        );
     }
     if let Some(src_crop) = src_obj.get("crop") {
-        merge_fill_missing(dst_obj.entry("crop".to_string()).or_insert(Value::Null), src_crop);
+        merge_fill_missing(
+            dst_obj.entry("crop".to_string()).or_insert(Value::Null),
+            src_crop,
+        );
     }
 }
 
@@ -275,7 +294,10 @@ fn download_item_key(item: &Value) -> String {
     let file = obj.get("file").and_then(Value::as_str).unwrap_or("");
     let fname = obj.get("fname").and_then(Value::as_str).unwrap_or("");
     let path = obj.get("path").and_then(Value::as_str).unwrap_or("");
-    let updated = obj.get("updated").and_then(value_to_i64).unwrap_or_default();
+    let updated = obj
+        .get("updated")
+        .and_then(value_to_i64)
+        .unwrap_or_default();
     format!("{source}::{file}::{fname}::{path}::{updated}")
 }
 
@@ -302,11 +324,20 @@ fn merge_download_item(dst: &mut Value, src: &Value) {
         "lastError",
     ] {
         if let Some(src_value) = src_obj.get(key) {
-            merge_fill_missing(dst_obj.entry(key.to_string()).or_insert(Value::Null), src_value);
+            merge_fill_missing(
+                dst_obj.entry(key.to_string()).or_insert(Value::Null),
+                src_value,
+            );
         }
     }
 
-    for key in ["updatedAt", "updated", "requeueRounds", "createdAt", "lastTriedAt"] {
+    for key in [
+        "updatedAt",
+        "updated",
+        "requeueRounds",
+        "createdAt",
+        "lastTriedAt",
+    ] {
         if let Some(src_value) = src_obj.get(key).and_then(value_to_i64) {
             let replace = dst_obj
                 .get(key)
@@ -321,7 +352,10 @@ fn merge_download_item(dst: &mut Value, src: &Value) {
 
     for key in ["status", "category", "name", "preview"] {
         if let Some(src_value) = src_obj.get(key) {
-            merge_fill_missing(dst_obj.entry(key.to_string()).or_insert(Value::Null), src_value);
+            merge_fill_missing(
+                dst_obj.entry(key.to_string()).or_insert(Value::Null),
+                src_value,
+            );
         }
     }
 }
@@ -338,7 +372,10 @@ fn merge_download_section(dst: &mut Value, src: &Value) {
     let dst_arr = dst.as_array_mut().expect("validated array");
     for src_item in src_arr {
         let src_key = download_item_key(src_item);
-        if let Some(dst_item) = dst_arr.iter_mut().find(|item| download_item_key(item) == src_key) {
+        if let Some(dst_item) = dst_arr
+            .iter_mut()
+            .find(|item| download_item_key(item) == src_key)
+        {
             merge_download_item(dst_item, src_item);
         } else {
             dst_arr.push(src_item.clone());
@@ -358,7 +395,12 @@ fn merge_downloads(dst: &mut Value, src: &Value) {
     let dst_obj = dst.as_object_mut().expect("validated object");
     for key in ["queue", "downloading", "extracting", "completed", "failed"] {
         if let Some(src_value) = src_obj.get(key) {
-            merge_download_section(dst_obj.entry(key.to_string()).or_insert(Value::Array(Vec::new())), src_value);
+            merge_download_section(
+                dst_obj
+                    .entry(key.to_string())
+                    .or_insert(Value::Array(Vec::new())),
+                src_value,
+            );
         }
     }
 }
@@ -374,33 +416,57 @@ fn merge_game_config(dst: &mut Value, src: &Value) {
     }
     let dst_obj = dst.as_object_mut().expect("validated object");
 
-    for key in ["version", "game", "custom", "sourceDir", "targetDir", "updatedAt"] {
+    for key in [
+        "version",
+        "game",
+        "custom",
+        "sourceDir",
+        "targetDir",
+        "updatedAt",
+    ] {
         if let Some(src_value) = src_obj.get(key) {
-            merge_fill_missing(dst_obj.entry(key.to_string()).or_insert(Value::Null), src_value);
+            merge_fill_missing(
+                dst_obj.entry(key.to_string()).or_insert(Value::Null),
+                src_value,
+            );
         }
     }
     if let Some(src_settings) = src_obj.get("settings") {
-        merge_fill_missing(dst_obj.entry("settings".to_string()).or_insert(Value::Null), src_settings);
+        merge_fill_missing(
+            dst_obj.entry("settings".to_string()).or_insert(Value::Null),
+            src_settings,
+        );
     }
     if let Some(src_data) = src_obj.get("data") {
-        merge_mod_data_map(dst_obj.entry("data".to_string()).or_insert(Value::Object(Map::new())), src_data);
+        merge_mod_data_map(
+            dst_obj
+                .entry("data".to_string())
+                .or_insert(Value::Object(Map::new())),
+            src_data,
+        );
     }
     if let Some(src_downloads) = src_obj.get("downloads") {
         merge_downloads(
-            dst_obj.entry("downloads".to_string()).or_insert(Value::Object(Map::new())),
+            dst_obj
+                .entry("downloads".to_string())
+                .or_insert(Value::Object(Map::new())),
             src_downloads,
         );
     }
     if let Some(src_presets) = src_obj.get("presets") {
         merge_named_array(
-            dst_obj.entry("presets".to_string()).or_insert(Value::Array(Vec::new())),
+            dst_obj
+                .entry("presets".to_string())
+                .or_insert(Value::Array(Vec::new())),
             src_presets,
             "name",
         );
     }
     if let Some(src_categories) = src_obj.get("categories") {
         merge_named_array(
-            dst_obj.entry("categories".to_string()).or_insert(Value::Array(Vec::new())),
+            dst_obj
+                .entry("categories".to_string())
+                .or_insert(Value::Array(Vec::new())),
             src_categories,
             "_sName",
         );
@@ -408,7 +474,12 @@ fn merge_game_config(dst: &mut Value, src: &Value) {
 }
 
 #[cfg(all(not(dev), target_os = "windows"))]
-fn merge_config_file(path: &Path, preferred_sources: &[PathBuf], backup_roots: &[PathBuf], global_file: bool) {
+fn merge_config_file(
+    path: &Path,
+    preferred_sources: &[PathBuf],
+    backup_roots: &[PathBuf],
+    global_file: bool,
+) {
     let file_name = match path.file_name().and_then(|name| name.to_str()) {
         Some(file_name) => file_name,
         None => return,
@@ -416,7 +487,9 @@ fn merge_config_file(path: &Path, preferred_sources: &[PathBuf], backup_roots: &
     let mut candidates = collect_config_paths(file_name, preferred_sources, backup_roots)
         .into_iter()
         .filter_map(|source_path| {
-            let is_backup = backup_roots.iter().any(|root| source_path.starts_with(root));
+            let is_backup = backup_roots
+                .iter()
+                .any(|root| source_path.starts_with(root));
             let mut value = read_json(&source_path)?;
             if is_backup && !global_file {
                 if let Some(obj) = value.as_object_mut() {
@@ -424,8 +497,12 @@ fn merge_config_file(path: &Path, preferred_sources: &[PathBuf], backup_roots: &
                 }
             }
             let score = if global_file {
-                usize::from(is_non_empty_string(value.get("game").unwrap_or(&Value::Null))) * 100
-                    + usize::from(is_non_empty_string(value.get("lang").unwrap_or(&Value::Null))) * 10
+                usize::from(is_non_empty_string(
+                    value.get("game").unwrap_or(&Value::Null),
+                )) * 100
+                    + usize::from(is_non_empty_string(
+                        value.get("lang").unwrap_or(&Value::Null),
+                    )) * 10
             } else {
                 value
                     .get("data")
@@ -576,7 +653,10 @@ fn resolve_runtime_dir(exe_dir: &Path) -> PathBuf {
     let legacy_runtime_dir = local_app_data.join(LEGACY_RUNTIME_DIR_NAME);
     let mut sources = Vec::new();
     for candidate in [legacy_runtime_dir, exe_dir.to_path_buf()] {
-        if candidate != data_dir && candidate.exists() && !sources.iter().any(|existing| existing == &candidate) {
+        if candidate != data_dir
+            && candidate.exists()
+            && !sources.iter().any(|existing| existing == &candidate)
+        {
             sources.push(candidate);
         }
     }

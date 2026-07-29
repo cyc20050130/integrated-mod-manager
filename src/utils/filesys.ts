@@ -26,8 +26,10 @@ import {
 	DATA,
 	DOWNLOAD_LIST,
 	ERR,
+	GAME,
 	LAST_UPDATED,
 	MOD_LIST,
+	NTE_REGION,
 	PRESETS,
 	PROGRESS_OVERLAY,
 	SETTINGS,
@@ -55,14 +57,16 @@ import {
 	Mod,
 	ModDataObj,
 	ModHotKeys,
+	NteRegion,
 	Preset,
 	Settings,
 } from "./types";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { error, info, warn } from "@/lib/logger";
 import { addToExtracts } from "@/_LeftSidebar/components/Downloads";
 import { normalizeDownloadList, withNormalizedDownloadSettings } from "./downloads";
 import { syncIniStateFromText } from "./iniStateSyncCore.js";
+import { refreshPreviewAssets, updatePreviewAsset } from "./imagePreview";
+import { acceptNteOperationRevision, loadNteConfigText, persistNteConfig } from "./nteConfigRevision";
 export async function setGame(game: string) {
 	try {
 		const config = await readTextFile(`config.json`);
@@ -128,6 +132,7 @@ async function readDir(path: string) {
 	}
 }
 async function readTextFile(path: string) {
+	if (path.replaceAll("/", "\\") === "configNTE.json") return loadNteConfigText();
 	if (shouldUseNativePath(path)) return readTextFileNative(path);
 	try {
 		return await fsReadTextFile(path);
@@ -137,6 +142,7 @@ async function readTextFile(path: string) {
 	}
 }
 async function writeTextFile(path: string, contents: string) {
+	if (path.replaceAll("/", "\\") === "configNTE.json") return persistNteConfig(contents);
 	if (shouldUseNativePath(path)) return writeTextFileNative(path, contents);
 	try {
 		return await fsWriteTextFile(path, contents);
@@ -149,7 +155,10 @@ async function writeTextFile(path: string, contents: string) {
 const sp = [UNCATEGORIZED, IGNORE, OLD_RESTORE];
 let recentlyDownloaded: string[] = [];
 store.sub(DOWNLOAD_LIST, () => {
-	recentlyDownloaded = store.get(DOWNLOAD_LIST).completed.map((item) => item.path).filter((path): path is string => Boolean(path));
+	recentlyDownloaded = store
+		.get(DOWNLOAD_LIST)
+		.completed.map((item) => item.path)
+		.filter((path): path is string => Boolean(path));
 });
 let src = "";
 let rootReplace = "";
@@ -168,7 +177,7 @@ store.sub(TARGET, () => {
 	tgt = store.get(TARGET);
 });
 let catDB: MiniSearch | null = null;
-	store.sub(CATEGORIES, () => {
+store.sub(CATEGORIES, () => {
 	try {
 		const categories = store.get(CATEGORIES) || [];
 		catDB = new MiniSearch({
@@ -220,6 +229,7 @@ type RuntimeStateSnapshot = {
 	target?: string;
 	xxmiMode?: 0 | 1;
 	xxmiDir?: string;
+	nteRegion?: NteRegion;
 };
 
 function getConfigPayload(snapshot: RuntimeStateSnapshot = {}) {
@@ -238,6 +248,7 @@ function getConfigPayload(snapshot: RuntimeStateSnapshot = {}) {
 	const gameConfig: GameConfig = {
 		version: VERSION,
 		custom: xxmiMode,
+		...(settings.global.game === "NTE" ? { nteRegion: snapshot.nteRegion ?? store.get(NTE_REGION) } : {}),
 		sourceDir: resolvedSource,
 		targetDir: resolvedTarget,
 		game: settings.global.game,
@@ -291,6 +302,9 @@ export async function selectPath(
 export function folderSelector(path = "", title: string | undefined = undefined) {
 	return selectPath({ directory: true, ...(path ? { defaultPath: path } : {}), ...(title ? { title } : {}) });
 }
+export async function ensureManagedSourceDir(sourceRoot: string) {
+	await mkdirNative(join(sourceRoot, managedSRC), true);
+}
 type GuardedPathOptions = {
 	allowedRoots?: string[];
 	includeDefaultRoots?: boolean;
@@ -298,9 +312,7 @@ type GuardedPathOptions = {
 };
 function getGuardedFileRoots(extraRoots: string[] = [], includeDefaultRoots = true) {
 	const defaultRoots = includeDefaultRoots ? [src, modRoot, tgt] : [];
-	const roots = [...defaultRoots, ...extraRoots]
-		.map((root) => String(root || "").trim())
-		.filter(Boolean);
+	const roots = [...defaultRoots, ...extraRoots].map((root) => String(root || "").trim()).filter(Boolean);
 	return Array.from(new Set(roots));
 }
 export async function guardedRemove(path: string, options: GuardedPathOptions = {}) {
@@ -524,20 +536,22 @@ export async function sourceBatchPreview(newCategory = "" as string) {
 	} catch (mkdirError) {
 		warn("[IMM] Unable to prepare batch preview category:", mkdirError);
 	}
-	const entries = (await readDirRecr(path, "", 2)).map((entry: Mod) => {
-		if (entry.name === managedSRC) {
-			// entry.icon = "IMM2.png";
+	const entries = (await readDirRecr(path, "", 2))
+		.filter((entry) => store.get(GAME) !== "NTE" || entry.name === managedSRC)
+		.map((entry: Mod) => {
+			if (entry.name === managedSRC) {
+				// entry.icon = "IMM2.png";
 
-			entry.children.map((child: Mod) => {
-				const category = categories.find((cat) => cat._sName === child.name);
-				if (category && child.isDir) child.icon = category._sIconUrl;
-				return child;
-			});
-		} else if (entry.name === managedTGT) {
-			// entry.icon = "IMM2.png";
-		}
-		return entry;
-	});
+				entry.children.map((child: Mod) => {
+					const category = categories.find((cat) => cat._sName === child.name);
+					if (category && child.isDir) child.icon = category._sIconUrl;
+					return child;
+				});
+			} else if (entry.name === managedTGT) {
+				// entry.icon = "IMM2.png";
+			}
+			return entry;
+		});
 	info("[WWW]", entries);
 	return entries;
 }
@@ -904,12 +918,15 @@ export async function verifyDirStruct() {
 		];
 
 		// Batch read directories for items that need it
-		const readPromises: Promise<{ item: DirEntry; entries: DirEntry[]; category: Pick<Category, "_sName" | "_sIconUrl"> }>[] = [];
+		const readPromises: Promise<{
+			item: DirEntry;
+			entries: DirEntry[];
+			category: Pick<Category, "_sName" | "_sIconUrl">;
+		}>[] = [];
 		for (const item of before) {
 			info("[IMM] Processing directory structure item:", item.name);
 			const searchResult = catDB?.search(item.name, { prefix: true, fuzzy: 0.2 })[0] as
-				| { _sName?: string; _sIconUrl?: string }
-				| undefined;
+				{ _sName?: string; _sIconUrl?: string } | undefined;
 			const category =
 				searchResult && searchResult._sName
 					? { _sName: searchResult._sName, _sIconUrl: searchResult._sIconUrl || "" }
@@ -963,7 +980,8 @@ export async function verifyDirStruct() {
 		if (modDirExists) {
 			try {
 				const modDirEntries = await readDirNative(modDir);
-				const modDirReadPromises: Promise<{ category: Pick<Category, "_sName" | "_sIconUrl">; entries: DirEntry[] }>[] = [];
+				const modDirReadPromises: Promise<{ category: Pick<Category, "_sName" | "_sIconUrl">; entries: DirEntry[] }>[] =
+					[];
 
 				for (const item of modDirEntries) {
 					if (!item.isDirectory) continue;
@@ -973,8 +991,7 @@ export async function verifyDirStruct() {
 							? { _sName: RESTORE, _sIconUrl: "" }
 							: (() => {
 									const searchResult = catDB?.search(item.name, { prefix: true, fuzzy: 0.2 })[0] as
-										| { _sName?: string; _sIconUrl?: string }
-										| undefined;
+										{ _sName?: string; _sIconUrl?: string } | undefined;
 									return searchResult && searchResult._sName
 										? { _sName: searchResult._sName, _sIconUrl: searchResult._sIconUrl || "" }
 										: { _sName: UNCATEGORIZED, _sIconUrl: "" };
@@ -1122,6 +1139,8 @@ async function readDirRecr(root: string, path: string, maxDepth = 2, depth = 0, 
 		return [];
 	}
 	const filePromises = entries.map(async (entry) => {
+		if (store.get(GAME) === "NTE" && entry.name.startsWith(".") && entry.name.includes(".imm-")) return null;
+		if (entry.name.startsWith(".") && entry.name.includes(".imm-delete-")) return null;
 		if ((entry.name == RESTORE || entry.name == IGNORE || entry.name == PREFS) && def && depth == 0) return null;
 		let children: Mod[] = [];
 		if (entry.isDirectory) children = await readDirRecr(root, join(path, entry.name), maxDepth, depth + 1);
@@ -1502,14 +1521,15 @@ export async function refreshModList() {
 	const before = Date.now();
 	try {
 		const data = store.get(DATA);
+		const isNte = store.get(GAME) === "NTE";
 		const modSrc = join(src, managedSRC);
-		const modTgt = join(tgt, managedTGT);
+		const modTgt = isNte ? tgt : join(tgt, managedTGT);
 		let categories = new Set([...store.get(CATEGORIES), { _sName: UNCATEGORIZED }].map((cat) => cat._sName));
-		while (categories.size < 10) {
+		while (!isNte && categories.size < 10) {
 			await new Promise((res) => setTimeout(res, 100));
 			categories = new Set([...store.get(CATEGORIES), { _sName: UNCATEGORIZED }].map((cat) => cat._sName));
 		}
-		await categorizeDir(modSrc);
+		if (!isNte) await categorizeDir(modSrc);
 		// console.log(await readDirRecr(modSrc, "", 3));
 		const ret = await detectHotkeys(await readDirRecr(modSrc, "", 3), data, modSrc);
 		const namespaces = ret[4];
@@ -1585,17 +1605,37 @@ export async function refreshModList() {
 			if (entry.name.startsWith("DISABLED")) {
 				const newName = replaceDisabled(entry.name);
 				const newPath = join(entry.parent, newName);
-
-				renameOperations.push(
-					guardedRename(join(modSrc, entry.path), join(modSrc, newPath))
-						.then(() => {
-							entry.name = newName;
-							entry.path = newPath;
-						})
-						.catch(() => {
-							//console.error(`Error renaming ${entry.name}:`, error);
-						})
-				);
+				const renameOperation = isNte
+					? invoke("rename_nte_mod", { relativePath: entry.path, newRelativePath: newPath })
+					: guardedRename(join(modSrc, entry.path), join(modSrc, newPath));
+				const trackedRename = renameOperation
+					.then((result) => {
+						const oldPath = entry.path;
+						entry.name = newName;
+						entry.path = newPath;
+						if (isNte) {
+							acceptNteOperationRevision(result);
+							store.set(DATA, (prev) => {
+								const next = { ...prev };
+								if (next[oldPath]) {
+									next[newPath] = { ...next[oldPath] };
+									delete next[oldPath];
+								}
+								return next;
+							});
+							store.set(PRESETS, (prev) =>
+								prev.map((preset) => ({
+									...preset,
+									data: preset.data.map((item) => (item === oldPath ? newPath : item)),
+								}))
+							);
+						}
+					})
+					.catch(() => {
+						//console.error(`Error renaming ${entry.name}:`, error);
+					});
+				if (isNte) await trackedRename;
+				else renameOperations.push(trackedRename);
 			}
 
 			existsChecks.push(
@@ -1612,6 +1652,14 @@ export async function refreshModList() {
 		const existsResults = await Promise.all(existsChecks);
 		for (const { entry, enabled } of existsResults) {
 			entry.enabled = enabled;
+		}
+		try {
+			await refreshPreviewAssets(
+				src,
+				entries.map((entry) => entry.path)
+			);
+		} catch (previewError) {
+			warn("[IMM] Unable to refresh local preview cache:", previewError);
 		}
 		//info(recentlyDownloaded);
 		info(
@@ -1657,6 +1705,7 @@ function sanitizeCategorySegments(category: string) {
 export async function createModDownloadTarget(cat: string, dir: string) {
 	try {
 		if (!cat || !dir) return;
+		const isNte = store.get(GAME) === "NTE";
 		const categorySegments = sanitizeCategorySegments(cat);
 		const categoryRoot = join(src, managedSRC, ...categorySegments);
 		const remainingBudget = Math.max(24, Math.min(72, 160 - categoryRoot.length - 1));
@@ -1669,7 +1718,7 @@ export async function createModDownloadTarget(cat: string, dir: string) {
 				relPath,
 				dirName: safeDir,
 			};
-		await mkdir(path, { recursive: true });
+		if (!isNte) await mkdir(path, { recursive: true });
 		return {
 			path,
 			relPath,
@@ -1718,6 +1767,11 @@ export async function validateModDownload(path: string, skip = false) {
 			const marker = managedSRC + "\\";
 			const relPath = normalizedPath.includes(marker) ? normalizedPath.split(marker).slice(1).join(marker) : "";
 			info("[IMM] Validating mod download for path:", relPath);
+			if (store.get(GAME) === "NTE" && relPath && (await exists(join(tgt, relPath)))) {
+				if (!(await toggleMod(relPath, true))) {
+					throw new Error("Unable to deploy the updated NTE Mod.");
+				}
+			}
 			const ele = list.find((mod) => mod.path === relPath);
 			if (ele) {
 				const keys = ele.keys || [];
@@ -1734,19 +1788,20 @@ export async function validateModDownload(path: string, skip = false) {
 				});
 				await Promise.all(promises);
 			}
-				const downloads = store.get(DOWNLOAD_LIST);
-				const completed = downloads.completed.length + 1;
-				const total =
-					completed +
-					downloads.queue.length +
-					downloads.downloading.length +
-					downloads.extracting.length +
-					downloads.failed.length;
-				addToast({ type: "success", message: `${textData._Toasts.DownloadComplete} (${completed}/${total})` });
-			}
+			const downloads = store.get(DOWNLOAD_LIST);
+			const completed = downloads.completed.length + 1;
+			const total =
+				completed +
+				downloads.queue.length +
+				downloads.downloading.length +
+				downloads.extracting.length +
+				downloads.failed.length;
+			addToast({ type: "success", message: `${textData._Toasts.DownloadComplete} (${completed}/${total})` });
+		}
 	} catch (err) {
 		if (!skip) addToast({ type: "error", message: textData._Toasts.ErrDownload });
 		error("[IMM] Error validating mod download:", err);
+		return false;
 	}
 	return true;
 }
@@ -1770,30 +1825,61 @@ export async function cleanCancelledDownload(path: string) {
 	}
 }
 export async function changeModName(path: string, newPath: string, add = false) {
-	try {
-		const enabled = add || (await toggleMod(path, false));
-		await mkdir(join(src, managedSRC, ...newPath.split("\\").slice(0, -1)), { recursive: true });
-		await guardedRename(add ? join(src, path) : join(src, managedSRC, path), join(src, managedSRC, newPath));
+	const isNte = store.get(GAME) === "NTE";
+	if (isNte) {
+		if (add) throw new Error("NTE unmanaged imports must be installed through the native archive workflow.");
+		const result = await invoke("rename_nte_mod", { relativePath: path, newRelativePath: newPath });
+		acceptNteOperationRevision(result);
 		store.set(DATA, (prev) => {
-			if (prev[path]) {
-				prev[newPath] = { ...prev[path] };
-				delete prev[path];
+			const next = { ...prev };
+			if (next[path]) {
+				next[newPath] = { ...next[path] };
+				delete next[path];
 			}
-			return prev;
+			return next;
 		});
-		store.set(PRESETS, (prev) => {
-			for (let i = 0; i < prev.length; i++) {
-				if (prev[i].data.includes(path)) {
-					prev[i].data = prev[i].data.filter((p) => p !== path);
-					prev[i].data.push(newPath);
-				}
+		store.set(PRESETS, (prev) =>
+			prev.map((preset) =>
+				preset.data.includes(path)
+					? { ...preset, data: [...preset.data.filter((item) => item !== path), newPath] }
+					: preset
+			)
+		);
+		info("[IMM] NTE Mod name changed from", path, "to", newPath);
+		return newPath;
+	}
+	const modTgt = join(tgt, managedTGT, path);
+	const oldSource = add ? join(src, path) : join(src, managedSRC, path);
+	const newSource = join(src, managedSRC, newPath);
+	let wasEnabled = false;
+	try {
+		wasEnabled = !add && (await exists(modTgt));
+		if (wasEnabled && !(await toggleMod(path, false))) {
+			throw new Error("Unable to disable mod before rename.");
+		}
+		await mkdir(join(src, managedSRC, ...newPath.split("\\").slice(0, -1)), { recursive: true });
+		await guardedRename(oldSource, newSource);
+		store.set(DATA, (prev) => {
+			const next = { ...prev };
+			if (next[path]) {
+				next[newPath] = { ...next[path] };
+				delete next[path];
 			}
-			return prev;
+			return next;
 		});
-		saveConfigs();
+		store.set(PRESETS, (prev) =>
+			prev.map((preset) =>
+				preset.data.includes(path)
+					? { ...preset, data: [...preset.data.filter((item) => item !== path), newPath] }
+					: preset
+			)
+		);
+		await saveConfigs();
 		info("[IMM] Mod name changed from", path, "to", newPath);
-		await updatePrefsIniFromData(newPath, path);
-		if (enabled) await toggleMod(newPath, true);
+		if (!isNte) await updatePrefsIniFromData(newPath, path);
+		if (!isNte && (add || wasEnabled) && !(await toggleMod(newPath, true))) {
+			throw new Error("Unable to enable mod after rename.");
+		}
 		return newPath;
 	} catch (err) {
 		error("[IMM] Error changing mod name:", err);
@@ -1804,6 +1890,13 @@ export async function deleteCategory(cat: string) {
 	const path = join(src, managedSRC, cat);
 	if (!(await exists(path))) return true;
 	try {
+		if (store.get(GAME) === "NTE") {
+			const modPaths = store
+				.get(MOD_LIST)
+				.filter((mod) => mod.parent === cat || mod.path.startsWith(cat + "\\"))
+				.map((mod) => mod.path);
+			for (const modPath of modPaths) await deleteMod(modPath);
+		}
 		await guardedRemove(path);
 		return true;
 	} catch (err) {
@@ -1824,8 +1917,32 @@ export async function deleteRestorePoint(point: string) {
 	}
 }
 export async function deleteMod(path: string) {
+	const isNte = store.get(GAME) === "NTE";
 	const modSrc = join(src, managedSRC, path);
-	const modTgt = join(tgt, managedTGT, path);
+	const modTgt = isNte ? join(tgt, path) : join(tgt, managedTGT, path);
+
+	if (isNte) {
+		try {
+			const result = await invoke("delete_nte_mod", {
+				relativePath: path,
+			});
+			acceptNteOperationRevision(result);
+			store.set(DATA, (prev) => {
+				const next = { ...prev };
+				delete next[path];
+				return next;
+			});
+			store.set(PRESETS, (prev) =>
+				prev.map((preset) => ({ ...preset, data: preset.data.filter((item) => item !== path) }))
+			);
+			addToast({ type: "success", message: textData._Toasts.Deleted });
+			return;
+		} catch (err) {
+			error("[IMM] Error deleting NTE mod:", err);
+			addToast({ type: "error", message: textData._Toasts.ErrOcc });
+			throw err;
+		}
+	}
 
 	try {
 		await guardedRemove(modTgt);
@@ -1839,7 +1956,7 @@ export async function deleteMod(path: string) {
 	} catch (err) {
 		error("[IMM] Error removing mod source:", err);
 		addToast({ type: "error", message: textData._Toasts.ErrOcc });
-		throw error;
+		throw err;
 	}
 }
 function getTrackedMods(modPaths: string[]) {
@@ -1956,13 +2073,29 @@ export async function updateIniVars(relPath: string, keyVals: Record<string, str
 	return true;
 }
 export function openFile(relPath: string) {
-	openPath(join(modRoot, relPath));
+	return openManagedFolder("source", join(managedSRC, relPath));
+}
+
+export function openManagedFolder(rootKind: "source" | "target", relativePath = "") {
+	return invoke<void>("open_managed_folder", {
+		game: store.get(GAME),
+		rootKind,
+		relativePath,
+	});
 }
 export async function toggleMod(path: string, enabled: boolean, forced = false): Promise<boolean> {
 	info("[IMM] Togglingx mod:", path, "Enabled:", enabled);
 	try {
 		const modSrc = join(src, managedSRC, path);
-		const modTgt = join(tgt, managedTGT, path);
+		const modTgt = store.get(GAME) === "NTE" ? join(tgt, path) : join(tgt, managedTGT, path);
+
+		if (store.get(GAME) === "NTE") {
+			await invoke("set_nte_mod_enabled", {
+				relativePath: path,
+				enabled,
+			});
+			return true;
+		}
 
 		if (enabled) {
 			const [srcExists, tgtExists] = await Promise.all([exists(modSrc), exists(modTgt)]);
@@ -2003,13 +2136,26 @@ export async function savePreviewImageFromData(relPath: string, type: string, da
 	const path = join(src, managedSRC, relPath);
 	const previewPath = join(path, "preview." + type);
 	info("[IMM] Saving preview image for:", path, previewPath);
-	const removePromises = exts.map((ext) =>
-		guardedRemove(path + "\\" + "preview." + ext).catch(() => {
-			// Ignore errors if file doesn't exist
-		})
-	);
-	await Promise.all(removePromises);
-	await writeFile(previewPath, data);
+	if (store.get(GAME) === "NTE") {
+		await invoke("save_nte_preview_data", {
+			relativePath: relPath,
+			extension: type,
+			data: Array.from(data),
+		});
+	} else {
+		const removePromises = exts.map((ext) =>
+			guardedRemove(path + "\\" + "preview." + ext).catch(() => {
+				// Ignore errors if file doesn't exist
+			})
+		);
+		await Promise.all(removePromises);
+		await writeFile(previewPath, data);
+	}
+	try {
+		await updatePreviewAsset(src, relPath);
+	} catch (previewError) {
+		warn("[IMM] Unable to update the local preview cache:", previewError);
+	}
 	store.set(LAST_UPDATED, Date.now());
 	store.set(DATA, (prev) => {
 		if (!prev[relPath]) return prev;
@@ -2028,9 +2174,9 @@ export async function savePreviewImageFromData(relPath: string, type: string, da
 
 	addToast({ type: "success", message: textData._Toasts.ImgSaved });
 }
-export async function savePreviewImage(path: string) {
+export async function savePreviewImage(relPath: string) {
 	try {
-		path = join(src, managedSRC, path);
+		const path = join(src, managedSRC, relPath);
 		const file = await open({
 			multiple: false,
 			directory: false,
@@ -2039,18 +2185,29 @@ export async function savePreviewImage(path: string) {
 
 		if (!file) return false;
 
-		// Remove existing preview images in parallel
+		if (store.get(GAME) === "NTE") {
+			await invoke("import_nte_preview_file", {
+				relativePath: relPath,
+				sourcePath: file,
+			});
+		} else {
+			// Remove existing preview images in parallel
+			const removePromises = exts.map((ext) =>
+				guardedRemove(path + "\\" + "preview." + ext).catch(() => {
+					// Ignore errors if file doesn't exist
+				})
+			);
+			await Promise.all(removePromises);
 
-		const removePromises = exts.map((ext) =>
-			guardedRemove(path + "\\" + "preview." + ext).catch(() => {
-				// Ignore errors if file doesn't exist
-			})
-		);
-		await Promise.all(removePromises);
-
-		// Copy new preview image
-		const fileExt = file.split(".").pop();
-		await guardedImportFile(file, path + "\\" + "preview." + fileExt);
+			// Copy new preview image
+			const fileExt = file.split(".").pop();
+			await guardedImportFile(file, path + "\\" + "preview." + fileExt);
+		}
+		try {
+			await updatePreviewAsset(src, relPath);
+		} catch (previewError) {
+			warn("[IMM] Unable to update the local preview cache:", previewError);
+		}
 		store.set(LAST_UPDATED, Date.now());
 		addToast({ type: "success", message: textData._Toasts.ImgSaved });
 	} catch {
@@ -2062,23 +2219,34 @@ export async function savePreviewImage(path: string) {
 }
 export async function applyPreset(data: string[], name = "") {
 	try {
-		const entries = (await readDirRecr(join(tgt, managedTGT), "", 2)).flatMap((x) => x.children || []);
+		const isNte = store.get(GAME) === "NTE";
+		const presetTarget = isNte ? tgt : join(tgt, managedTGT);
+		const entries = (await readDirRecr(presetTarget, "", 2)).flatMap((x) => x.children || []);
 		const disablePromises: Promise<boolean>[] = entries.map((entry) => toggleMod(entry.path, false));
-		await Promise.all(disablePromises);
-		await guardedRemove(join(tgt, managedTGT), { recursive: true });
-		await mkdir(join(tgt, managedTGT), { recursive: true });
+		const disableResults = await Promise.all(disablePromises);
+		if (disableResults.some((result) => !result)) {
+			throw new Error("Unable to disable every Mod in the preset target.");
+		}
+		if (!isNte) {
+			await guardedRemove(presetTarget, { recursive: true });
+			await mkdir(presetTarget, { recursive: true });
+		}
 
 		// Apply mods in parallel batches to improve performance
 		const batchSize = 10;
 		for (let i = 0; i < data.length; i += batchSize) {
 			const batch = data.slice(i, i + batchSize);
-			await Promise.all(
+			const enableResults = await Promise.all(
 				batch.map((mod) =>
 					toggleMod(mod, true).catch((err = "unknown") => {
 						error(`[IMM] Error toggling mod ${mod}:`, err);
+						return false;
 					})
 				)
 			);
+			if (enableResults.some((result) => !result)) {
+				throw new Error("Unable to enable every Mod in the preset.");
+			}
 		}
 		if (name) {
 			addToast({ type: "success", message: textData._Toasts.PresetApplied });
@@ -2095,17 +2263,18 @@ export async function installFromArchives(archives: string[]) {
 	let success = 0;
 	async function extractArchive(archive: string) {
 		if (!archive) return;
+		const isNte = store.get(GAME) === "NTE";
 		const archiveName = archive.split("\\").pop() || "";
 		const [name] = archiveName.split(".");
 		const root = join(src, managedSRC, UNCATEGORIZED);
-		await mkdir(root, { recursive: true });
+		if (!isNte) await mkdir(root, { recursive: true });
 		let counter = 0;
 		let finalName = name;
 		while (await exists(join(root, finalName))) {
 			finalName = `${name} (${++counter})`;
 		}
 		const dest = join(root, finalName);
-		await mkdir(dest, { recursive: true });
+		if (!isNte) await mkdir(dest, { recursive: true });
 		try {
 			info("[IMM] Extracting archive:", archive, "to", dest);
 			const element = {
@@ -2136,6 +2305,7 @@ export async function installFromArchives(archives: string[]) {
 				emit: true,
 				key: element.key,
 				currentSid: 999,
+				game: store.get(GAME),
 			});
 			info("[IMM] Archive extracted:", archive);
 			// await validateModDownload(dest, true);

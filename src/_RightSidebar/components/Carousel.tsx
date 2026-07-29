@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Carousel as CarouselCN, CarouselContent, CarouselItem } from "@/components/ui/carousel";
 // import { OnlineModImage } from "@/utils/types";
 import type { EmblaCarouselType } from "embla-carousel";
+import { RemoteImage } from "@/components/RemoteImage";
 
 type PreviewImageLike = { _sBaseUrl: string; _sFile: string };
 
@@ -31,9 +32,10 @@ function Carousel({ data, big }: { data: PreviewImageLike[]; big?: boolean }) {
 					{data?.map((item, index) => (
 						<CarouselItem key={index} className="flex flex-col overflow-hidden">
 							<div className="flex aspect-video flex-col overflow-hidden rounded-lg border bg-black/20">
-								<img
+								<RemoteImage
 									className="h-full w-full object-contain"
 									src={item._sBaseUrl + "/" + item._sFile}
+									fallbackSrc="/who.jpg"
 									loading={index === 0 ? "eager" : "lazy"}
 									decoding="async"
 									alt=""

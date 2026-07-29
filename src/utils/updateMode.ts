@@ -9,7 +9,8 @@ export function isPortableInstallDir(currentExeDir: string, localAppDataDir: str
 }
 
 export function getPortableUpdateUrl(rawJson: Record<string, unknown> | null | undefined) {
-	const platforms = rawJson && typeof rawJson === "object" ? (rawJson.platforms as Record<string, unknown> | undefined) : undefined;
+	const platforms =
+		rawJson && typeof rawJson === "object" ? (rawJson.platforms as Record<string, unknown> | undefined) : undefined;
 	const windowsAsset = platforms?.["windows-x86_64"];
 	if (!windowsAsset || typeof windowsAsset !== "object") return null;
 	const url = (windowsAsset as { url?: unknown }).url;

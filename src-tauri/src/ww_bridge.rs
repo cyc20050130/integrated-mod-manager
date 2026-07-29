@@ -695,7 +695,7 @@ fn load_unified_cache_snapshot(
                     return Ok(LoadedUnifiedCacheSnapshot {
                         snapshot,
                         source_kind: candidate.source_kind,
-                    })
+                    });
                 }
                 Err(err) => parse_errors.push(format!("{} [{}]", err, candidate.path.display())),
             },
@@ -1251,9 +1251,10 @@ fn afdian_post_to_item(
         post.title, post.preview_text, post.content, creator_context
     );
     let download_options = extract_download_options_from_text(&post.content);
-    if !afdian_text_matches_ww(&search_blob)
-        && !(afdian_text_matches_ww(&creator_context) && !download_options.is_empty())
-    {
+    let matches_search = afdian_text_matches_ww(&search_blob);
+    let creator_has_download =
+        afdian_text_matches_ww(&creator_context) && !download_options.is_empty();
+    if !matches_search && !creator_has_download {
         return None;
     }
     if !afdian_post_is_downloadable(&post, &download_options) {
@@ -1268,10 +1269,8 @@ fn afdian_post_to_item(
     };
     let availability = if post.has_right == 1 && post.is_public == 1 {
         "公开可访问"
-    } else if let Some(message) = post.has_right_err_msg.as_deref() {
-        message
     } else {
-        "赞助后可访问"
+        post.has_right_err_msg.as_deref().unwrap_or("赞助后可访问")
     };
     let summary = Some(format!(
         "{} · {} · likes {} · comments {}",

@@ -5,16 +5,45 @@ import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { GAMES, managedSRC, managedTGT } from "@/utils/consts";
-import { applyPreset, folderSelector, verifyDirStruct } from "@/utils/filesys";
-import { getDataDir, readXXMIConfig, verifyGameDir } from "@/utils/init";
+import { GAME_NAMES, GAMES, managedSRC, managedTGT } from "@/utils/consts";
+import {
+	applyPreset,
+	ensureManagedSourceDir,
+	flushRuntimeState,
+	folderSelector,
+	verifyDirStruct,
+} from "@/utils/filesys";
+import { getCwd, getDataDir, readXXMIConfig, verifyGameDir } from "@/utils/init";
 import { join } from "@/utils/utils";
-import { CHANGES, GAME, SOURCE, TARGET, TEXT_DATA, XXMI_DIR, XXMI_MODE } from "@/utils/vars";
+import { CHANGES, GAME, NTE_REGION, SOURCE, TARGET, TEXT_DATA, XXMI_DIR, XXMI_MODE } from "@/utils/vars";
+import { NteRegion } from "@/utils/types";
+import { invoke } from "@tauri-apps/api/core";
 import { exists } from "@tauri-apps/plugin-fs";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { CheckIcon, FolderCog2Icon, HelpCircleIcon, InfoIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 import { info } from "@/lib/logger";
+
+type NteGameRootValidation = {
+	valid: boolean;
+	root: string;
+	region: Exclude<NteRegion, "auto"> | null;
+	candidates: string[];
+	modsRoot: string;
+	launcherPath: string;
+	gameExecutablePath: string;
+	evidence: string[];
+	message: string;
+};
+
+const NTE_REGIONS: NteRegion[] = ["auto", "global", "cn", "tw"];
+const NTE_REGION_LABELS: Record<NteRegion, string> = { auto: "Auto", global: "Global", cn: "CN", tw: "TW" };
+
+function errorMessage(value: unknown, fallback: string) {
+	if (value instanceof Error) return value.message;
+	if (typeof value === "object" && value && "message" in value) return String(value.message);
+	return String(value || fallback);
+}
 
 function Page4({ setPage }: { setPage: (page: number) => void }) {
 	const [tgt, setTgt] = useState(getDataDir());
@@ -27,6 +56,115 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 	const textData = useAtomValue(TEXT_DATA);
 	const game = useAtomValue(GAME);
 	const setChanges = useSetAtom(CHANGES);
+	const [nteGameRoot, setNteGameRoot] = useState("");
+	const [nteRegion, setNteRegion] = useAtom(NTE_REGION);
+	const [nteBusy, setNteBusy] = useState(false);
+	if (game === "NTE") {
+		return (
+			<div className="text-muted-foreground fixed flex flex-col items-center justify-center w-screen h-screen">
+				<div className="fixed z-20 flex flex-col items-center justify-center w-full duration-200">
+					<div className="text-accent flex w-full max-w-xl flex-col items-center gap-5 text-2xl">
+						<h2 className="text-center text-balance">{GAME_NAMES.NTE}</h2>
+						<div className="flex w-full items-center gap-2">
+							<Label htmlFor="nte-game-root" className="w-28 text-sm">
+								{textData._Checklist.NTEGameRoot}
+							</Label>
+							<Input
+								id="nte-game-root"
+								name="nteGameRoot"
+								autoComplete="off"
+								className="min-w-0 flex-1 text-ellipsis"
+								readOnly
+								value={nteGameRoot || "-"}
+							/>
+							<Button
+								size="icon"
+								title={textData.Browse}
+								aria-label={textData.Browse}
+								onClick={async () => {
+									const selected = await folderSelector(nteGameRoot, textData._Checklist.NTESelectGameRoot);
+									if (typeof selected === "string") setNteGameRoot(selected);
+								}}
+							>
+								<FolderCog2Icon aria-hidden="true" className="h-4 w-4" />
+							</Button>
+						</div>
+						<div className="flex w-full items-center gap-2">
+							<Label id="nte-region-label" className="w-28 text-sm">
+								{textData._Checklist.NTERegion}
+							</Label>
+							<div className="grid flex-1 grid-cols-4 gap-1" role="group" aria-labelledby="nte-region-label">
+								{NTE_REGIONS.map((region) => (
+									<Button
+										key={region}
+										type="button"
+										aria-pressed={nteRegion === region}
+										variant={nteRegion === region ? "default" : "outline"}
+										onClick={() => setNteRegion(region)}
+									>
+										{NTE_REGION_LABELS[region]}
+									</Button>
+								))}
+							</div>
+						</div>
+						<Button
+							className="mt-2 w-32"
+							disabled={nteBusy}
+							onClick={async () => {
+								if (!nteGameRoot) {
+									addToast({ message: textData._Checklist.NTEGameRootNotConfigured, type: "error" });
+									return;
+								}
+								setNteBusy(true);
+								try {
+									const validation = await invoke<NteGameRootValidation>("validate_nte_game_root", {
+										path: nteGameRoot,
+										region: nteRegion === "auto" ? null : nteRegion,
+									});
+									if (!validation.valid || !validation.region) {
+										addToast({ message: validation.message, type: "error" });
+										return;
+									}
+									const sourceRoot = join(getCwd(), "nte-library");
+									const normalizedSource = sourceRoot.replaceAll("/", "\\").replace(/\\+$/g, "").toLowerCase();
+									const normalizedGameRoot = validation.root.replaceAll("/", "\\").replace(/\\+$/g, "").toLowerCase();
+									if (
+										!sourceRoot ||
+										normalizedSource === normalizedGameRoot ||
+										normalizedSource.startsWith(`${normalizedGameRoot}\\`)
+									) {
+										throw new Error(textData._Checklist.NTEManagedLibraryOutside);
+									}
+									await ensureManagedSourceDir(sourceRoot);
+									await flushRuntimeState("configure-nte", {
+										source: sourceRoot,
+										target: validation.modsRoot,
+										xxmiMode: 1,
+										nteRegion: validation.region,
+									});
+									setSource(sourceRoot);
+									setTarget(validation.modsRoot);
+									setChecked(1);
+									setNteRegion(validation.region);
+									setChanges({ before: [], after: [], map: {}, skip: true, title: "" });
+									setPage(4);
+								} catch (validationError) {
+									addToast({
+										message: errorMessage(validationError, textData._Checklist.NTEGameRootNotConfigured),
+										type: "error",
+									});
+								} finally {
+									setNteBusy(false);
+								}
+							}}
+						>
+							{textData.Confirm}
+						</Button>
+					</div>
+				</div>
+			</div>
+		);
+	}
 	return (
 		<div className="text-muted-foreground fixed flex flex-col items-center justify-center w-screen h-screen">
 			<div className="fixed z-20 flex flex-col items-center justify-center w-full duration-200">
@@ -53,9 +191,9 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 											</Button>
 										</TooltipTrigger>
 									</DialogTrigger>
-										<TooltipContent>
-											<p className="text-center w-20">{textData._Checklist.ClickHelp}</p>
-										</TooltipContent>
+									<TooltipContent>
+										<p className="text-center w-20">{textData._Checklist.ClickHelp}</p>
+									</TooltipContent>
 								</Tooltip>
 								<DialogContent className="min-h-130">
 									<div className="min-h-fit text-accent my-6 text-3xl">

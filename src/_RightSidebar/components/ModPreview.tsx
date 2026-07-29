@@ -54,18 +54,6 @@ function ModPreview({
 						event.preventDefault();
 						break;
 					}
-				} else if (item.kind === "string" && item.type === "text/plain") {
-					item.getAsString((str) => {
-						if (str.startsWith("http")) {
-							fetch(str)
-								.then((res) => res.blob())
-								.then((blob) => {
-									const file = new File([blob], "clipboard_image", { type: blob.type });
-									if (file && file.type.startsWith("image/")) onDrop([file]);
-								})
-								.catch(() => undefined);
-						}
-					});
 				}
 			}
 		}
@@ -110,7 +98,7 @@ function ModPreview({
 								Select File
 							</Button>
 							<label className="text-xs text-gray-400">OR</label>
-							<label className="text-accent">Paste Image/URL from clipboard</label>
+							<label className="text-accent">Paste Image from clipboard</label>
 						</div>
 						<div className="w-1/2 border-l h-full flex flex-col gap-2 items-center justify-center">
 							<UploadIcon className="w-6 h-6" />

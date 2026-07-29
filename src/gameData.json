@@ -3226,5 +3226,17 @@
 				}
 			]
 		}
+	},
+	"NTE": {
+		"id": {
+			"categories": "23012",
+			"game": "23012"
+		},
+		"categoryList": [],
+		"generic": {
+			"categories": [],
+			"types": []
+		},
+		"provider": "gamebananante"
 	}
 }

@@ -168,9 +168,11 @@ function App() {
 					)}
 				</AnimatePresence>
 			</div>
-			
-			
-			<div id="mods-progress-container" className="fixed pointer-events-none -bottom-12 duration-300 text-[8px] opacity-50 rounded-tl-md flex pl-2 gap-1.5 flex-row items-center right-0 h-8 w-72 bg-sidebar border z-10">
+
+			<div
+				id="mods-progress-container"
+				className="fixed pointer-events-none -bottom-12 duration-300 text-[8px] opacity-50 rounded-tl-md flex pl-2 gap-1.5 flex-row items-center right-0 h-8 w-72 bg-sidebar border z-10"
+			>
 				Mods Checked :
 				<div className="w-42 border flex h-4 rounded-sm overflow-hidden">
 					<div id="mods-progress" className="bg-accent duration-100 h-full rounded-r-sm"></div>

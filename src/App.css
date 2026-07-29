@@ -255,7 +255,7 @@
 [data-theme="sr"] .logo {
 	background-image: url("/SRLogo.png");
 	scale: 1.75;
-	
+
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;

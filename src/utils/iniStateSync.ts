@@ -1,7 +1,8 @@
-import { watch } from "@tauri-apps/plugin-fs";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 
 import { syncIniStateFromD3DXIni, getD3DXUserIniPath } from "./filesys";
-import { MOD_LIST, store, TARGET } from "./vars";
+import { GAME, MOD_LIST, store, TARGET } from "./vars";
 import { info, warn } from "@/lib/logger";
 
 let unwatchIniState: null | (() => void) = null;
@@ -11,7 +12,9 @@ let syncInFlight = false;
 let syncQueued = false;
 
 function normalizePath(value: string) {
-	return String(value || "").replaceAll("/", "\\").toLowerCase();
+	return String(value || "")
+		.replaceAll("/", "\\")
+		.toLowerCase();
 }
 
 function getEnabledMods() {
@@ -63,31 +66,16 @@ function scheduleSync(reason: string) {
 	}, 300);
 }
 
-function isRelevantWatchEvent(
-	event: { paths?: string[]; type?: unknown },
-	iniPath: string
-) {
-	const normalizedIniPath = normalizePath(iniPath);
-	const touched = Array.isArray(event?.paths)
-		? event.paths.some((path: string) => normalizePath(path) === normalizedIniPath)
-		: false;
-	if (!touched) return false;
-	const type = event?.type;
-	if (type === "any" || type === "other") return true;
-	if (typeof type === "object" && type && "modify" in type && type.modify) {
-		const kind = (type.modify as { kind?: string }).kind;
-		return kind === "any" || kind === "data" || kind === "rename" || kind === "other";
-	}
-	if (typeof type === "object" && type && "create" in type && type.create) return true;
-	if (typeof type === "object" && type && "remove" in type && type.remove) return true;
-	return false;
-}
-
 export async function stopIniStateSync() {
 	clearDebounce();
 	if (unwatchIniState) {
 		unwatchIniState();
 		unwatchIniState = null;
+	}
+	try {
+		await invoke("stop_ini_state_watch");
+	} catch (error) {
+		warn("[IMM] Failed to stop native d3dx_user.ini watcher:", error);
 	}
 	activeIniPath = "";
 	syncQueued = false;
@@ -99,25 +87,28 @@ export async function syncIniStateOnce(reason = "manual") {
 
 export async function startIniStateSync() {
 	const targetPath = store.get(TARGET);
+	const game = store.get(GAME);
 	const iniPath = getD3DXUserIniPath(targetPath);
-	if (!iniPath) {
+	if (!iniPath || !game || game === "NTE") {
 		await stopIniStateSync();
 		return;
 	}
 	if (normalizePath(activeIniPath) === normalizePath(iniPath) && unwatchIniState) return;
 	await stopIniStateSync();
-	activeIniPath = iniPath;
+	let unlisten: (() => void) | null = null;
 	try {
-		unwatchIniState = await watch(
-			iniPath,
-			(event) => {
-				if (!isRelevantWatchEvent(event, iniPath)) return;
-				scheduleSync("d3dx-user-ini-watch");
-			},
-			{ delayMs: 250 }
-		);
-		info("[IMM] Watching ini state file:", iniPath);
+		unlisten = await listen<{ path?: string }>("ini-state-changed", (event) => {
+			const changedPath = event.payload?.path || "";
+			if (!activeIniPath || normalizePath(changedPath) !== normalizePath(activeIniPath)) return;
+			scheduleSync("d3dx-user-ini-watch");
+		});
+		const watchedPath = await invoke<string>("start_ini_state_watch", { game });
+		activeIniPath = watchedPath;
+		unwatchIniState = unlisten;
+		info("[IMM] Watching ini state file through native watcher:", watchedPath);
 	} catch (error) {
-		warn("[IMM] Failed to watch d3dx_user.ini:", error);
+		unlisten?.();
+		activeIniPath = "";
+		warn("[IMM] Failed to start native d3dx_user.ini watcher:", error);
 	}
 }

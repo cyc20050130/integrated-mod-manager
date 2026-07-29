@@ -47,7 +47,8 @@ const searched = {
 const DEV_UNIFIED_CARD_ID = "gamebanana:camellya-blue-dress";
 const DEV_UNIFIED_AUTO_OPEN_KEY = "imm-dev-ww-unified-auto-opened";
 const isDevRuntime =
-	typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+	typeof window !== "undefined" &&
+	(window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 function TopBar() {
 	// const [leftSidebarOpen, setLeftSidebarOpen] = useAtom(LEFT_SIDEBAR_OPEN);
@@ -131,73 +132,85 @@ function TopBar() {
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
 	}, [online, onlineType, setOnlinePath, setSearch]);
-	const openDevUnifiedDetail = useCallback(async (preferredSourceId: OnlineSourceId | null = null) => {
-		if (!shouldUseUnifiedWwOnline(game)) {
-			return;
-		}
-
-		const devPath = "home&type=Mod";
-		const devSource = "all" as const;
-		setOnline(true);
-		setOnlineType("Mod");
-		setOnlineSort("");
-		setOnlineSource(devSource);
-		setOnlinePath(devPath);
-
-		try {
-			const unifiedCards = await listUnifiedWwCards({
-				path: devPath,
-				source: devSource,
-			});
-			const targetCard =
-				(preferredSourceId
-					? unifiedCards.find((card) => card.sources.some((source) => source.sourceId === preferredSourceId))
-					: null) ||
-				unifiedCards.find((card) => card.cardId === DEV_UNIFIED_CARD_ID) ||
-				unifiedCards.find(
-					(card) =>
-						card.primarySourceId === "gamebanana" &&
-						card.sources.some((source) => source.sourceId === "gamebanana")
-				) ||
-				unifiedCards[0];
-
-			if (!targetCard) {
-				addToast({
-					type: "error",
-					message: "开发态 unified 调试卡片未找到",
-				});
+	const openDevUnifiedDetail = useCallback(
+		async (preferredSourceId: OnlineSourceId | null = null) => {
+			if (!shouldUseUnifiedWwOnline(game)) {
 				return;
 			}
 
-			const cacheKey = buildUnifiedOnlineCacheKey(devPath, devSource);
-			const selectedRoute = buildUnifiedCardRoute(targetCard.cardId);
-			const preferredSource =
-				preferredSourceId && targetCard.sources.some((source) => source.sourceId === preferredSourceId)
-					? preferredSourceId
-					: null;
-			const selectedItem = {
-				...toOnlineListCard(targetCard),
-				...(preferredSource ? { _unifiedPreferredSourceId: preferredSource } : {}),
-			};
-			setOnlineData((prev) => ({
-				...prev,
-				[cacheKey]: unifiedCards.map(toOnlineListCard),
-				[selectedRoute]: selectedItem,
-			}));
-			setOnlineSelected(selectedRoute);
-			setRightSlideOverOpen(true);
-			addToast({
-				type: "info",
-				message: `已打开开发态 unified 详情：${targetCard.displayName}${preferredSource ? ` (${preferredSource})` : ""}`,
-			});
-		} catch (error) {
-			console.error("Error opening dev unified detail:", error);
-			addToast({
-				type: "error",
-				message: "打开开发态 unified 详情失败",
-			});
-		}
-	}, [game, setOnline, setOnlineData, setOnlinePath, setOnlineSelected, setOnlineSort, setOnlineSource, setOnlineType, setRightSlideOverOpen]);
+			const devPath = "home&type=Mod";
+			const devSource = "all" as const;
+			setOnline(true);
+			setOnlineType("Mod");
+			setOnlineSort("");
+			setOnlineSource(devSource);
+			setOnlinePath(devPath);
+
+			try {
+				const unifiedCards = await listUnifiedWwCards({
+					path: devPath,
+					source: devSource,
+				});
+				const targetCard =
+					(preferredSourceId
+						? unifiedCards.find((card) => card.sources.some((source) => source.sourceId === preferredSourceId))
+						: null) ||
+					unifiedCards.find((card) => card.cardId === DEV_UNIFIED_CARD_ID) ||
+					unifiedCards.find(
+						(card) =>
+							card.primarySourceId === "gamebanana" && card.sources.some((source) => source.sourceId === "gamebanana")
+					) ||
+					unifiedCards[0];
+
+				if (!targetCard) {
+					addToast({
+						type: "error",
+						message: "开发态 unified 调试卡片未找到",
+					});
+					return;
+				}
+
+				const cacheKey = buildUnifiedOnlineCacheKey(devPath, devSource);
+				const selectedRoute = buildUnifiedCardRoute(targetCard.cardId);
+				const preferredSource =
+					preferredSourceId && targetCard.sources.some((source) => source.sourceId === preferredSourceId)
+						? preferredSourceId
+						: null;
+				const selectedItem = {
+					...toOnlineListCard(targetCard),
+					...(preferredSource ? { _unifiedPreferredSourceId: preferredSource } : {}),
+				};
+				setOnlineData((prev) => ({
+					...prev,
+					[cacheKey]: unifiedCards.map(toOnlineListCard),
+					[selectedRoute]: selectedItem,
+				}));
+				setOnlineSelected(selectedRoute);
+				setRightSlideOverOpen(true);
+				addToast({
+					type: "info",
+					message: `已打开开发态 unified 详情：${targetCard.displayName}${preferredSource ? ` (${preferredSource})` : ""}`,
+				});
+			} catch (error) {
+				console.error("Error opening dev unified detail:", error);
+				addToast({
+					type: "error",
+					message: "打开开发态 unified 详情失败",
+				});
+			}
+		},
+		[
+			game,
+			setOnline,
+			setOnlineData,
+			setOnlinePath,
+			setOnlineSelected,
+			setOnlineSort,
+			setOnlineSource,
+			setOnlineType,
+			setRightSlideOverOpen,
+		]
+	);
 	useEffect(() => {
 		if (!isDevRuntime || !shouldUseUnifiedWwOnline(game) || typeof sessionStorage === "undefined") {
 			return;
@@ -263,7 +276,11 @@ function TopBar() {
 										}[onlineSort]
 									)
 								) : (
-									<>{SORT_OPTIONS[sort].replace("Default",textData._Main._components._TopBar.Default).replace("Favourite",textData._Tags.Favorite)}</>
+									<>
+										{SORT_OPTIONS[sort]
+											.replace("Default", textData._Main._components._TopBar.Default)
+											.replace("Favourite", textData._Tags.Favorite)}
+									</>
 								)}
 							</div>
 						</PopoverTrigger>
@@ -344,7 +361,9 @@ function TopBar() {
 												setSort(value);
 											}}
 										>
-											{label.replace("Default",textData._Main._components._TopBar.Default).replace("Favourite",textData._Tags.Favorite)}
+											{label
+												.replace("Default", textData._Main._components._TopBar.Default)
+												.replace("Favourite", textData._Tags.Favorite)}
 										</div>
 									))
 								)}
@@ -384,7 +403,7 @@ function TopBar() {
 			)}
 			<Button
 				onClick={() => {
-				if (online) {
+					if (online) {
 						const curPath = onlinePath;
 						const cacheKey = shouldUseUnifiedWwOnline(game)
 							? buildUnifiedOnlineCacheKey(curPath, onlineSource)

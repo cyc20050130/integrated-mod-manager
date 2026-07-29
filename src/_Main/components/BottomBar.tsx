@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { UNCATEGORIZED } from "@/utils/consts";
 import { CATEGORIES, CATEGORY, MOD_LIST, ONLINE, ONLINE_PATH, ONLINE_SORT, ONLINE_TYPE, TEXT_DATA } from "@/utils/vars";
 import { useAtom, useAtomValue } from "jotai";
@@ -129,7 +130,7 @@ function BottomBar() {
 										</>
 									) : (
 										<>
-											<img
+											<RemoteImage
 												className="aspect-square min-w-6 scale-120 h-full rounded-full pointer-events-none"
 												onError={(e) => {
 													e.currentTarget.src = "/who.jpg";

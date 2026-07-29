@@ -1,6 +1,8 @@
 import type { UnifiedOnlineListCard } from "./unifiedOnline";
+import type { RegisteredGame } from "./gameRegistry";
 
-export type Games = "WW" | "ZZ" | "GI" | "SR" | "EF" | ""; //| "GI" ;
+export type Games = RegisteredGame | "";
+export type NteRegion = "auto" | "global" | "cn" | "tw";
 export type Language = "en" | "cn" | "ru" | "jp" | "kr" | "";
 export interface WuwaModFixerState {
 	version: string;
@@ -107,6 +109,7 @@ export interface GameConfig {
 	version: string;
 	game: Games;
 	custom: 0 | 1;
+	nteRegion?: NteRegion;
 	sourceDir: string;
 	targetDir: string;
 	settings: GameSettings;
@@ -136,6 +139,11 @@ export interface DownloadItem {
 	lastError?: string;
 	createdAt?: number;
 	lastTriedAt?: number;
+	expectedSize?: number;
+	expectedHash?: {
+		algorithm: "md5";
+		value: string;
+	};
 }
 export interface DownloadList {
 	queue: DownloadItem[];

@@ -1,6 +1,7 @@
 import { addToast } from "@/_Toaster/ToastProvider";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RemoteImage } from "@/components/RemoteImage";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { UNCATEGORIZED } from "@/utils/consts";
@@ -151,7 +152,7 @@ function Changes({ afterInit }: { afterInit: () => Promise<void> }) {
 												}}
 											>
 												{child.icon ? (
-													<img
+													<RemoteImage
 														src={child.icon}
 														className="w-6 h-6 -ml-1 -mr-1 overflow-hidden rounded-full"
 														alt="icon"
@@ -179,7 +180,7 @@ function Changes({ afterInit }: { afterInit: () => Promise<void> }) {
 																}}
 															>
 																{grandchild.icon ? (
-																	<img
+																	<RemoteImage
 																		src={grandchild.icon}
 																		className="w-6 h-6 -ml-1 -mr-1 overflow-hidden rounded-full"
 																		alt="icon"

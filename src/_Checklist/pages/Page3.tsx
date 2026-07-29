@@ -1,13 +1,16 @@
 import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { verifyDirStruct } from "@/utils/filesys";
-import { CHANGES, GAME, SOURCE, TARGET, TEXT_DATA, XXMI_DIR, XXMI_MODE } from "@/utils/vars";
+import { NteRegion } from "@/utils/types";
+import { CHANGES, GAME, NTE_REGION, SOURCE, TARGET, TEXT_DATA, XXMI_DIR, XXMI_MODE } from "@/utils/vars";
 import { invoke } from "@tauri-apps/api/core";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ArrowUpRightFromSquareIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
 let skipP = false;
+type NteGameRootValidation = { valid: boolean };
+
 export function skipPage() {
 	skipP = true;
 }
@@ -15,6 +18,7 @@ export function skipPage() {
 function Page3({ setPage }: { setPage: (page: number) => void }) {
 	const tgt = useAtomValue(TARGET);
 	const src = useAtomValue(SOURCE);
+	const nteRegion = useAtomValue(NTE_REGION) as NteRegion;
 	const [game, setGame] = useAtom(GAME);
 	const xxmiDir = useAtomValue(XXMI_DIR);
 	const customMode = useAtomValue(XXMI_MODE);
@@ -22,21 +26,46 @@ function Page3({ setPage }: { setPage: (page: number) => void }) {
 	const textData = useAtomValue(TEXT_DATA);
 	const setChanges = useSetAtom(CHANGES);
 	useEffect(() => {
+		let cancelled = false;
 		async function skip() {
+			const changes = await verifyDirStruct();
+			if (cancelled) return;
+			setChanges(changes);
 			setPage(4);
-			setChanges(await verifyDirStruct());
 		}
-		if (src && tgt) {
-			skip();
+		if (game === "NTE") {
+			if (!src || !tgt) {
+				setPage(3);
+			} else {
+				void invoke<NteGameRootValidation>("validate_nte_mods_root", {
+					modsRoot: tgt,
+					region: nteRegion === "auto" ? null : nteRegion,
+				})
+					.then((validation) => {
+						if (cancelled) return;
+						setPage(validation.valid ? 4 : 3);
+					})
+					.catch(() => {
+						if (!cancelled) setPage(3);
+					});
+			}
+		} else if (src && tgt) {
+			void skip().catch(() => {
+				if (!cancelled) setPage(3);
+			});
 		} else if (skipP) {
 			skipP = false;
 			setPage(3);
 		} else {
 			invoke("get_username").then((name) => {
-				if (name) setUser(name as string);
+				if (!cancelled && name) setUser(name as string);
 			});
 		}
-	}, [setChanges, setPage, src, tgt]);
+		return () => {
+			cancelled = true;
+		};
+	}, [game, nteRegion, setChanges, setPage, src, tgt]);
+	if (game === "NTE") return null;
 	return (
 		<div className="text-muted-foreground fixed flex flex-col items-center justify-center w-screen h-screen">
 			<div className="fixed z-20 flex flex-col items-center justify-center w-full h-full duration-200">

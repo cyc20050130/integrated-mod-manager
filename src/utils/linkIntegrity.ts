@@ -28,6 +28,7 @@ import {
 	PreviewBackfillState,
 } from "./types";
 import { join } from "./hotreload";
+import { loadNteConfigText, persistNteConfig } from "./nteConfigRevision";
 
 const LINK_SCAN_SCOPE: Games[] = [...GAMES];
 const PREVIEW_COOLDOWN_MS = 30 * 60 * 1000;
@@ -45,13 +46,13 @@ type ConfigGame = {
 	data: Record<string, ModData>;
 };
 
+function readGameConfigText(game: Games, configPath: string) {
+	return game === "NTE" ? loadNteConfigText() : readTextFile(configPath);
+}
+
 function normalizePathKey(path: string) {
 	if (!path) return "";
-	return path
-		.replaceAll("/", "\\")
-		.replace(/\\+/g, "\\")
-		.replace(/^\\+/, "")
-		.trim();
+	return path.replaceAll("/", "\\").replace(/\\+/g, "\\").replace(/^\\+/, "").trim();
 }
 
 function splitPath(path: string) {
@@ -76,9 +77,7 @@ function normalizeComparableName(name: string) {
 }
 
 function tokenizeName(name: string) {
-	return normalizeComparableName(name)
-		.split(" ")
-		.filter(Boolean);
+	return normalizeComparableName(name).split(" ").filter(Boolean);
 }
 
 function tokenJaccard(a: string[], b: string[]) {
@@ -93,7 +92,11 @@ function tokenJaccard(a: string[], b: string[]) {
 	return union > 0 ? intersection / union : 0;
 }
 
-function buildSuggestion(local: LinkAuditModEntry, orphan: LinkAuditOrphanEntry, game: Games): LinkAuditSuggestion | null {
+function buildSuggestion(
+	local: LinkAuditModEntry,
+	orphan: LinkAuditOrphanEntry,
+	game: Games
+): LinkAuditSuggestion | null {
 	const localName = normalizeComparableName(local.name);
 	const orphanName = normalizeComparableName(orphan.name);
 	const localTokens = tokenizeName(local.name);
@@ -143,7 +146,7 @@ async function readGameConfig(game: Games): Promise<ConfigGame | null> {
 	const configPath = `config${game}.json`;
 	if (!(await exists(configPath))) return null;
 	try {
-		const parsed = JSON.parse(await readTextFile(configPath));
+		const parsed = JSON.parse(await readGameConfigText(game, configPath));
 		const sourceDir = String(parsed?.sourceDir || "").trim();
 		return {
 			game,
@@ -388,7 +391,7 @@ export async function applyLinkAuditSuggestions(
 
 		let parsed: { data?: Record<string, ModData>; presets?: Preset[] } | null = null;
 		try {
-			parsed = JSON.parse(await readTextFile(gameReport.configPath));
+			parsed = JSON.parse(await readGameConfigText(gameReport.game, gameReport.configPath));
 		} catch {
 			continue;
 		}
@@ -439,7 +442,9 @@ export async function applyLinkAuditSuggestions(
 
 		parsed.data = nextData;
 		parsed.presets = nextPresets;
-		await writeTextFile(gameReport.configPath, JSON.stringify(parsed, null, 2));
+		const serialized = JSON.stringify(parsed, null, 2);
+		if (gameReport.game === "NTE") await persistNteConfig(serialized);
+		else await writeTextFile(gameReport.configPath, serialized);
 
 		if (currentGame === gameReport.game) {
 			store.set(DATA, nextData);

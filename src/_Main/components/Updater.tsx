@@ -165,7 +165,10 @@ function Updater() {
 	return (
 		<Dialog open={updaterOpen} onOpenChange={setUpdaterOpen}>
 			<DialogTrigger asChild>
-				<Button disabled={busy} className="text-ellipsis bg-sidebar flex h-6 p-0 overflow-hidden text-xs pointer-events-auto">
+				<Button
+					disabled={busy}
+					className="text-ellipsis bg-sidebar flex h-6 p-0 overflow-hidden text-xs pointer-events-auto"
+				>
 					<img src="IMMDecor.png" className="h-6.5 min-w-fit p-2 pr-0" />
 					{header || <div className="mr-1">{`v${VERSION}`}</div>}
 				</Button>
@@ -177,12 +180,19 @@ function Updater() {
 					<Credits />
 				</div>
 
-				{update?.status === "available" || update?.status === "downloading" || update?.status === "installing" || update?.status === "relaunching" ? (
+				{update?.status === "available" ||
+				update?.status === "downloading" ||
+				update?.status === "installing" ||
+				update?.status === "relaunching" ? (
 					<>
 						<div className="min-h-2 text-accent w-full text-xl">
 							Version {update.version}{" "}
 							<span className="text-muted-foreground text-base">
-								({getTimeDifference(renderedAtSeconds, new Date(update.date || renderedAtSeconds * 1000).getTime() / 1000)}{" "}
+								(
+								{getTimeDifference(
+									renderedAtSeconds,
+									new Date(update.date || renderedAtSeconds * 1000).getTime() / 1000
+								)}{" "}
 								{textData._Main._components._Updater.ago})
 							</span>
 						</div>
@@ -191,23 +201,38 @@ function Updater() {
 				) : null}
 
 				<div className="h-72 max-h-72 flex flex-col w-full px-4 overflow-x-hidden overflow-y-auto">
-					{update?.status === "available" || update?.status === "downloading" || update?.status === "installing" || update?.status === "relaunching" ? (
+					{update?.status === "available" ||
+					update?.status === "downloading" ||
+					update?.status === "installing" ||
+					update?.status === "relaunching" ? (
 						<>
-							{major.length > 0 && <div className="min-h-6 text-accent">{textData._Main._components._Updater.Maj}:</div>}
+							{major.length > 0 && (
+								<div className="min-h-6 text-accent">{textData._Main._components._Updater.Maj}:</div>
+							)}
 							{major.map((item: string, index: number) => (
-								<div key={`major_${index}`} className="min-h-fit text-muted-foreground flex items-center gap-2 mt-1 text-lg">
+								<div
+									key={`major_${index}`}
+									className="min-h-fit text-muted-foreground flex items-center gap-2 mt-1 text-lg"
+								>
 									<div className="min-w-1 min-h-1 aspect-square bg-accent self-start mt-3 rounded-full"></div>
 									<div>{item}</div>
 								</div>
 							))}
-							{minor.length > 0 && <div className="min-h-6 text-accent mt-4">{textData._Main._components._Updater.Min}:</div>}
+							{minor.length > 0 && (
+								<div className="min-h-6 text-accent mt-4">{textData._Main._components._Updater.Min}:</div>
+							)}
 							{minor.map((item: string, index: number) => (
-								<div key={`minor_${index}`} className="min-h-fit text-base text-muted-foreground flex items-center mt-0.5 gap-2">
+								<div
+									key={`minor_${index}`}
+									className="min-h-fit text-base text-muted-foreground flex items-center mt-0.5 gap-2"
+								>
 									<div className="min-w-1 min-h-1 self-start mt-2.5 aspect-square bg-accent rounded-full"></div>
 									<div>{item}</div>
 								</div>
 							))}
-							{patch.length > 0 && <div className="min-h-6 text-accent mt-4">{textData._Main._components._Updater.Patch}:</div>}
+							{patch.length > 0 && (
+								<div className="min-h-6 text-accent mt-4">{textData._Main._components._Updater.Patch}:</div>
+							)}
 							{patch.map((item: string, index: number) => (
 								<div key={`patch_${index}`} className="min-h-fit text-muted-foreground flex items-center gap-2 mt-0.5">
 									<div className="min-w-1 min-h-1 self-start mt-2.5 aspect-square bg-accent rounded-full"></div>
@@ -231,11 +256,21 @@ function Updater() {
 							<div className="mt-124 absolute flex items-center gap-2">
 								<label className="opacity-40">{textData.BFR}</label>
 								<label>:</label>
-								<a href={BANANA_LINK} target="_blank" rel="noreferrer noopener" className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50">
+								<a
+									href={BANANA_LINK}
+									target="_blank"
+									rel="noreferrer noopener"
+									className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
+								>
 									<img className="h-4" src="/GBLogo.png" /> <img className="h-3" src="/GBTitle.png" />
 								</a>
 								|
-								<a href={DISCORD_LINK} target="_blank" rel="noreferrer noopener" className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50">
+								<a
+									href={DISCORD_LINK}
+									target="_blank"
+									rel="noreferrer noopener"
+									className="hover:opacity-100 flex items-center gap-1 text-xs duration-200 opacity-50"
+								>
 									<img className="h-6" src="/DCLogoTitle.svg" />
 								</a>
 							</div>
@@ -257,7 +292,11 @@ function Updater() {
 											? textData._Main._components._Updater.Use
 											: "Run an update check now."}
 					</div>
-					<Button className="w-32" disabled={busy} onClick={() => void (update?.status === "available" ? installUpdate() : triggerCheck(true))}>
+					<Button
+						className="w-32"
+						disabled={busy}
+						onClick={() => void (update?.status === "available" ? installUpdate() : triggerCheck(true))}
+					>
 						{update?.status === "available" ? (
 							<>
 								<DownloadIcon className="w-4 h-4 mr-1" />

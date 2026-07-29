@@ -41,7 +41,7 @@ function Credits() {
 						}}
 					>
 						<img src="/IMMDecor.png" alt="IMM Logo" className="mx-auto w-64 mb-8 opacity-80" />
-{/* 
+						{/*
 						<div className="text-foreground text-2xl">Integrated</div>
 						<div className=" text-accent textaccent text-lg">Mod Manager</div> */}
 
@@ -89,7 +89,6 @@ function Credits() {
 						<div className="text-xl mt-12 mb-2">Thank you for using</div>
 						<div className="text-foreground text-2xl">Integrated</div>
 						<div className=" text-accent textaccent text-lg">Mod Manager</div>
-
 					</div>
 				</div>
 			</AlertDialogContent>

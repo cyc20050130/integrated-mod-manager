@@ -228,16 +228,7 @@ const SOURCE_PRIORITY: Record<OnlineSourceId, number> = {
 	afdian: 3,
 };
 
-const NOISE_TERMS = [
-	"mod",
-	"mods",
-	"ui",
-	"3dmigoto",
-	"nsfw",
-	"sfw",
-	"wuthering waves",
-	"鸣潮",
-];
+const NOISE_TERMS = ["mod", "mods", "ui", "3dmigoto", "nsfw", "sfw", "wuthering waves", "鸣潮"];
 
 export function normalizeOnlineName(input: string): string {
 	return input
@@ -413,11 +404,7 @@ export function resolveUnifiedSourceVariant(
 		if (preferred) return preferred;
 	}
 
-	return (
-		card.sources.find((source) => source.sourceId === card.primarySourceId) ||
-		card.sources[0] ||
-		null
-	);
+	return card.sources.find((source) => source.sourceId === card.primarySourceId) || card.sources[0] || null;
 }
 
 export function findUnifiedGenericFallbackSourceId(
@@ -500,7 +487,9 @@ export function replaceUnifiedListCard(
 
 	const route = buildUnifiedCardRoute(card.cardId);
 	return items.map((item) =>
-		item._sModelName === "UnifiedCard" && "_sProfileUrl" in item && item._sProfileUrl === route ? toOnlineListCard(card) : item
+		item._sModelName === "UnifiedCard" && "_sProfileUrl" in item && item._sProfileUrl === route
+			? toOnlineListCard(card)
+			: item
 	);
 }
 
@@ -523,12 +512,7 @@ function uniqueDetailValues(values: Array<string | null | undefined>): string[] 
 	return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
 }
 
-function appendDetailLink(
-	rows: UnifiedDetailLinkRow[],
-	seen: Set<string>,
-	label: string,
-	url?: string | null
-) {
+function appendDetailLink(rows: UnifiedDetailLinkRow[], seen: Set<string>, label: string, url?: string | null) {
 	const normalizedUrl = url?.trim() || "";
 	if (!normalizedUrl || seen.has(normalizedUrl)) return;
 	seen.add(normalizedUrl);
@@ -780,8 +764,14 @@ export function buildUnifiedDuplicateEvidenceRows(card: UnifiedOnlineCard): Unif
 		{ label: "原始标题分数", value: `${(evidence.nameScore * 100).toFixed(2)}%` },
 		{ label: "翻译标题分数", value: `${(evidence.translatedNameScore * 100).toFixed(2)}%` },
 		{ label: "翻译差距", value: `${(evidence.translationGap * 100).toFixed(2)}%` },
-		{ label: "预览图距离", value: evidence.previewHashDistance === null ? "未触发" : String(evidence.previewHashDistance) },
-		{ label: "临时文件比对", value: evidence.tempFileHashMatch === null ? "未触发" : evidence.tempFileHashMatch ? "一致" : "不一致" },
+		{
+			label: "预览图距离",
+			value: evidence.previewHashDistance === null ? "未触发" : String(evidence.previewHashDistance),
+		},
+		{
+			label: "临时文件比对",
+			value: evidence.tempFileHashMatch === null ? "未触发" : evidence.tempFileHashMatch ? "一致" : "不一致",
+		},
 		{ label: "决策", value: formatUnifiedDecision(evidence.decision) },
 	];
 }
@@ -826,10 +816,7 @@ export function buildUnifiedDetailCapabilityLabels(detail: UnifiedOnlineDetailLi
 		return ["详情能力未加载"];
 	}
 
-	return [
-		detail.commentsEnabled ? "支持评论" : "不支持评论",
-		detail.updatesEnabled ? "支持更新" : "不支持更新",
-	];
+	return [detail.commentsEnabled ? "支持评论" : "不支持评论", detail.updatesEnabled ? "支持更新" : "不支持更新"];
 }
 
 export function resolveUnifiedDetailSourceNote(
@@ -847,9 +834,7 @@ export function resolveUnifiedDetailSourceNote(
 	return detail.sourceSpecificNotes[detail.card.primarySourceId] || "";
 }
 
-export function resolveUnifiedDetailViewState(
-	input: ResolveUnifiedDetailViewStateInput
-): UnifiedDetailViewState {
+export function resolveUnifiedDetailViewState(input: ResolveUnifiedDetailViewStateInput): UnifiedDetailViewState {
 	const selectedRoute = input.selectedRoute || "";
 	if (!isUnifiedCardRoute(selectedRoute) || !input.card) {
 		return {
@@ -864,8 +849,8 @@ export function resolveUnifiedDetailViewState(
 	const activeSource = resolveUnifiedDetailSourceVariant(input.card, input.detail, input.preferredSourceId);
 	const canReuseLegacyDetail = Boolean(
 		activeSource?.sourceId === "gamebanana" &&
-			input.detail?.primarySourceCanReuseLegacyDetail &&
-			input.legacyRouteResolver(activeSource.detailUrl || "")
+		input.detail?.primarySourceCanReuseLegacyDetail &&
+		input.legacyRouteResolver(activeSource.detailUrl || "")
 	);
 	const legacyReuseRoute = canReuseLegacyDetail ? input.legacyRouteResolver(activeSource?.detailUrl || "") : "";
 
@@ -954,7 +939,8 @@ export function mergeUnifiedCardGroup(cards: UnifiedOnlineCard[], evidence: Dupl
 	const topScore = evidence.reduce((max, item) => Math.max(max, item.translatedNameScore || item.nameScore), 0);
 	const duplicateReasons = evidence.map((item) => {
 		if (item.decision === "merge" && item.translatedNameScore >= 0.92) return "translated-name";
-		if (item.decision === "merge" && item.previewHashDistance !== null && item.previewHashDistance <= 8) return "preview-phash";
+		if (item.decision === "merge" && item.previewHashDistance !== null && item.previewHashDistance <= 8)
+			return "preview-phash";
 		if (item.decision === "merge" && item.tempFileHashMatch) return "temp-file";
 		if (item.decision === "merge") return "name";
 		return item.decision;

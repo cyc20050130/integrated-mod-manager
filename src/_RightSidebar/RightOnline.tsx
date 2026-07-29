@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { SafeHtml } from "@/components/SafeHtml";
+import { RemoteImage } from "@/components/RemoteImage";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
 import {
@@ -7,7 +8,6 @@ import {
 	formatSize,
 	getImageUrl,
 	getTimeDifference,
-	handleImageError,
 	isRouteBlacklisted,
 	modRouteFromURL,
 	normalizeModRoute,
@@ -198,6 +198,7 @@ interface OnlineDownloadFile {
 	_sClamAvResult?: string;
 	_nFilesize?: number;
 	_nDownloadCount?: number;
+	_sMd5Checksum?: string;
 	[key: string]: unknown;
 }
 
@@ -387,7 +388,9 @@ function RightOnline({ open }: { open: boolean }) {
 		? buildUnifiedSourceRefreshRows(effectiveUnifiedCard, unifiedRefreshStatuses)
 		: [];
 	const unifiedDuplicateSummary = effectiveUnifiedCard ? buildUnifiedDuplicateSummary(effectiveUnifiedCard) : "";
-	const unifiedDuplicateEvidenceRows = effectiveUnifiedCard ? buildUnifiedDuplicateEvidenceRows(effectiveUnifiedCard) : [];
+	const unifiedDuplicateEvidenceRows = effectiveUnifiedCard
+		? buildUnifiedDuplicateEvidenceRows(effectiveUnifiedCard)
+		: [];
 	const unifiedDetailCapabilityLabels = buildUnifiedDetailCapabilityLabels(unifiedDetail);
 	const unifiedDetailOverviewRows =
 		effectiveUnifiedCard && unifiedDetail
@@ -397,11 +400,15 @@ function RightOnline({ open }: { open: boolean }) {
 		effectiveUnifiedCard && unifiedDetail
 			? buildUnifiedDetailLinkRows(effectiveUnifiedCard, unifiedDetail, selectedUnifiedSourceId)
 			: [];
-	const unifiedDetailUpdates = unifiedDetail ? buildUnifiedDetailUpdateRows(unifiedDetail, selectedUnifiedSourceId) : [];
+	const unifiedDetailUpdates = unifiedDetail
+		? buildUnifiedDetailUpdateRows(unifiedDetail, selectedUnifiedSourceId)
+		: [];
 	const unifiedDetailDescription = activeUnifiedSource?.description || unifiedDetail?.description || "";
 	const unifiedDetailDescriptionHtml = activeUnifiedSource?.descriptionHtml || unifiedDetail?.descriptionHtml || "";
 	const unifiedDetailSourceNote = resolveUnifiedDetailSourceNote(unifiedDetail, selectedUnifiedSourceId);
-	const unifiedAfdianQuery = effectiveUnifiedCard ? buildUnifiedAfdianDiscoveryQuery(effectiveUnifiedCard, unifiedDetail) : "";
+	const unifiedAfdianQuery = effectiveUnifiedCard
+		? buildUnifiedAfdianDiscoveryQuery(effectiveUnifiedCard, unifiedDetail)
+		: "";
 	const applyAdoptedAfdianDetail = useCallback(
 		(detail: UnifiedOnlineDetail, detailUrl: string) => {
 			setUnifiedDetail(detail);
@@ -477,8 +484,9 @@ function RightOnline({ open }: { open: boolean }) {
 			try {
 				const statuses = await refreshUnifiedWwCache(sourceId);
 				setUnifiedRefreshStatuses(statuses);
-				setOnlineData((prev) =>
-					Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith("ww-unified:"))) as OnlineData
+				setOnlineData(
+					(prev) =>
+						Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith("ww-unified:"))) as OnlineData
 				);
 				addToast({ type: "success", message: "在线源缓存刷新完成，重新进入列表会加载新缓存。" });
 			} catch (error) {
@@ -494,7 +502,9 @@ function RightOnline({ open }: { open: boolean }) {
 	);
 	const legacyReuseRoute = unifiedDetailViewState.legacyReuseRoute;
 	const shouldReuseLegacyGamebananaDetail = unifiedDetailViewState.shouldReuseLegacyComments;
-	const legacyReuseItem = shouldReuseLegacyGamebananaDetail ? getSelectedOnlineItem(onlineData, legacyReuseRoute) : null;
+	const legacyReuseItem = shouldReuseLegacyGamebananaDetail
+		? getSelectedOnlineItem(onlineData, legacyReuseRoute)
+		: null;
 	const commentsTargetRoute = unifiedDetailViewState.commentsTargetRoute;
 	const commentsTargetItem = commentsTargetRoute ? getSelectedOnlineItem(onlineData, commentsTargetRoute) : null;
 	const [ignoreGameCheck, setIgnoreGameCheck] = useState(false);
@@ -601,47 +611,52 @@ function RightOnline({ open }: { open: boolean }) {
 	}
 	async function addToDownloadQueue(file: OnlineDownloadFile) {
 		setDownloadList((prev) => {
-				//300ms promise await
-				// await new Promise(resolve => setTimeout(resolve, 300));
-				const dlitem: DownloadItem = {
-					status: "pending",
-					addon: altPopoverOpen,
-					preview: itemPreviewUrl,
-					category: itemCategoryName,
-					source: itemProfileUrl,
-					file: file._sDownloadUrl,
-					updated: file._tsDateAdded,
-					name: itemName + (altPopoverOpen ? ` - ${file._sFile}` : ""),
-					displayName: itemName,
-					fname: file._sFile,
-					requeueRounds: 0,
-					createdAt: Date.now(),
-				};
-				let count = 1;
-				const downloadList: DownloadItem[] = [
-					...(prev?.downloading || []),
-					...(prev?.extracting || []),
-					...(prev?.queue || []),
-					...(prev?.completed || []),
-					...(prev?.failed || []),
-				];
-				while (
-					downloadList.find((x) => x.name == dlitem.name && x.fname == dlitem.fname) ||
-					existingModSourceByName.get(dlitem.name) !== undefined && existingModSourceByName.get(dlitem.name) !== dlitem.source
-				) {
-					dlitem.name = `${itemName} (${count})`;
-					count++;
-				}
+			//300ms promise await
+			// await new Promise(resolve => setTimeout(resolve, 300));
+			const dlitem: DownloadItem = {
+				status: "pending",
+				addon: altPopoverOpen,
+				preview: itemPreviewUrl,
+				category: itemCategoryName,
+				source: itemProfileUrl,
+				file: file._sDownloadUrl,
+				updated: file._tsDateAdded,
+				name: itemName + (altPopoverOpen ? ` - ${file._sFile}` : ""),
+				displayName: itemName,
+				fname: file._sFile,
+				...(typeof file._nFilesize === "number" && file._nFilesize >= 0 ? { expectedSize: file._nFilesize } : {}),
+				...(/^[a-f0-9]{32}$/i.test(file._sMd5Checksum || "")
+					? { expectedHash: { algorithm: "md5" as const, value: file._sMd5Checksum as string } }
+					: {}),
+				requeueRounds: 0,
+				createdAt: Date.now(),
+			};
+			let count = 1;
+			const downloadList: DownloadItem[] = [
+				...(prev?.downloading || []),
+				...(prev?.extracting || []),
+				...(prev?.queue || []),
+				...(prev?.completed || []),
+				...(prev?.failed || []),
+			];
+			while (
+				downloadList.find((x) => x.name == dlitem.name && x.fname == dlitem.fname) ||
+				(existingModSourceByName.get(dlitem.name) !== undefined &&
+					existingModSourceByName.get(dlitem.name) !== dlitem.source)
+			) {
+				dlitem.name = `${itemName} (${count})`;
+				count++;
+			}
 
-				const nextList: DownloadList = {
-					downloading: prev?.downloading || [],
-					completed: prev?.completed || [],
-					queue: [...(prev?.queue || []), dlitem],
-					extracting: prev?.extracting || [],
-					failed: prev?.failed || [],
-				};
-				return nextList;
-			});
+			const nextList: DownloadList = {
+				downloading: prev?.downloading || [],
+				completed: prev?.completed || [],
+				queue: [...(prev?.queue || []), dlitem],
+				extracting: prev?.extracting || [],
+				failed: prev?.failed || [],
+			};
+			return nextList;
+		});
 		addToast({ type: "success", message: textData._Toasts.FileAdded });
 	}
 	const addUnifiedDownloadToQueue = (
@@ -781,7 +796,14 @@ function RightOnline({ open }: { open: boolean }) {
 				activeSourceId: activeUnifiedSource?.sourceId || "",
 			})}`
 		);
-	}, [activeUnifiedSource?.sourceId, isDevRuntime, isUnifiedSelected, legacyReuseRoute, selected, shouldReuseLegacyGamebananaDetail]);
+	}, [
+		activeUnifiedSource?.sourceId,
+		isDevRuntime,
+		isUnifiedSelected,
+		legacyReuseRoute,
+		selected,
+		shouldReuseLegacyGamebananaDetail,
+	]);
 	useEffect(() => {
 		if (isUnifiedSelected && unifiedDetailViewState.mode !== "legacy-reuse" && loadingComments) {
 			setLoadingComments(false);
@@ -809,7 +831,13 @@ function RightOnline({ open }: { open: boolean }) {
 				commentsTargetRoute,
 			})}`
 		);
-	}, [activeUnifiedSource?.sourceId, commentsTargetRoute, isDevRuntime, isUnifiedSelected, unifiedDetailViewState.mode]);
+	}, [
+		activeUnifiedSource?.sourceId,
+		commentsTargetRoute,
+		isDevRuntime,
+		isUnifiedSelected,
+		unifiedDetailViewState.mode,
+	]);
 	useEffect(() => {
 		if (
 			!isDevRuntime ||
@@ -926,7 +954,13 @@ function RightOnline({ open }: { open: boolean }) {
 		queueMicrotask(() => {
 			setLoadingComments(true);
 		});
-	}, [commentsTargetItem?._aComments, commentsTargetRoute, isDevRuntime, loadingComments, shouldReuseLegacyGamebananaDetail]);
+	}, [
+		commentsTargetItem?._aComments,
+		commentsTargetRoute,
+		isDevRuntime,
+		loadingComments,
+		shouldReuseLegacyGamebananaDetail,
+	]);
 	useEffect(() => {
 		if (!isUnifiedSelected || !effectiveUnifiedCard) {
 			queueMicrotask(() => {
@@ -1084,7 +1118,14 @@ function RightOnline({ open }: { open: boolean }) {
 				logError("Error auto detaching Afdian source:", error);
 			}
 		})();
-	}, [activeUnifiedSource?.sourceId, applyDetachedAfdianDetail, effectiveUnifiedCard, isDevRuntime, isUnifiedSelected, unifiedDetailViewState.mode]);
+	}, [
+		activeUnifiedSource?.sourceId,
+		applyDetachedAfdianDetail,
+		effectiveUnifiedCard,
+		isDevRuntime,
+		isUnifiedSelected,
+		unifiedDetailViewState.mode,
+	]);
 	useEffect(() => {
 		if (type != "Install" && item?._sProfileUrl) {
 			if (installedItem?.name) {
@@ -1118,6 +1159,10 @@ function RightOnline({ open }: { open: boolean }) {
 						name: itemName + (altPopoverOpen ? ` - ${file._sFile}` : ""),
 						displayName: itemName,
 						fname: file._sFile,
+						...(typeof file._nFilesize === "number" && file._nFilesize >= 0 ? { expectedSize: file._nFilesize } : {}),
+						...(/^[a-f0-9]{32}$/i.test(file._sMd5Checksum || "")
+							? { expectedHash: { algorithm: "md5" as const, value: file._sMd5Checksum as string } }
+							: {}),
 						requeueRounds: 0,
 						createdAt: Date.now(),
 					};
@@ -1131,7 +1176,8 @@ function RightOnline({ open }: { open: boolean }) {
 					];
 					while (
 						downloadList.find((x) => x.name == dlitem.name && x.fname == dlitem.fname) ||
-						(existingModSourceByName.get(dlitem.name) !== undefined && existingModSourceByName.get(dlitem.name) !== dlitem.source)
+						(existingModSourceByName.get(dlitem.name) !== undefined &&
+							existingModSourceByName.get(dlitem.name) !== dlitem.source)
 					) {
 						dlitem.name = `${itemName} (${count})`;
 						count++;
@@ -1182,9 +1228,15 @@ function RightOnline({ open }: { open: boolean }) {
 							})}`
 						);
 					}
-					const data = await apiClient.comments(commentsTargetRoute, Math.floor(currentComments.count / 15) + 1, signal);
+					const data = await apiClient.comments(
+						commentsTargetRoute,
+						Math.floor(currentComments.count / 15) + 1,
+						signal
+					);
 					if (!data || signal.aborted) return;
-					const records = ((data._aRecords || []) as OnlineComment[]).filter((comment: OnlineComment) => comment._aPoster);
+					const records = ((data._aRecords || []) as OnlineComment[]).filter(
+						(comment: OnlineComment) => comment._aPoster
+					);
 					const nextComments = {
 						...currentComments,
 						total: data._aMetadata._nRecordCount,
@@ -1205,13 +1257,16 @@ function RightOnline({ open }: { open: boolean }) {
 						},
 						list: [...currentComments.list, ...records.map((comment: OnlineComment) => comment._idRow)],
 					};
-					setOnlineData((prev) => ({
-						...prev,
-						[commentsTargetRoute]: {
-							...getSelectedOnlineItem(prev, commentsTargetRoute),
-							_aComments: nextComments,
-						},
-					}) as OnlineData);
+					setOnlineData(
+						(prev) =>
+							({
+								...prev,
+								[commentsTargetRoute]: {
+									...getSelectedOnlineItem(prev, commentsTargetRoute),
+									_aComments: nextComments,
+								},
+							}) as OnlineData
+					);
 				}
 			} catch (e) {
 				logError("Error fetching comments:", e);
@@ -1230,9 +1285,9 @@ function RightOnline({ open }: { open: boolean }) {
 					})}`
 				);
 			}
-			const children = (((await apiClient.nestedcomments(String(comment._idRow)))?._aRecords || []) as OnlineComment[]).filter(
-				(childComment: OnlineComment) => childComment._aPoster
-			);
+			const children = (
+				((await apiClient.nestedcomments(String(comment._idRow)))?._aRecords || []) as OnlineComment[]
+			).filter((childComment: OnlineComment) => childComment._aPoster);
 			setOnlineData((prev) => {
 				const prevItem = getSelectedOnlineItem(prev, commentsTargetRoute);
 				return {
@@ -1291,7 +1346,10 @@ function RightOnline({ open }: { open: boolean }) {
 
 		const nextReplyComment = commentState.list
 			.map((commentId: number) => commentState.data?.[commentId])
-			.find((comment: OnlineComment | undefined) => comment?._nReplyCount && !(comment.children && comment.children.length > 0));
+			.find(
+				(comment: OnlineComment | undefined) =>
+					comment?._nReplyCount && !(comment.children && comment.children.length > 0)
+			);
 		if (!nextReplyComment || automationState.replyCommentId) {
 			return;
 		}
@@ -1401,10 +1459,7 @@ function RightOnline({ open }: { open: boolean }) {
 			return;
 		}
 
-		const sourceItem = findUnifiedListCardForSource(
-			getUnifiedCacheItems(onlineData, unifiedCacheKey),
-			"keke"
-		);
+		const sourceItem = findUnifiedListCardForSource(getUnifiedCacheItems(onlineData, unifiedCacheKey), "keke");
 		if (!sourceItem) {
 			return;
 		}
@@ -1426,7 +1481,16 @@ function RightOnline({ open }: { open: boolean }) {
 			}));
 			setOnlineSelected(route);
 		});
-	}, [activeUnifiedSource, isDevRuntime, isUnifiedSelected, onlineData, setOnlineData, setOnlineSelected, unifiedCacheKey, unifiedDetailViewState.mode]);
+	}, [
+		activeUnifiedSource,
+		isDevRuntime,
+		isUnifiedSelected,
+		onlineData,
+		setOnlineData,
+		setOnlineSelected,
+		unifiedCacheKey,
+		unifiedDetailViewState.mode,
+	]);
 	useEffect(() => {
 		if (
 			!isDevRuntime ||
@@ -1462,7 +1526,14 @@ function RightOnline({ open }: { open: boolean }) {
 			})}`
 		);
 		setSelectedUnifiedSourceId(nextFallbackSourceId);
-	}, [activeUnifiedSource, effectiveUnifiedCard, isDevRuntime, isUnifiedSelected, selected, unifiedDetailViewState.mode]);
+	}, [
+		activeUnifiedSource,
+		effectiveUnifiedCard,
+		isDevRuntime,
+		isUnifiedSelected,
+		selected,
+		unifiedDetailViewState.mode,
+	]);
 	useEffect(() => {
 		if (loadingComments && commentsTargetRoute) {
 			if (commentsFetchInFlightRef.current) {
@@ -1582,28 +1653,26 @@ function RightOnline({ open }: { open: boolean }) {
 								}}
 							>
 								<div className={`flex items-center rounded p-1 pt-2 pl-2 gap-2 ${isSubmitter && "bg-accent/10"}`}>
-									<img
+									<RemoteImage
 										className="aspect-square outline bg-accent/10 flex items-center justify-center object-cover h-10 text-white rounded-full pointer-events-none"
-										onError={handleImageError}
 										src={comment._aPoster?._sAvatarUrl || "err"}
+										fallbackSrc="/who.jpg"
 									/>
 									<div className="flex flex-col">
 										{comment._aPoster?._sUpicUrl ? (
-											<img src={comment._aPoster?._sUpicUrl} className="max-h-4" alt="User Pic" />
+											<RemoteImage src={comment._aPoster?._sUpicUrl} className="max-h-4" alt="User Pic" />
 										) : (
 											<span className="text-accent select-text font-medium">{comment._aPoster?._sName}</span>
 										)}
 										<span className="text-[10px] font-medium">{comment._aPoster?._sUserTitle}</span>
 									</div>
-									{isSubmitter && (
-										<span className="text-xs rounded px-1 bg-accent text-background">{"Submitter"}</span>
-									)}
+									{isSubmitter && <span className="text-xs rounded px-1 bg-accent text-background">{"Submitter"}</span>}
 									<span className="text-xs text-gray-400">
 										{getTimeDifference(now, comment._tsDateModified || comment._tsDateAdded || 0)}
 									</span>
 									{(comment._iPinLevel || 0) > 0 && <PinIcon className="h-4 fill-accent stroke-accent" />}
 									{comment._aPoster?._sSigUrl && (
-										<img src={comment._aPoster?._sSigUrl} className="max-h-4" alt="User Pic" />
+										<RemoteImage src={comment._aPoster?._sSigUrl} className="max-h-4" alt="User Pic" />
 									)}
 									{comment._aStamps?.map((stamp: OnlineStamp, stampIndex: number) => (
 										<span
@@ -1617,7 +1686,8 @@ function RightOnline({ open }: { open: boolean }) {
 								</div>
 								<div className="w-full flex flex-col gap-4 h-auto overflow-hidden pl-14 pb-3 pr-3">
 									<SafeHtml html={comment._sText || ""} className="w-full select-text duration-200 font-sans " />
-									{(comment.children?.length || 0) > 0 && recursiveComments(detailItem, comment.children || [], depth + 1)}
+									{(comment.children?.length || 0) > 0 &&
+										recursiveComments(detailItem, comment.children || [], depth + 1)}
 									{(comment._nReplyCount || 0) > 0 && !comment.children && (
 										<Button
 											variant="outline"
@@ -1663,9 +1733,7 @@ function RightOnline({ open }: { open: boolean }) {
 							<Button
 								className={
 									"w-full flex justify-between bg-accent bgaccent   text-background " +
-									(aboutOpen
-										? "hover:brightness-125"
-										: "bg-input/50 text-accent hover:text-accent hover:bg-input")
+									(aboutOpen ? "hover:brightness-125" : "bg-input/50 text-accent hover:text-accent hover:bg-input")
 								}
 							>
 								{textData._RightSideBar._RightOnline.About}{" "}
@@ -1696,9 +1764,7 @@ function RightOnline({ open }: { open: boolean }) {
 							<Button
 								className={
 									"w-full flex justify-between bg-accent bgaccent   text-background " +
-									(updateOpen
-										? "hover:brightness-125"
-										: "bg-input/50 text-accent hover:text-accent hover:bg-input")
+									(updateOpen ? "hover:brightness-125" : "bg-input/50 text-accent hover:text-accent hover:bg-input")
 								}
 							>
 								{textData._RightSideBar._RightOnline.Updates}{" "}
@@ -1736,9 +1802,7 @@ function RightOnline({ open }: { open: boolean }) {
 														</div>
 													))}
 											</div>
-											{itm._sText && (
-												<SafeHtml html={itm._sText} className="w-full font-sans" />
-											)}
+											{itm._sText && <SafeHtml html={itm._sText} className="w-full font-sans" />}
 										</div>
 									</>
 								))}
@@ -1762,9 +1826,7 @@ function RightOnline({ open }: { open: boolean }) {
 						<Button
 							className={
 								"w-full flex justify-between bg-accent bgaccent   text-background " +
-								(commentsOpen
-									? "hover:brightness-125"
-									: "bg-input/50 text-accent hover:text-accent hover:bg-input")
+								(commentsOpen ? "hover:brightness-125" : "bg-input/50 text-accent hover:text-accent hover:bg-input")
 							}
 						>
 							{textData._RightSideBar._RightOnline.Comments}{" "}
@@ -2042,7 +2104,10 @@ function RightOnline({ open }: { open: boolean }) {
 												<div className="text-sm font-medium">详情概览</div>
 												<div className="mt-3 grid grid-cols-1 gap-2">
 													{unifiedDetailOverviewRows.map((row) => (
-														<div key={`overview-${row.label}`} className="rounded-md border bg-background/40 p-3 text-sm">
+														<div
+															key={`overview-${row.label}`}
+															className="rounded-md border bg-background/40 p-3 text-sm"
+														>
 															<div className="text-xs text-muted-foreground">{row.label}</div>
 															<div className="mt-1 font-medium break-words">{row.value}</div>
 														</div>
@@ -2057,16 +2122,16 @@ function RightOnline({ open }: { open: boolean }) {
 											</div>
 										) : (
 											(unifiedDetailDescriptionHtml || unifiedDetailDescription) && (
-											<div className="rounded-lg border bg-input/20 p-3">
-												<div className="text-sm font-medium">详情说明</div>
-												<div className="mt-3 rounded-md border bg-background/40 p-3 text-sm">
-													{unifiedDetailDescriptionHtml ? (
-														<SafeHtml html={unifiedDetailDescriptionHtml} className="font-sans break-words" />
-													) : (
-														<div className="break-words whitespace-pre-wrap">{unifiedDetailDescription}</div>
-													)}
+												<div className="rounded-lg border bg-input/20 p-3">
+													<div className="text-sm font-medium">详情说明</div>
+													<div className="mt-3 rounded-md border bg-background/40 p-3 text-sm">
+														{unifiedDetailDescriptionHtml ? (
+															<SafeHtml html={unifiedDetailDescriptionHtml} className="font-sans break-words" />
+														) : (
+															<div className="break-words whitespace-pre-wrap">{unifiedDetailDescription}</div>
+														)}
+													</div>
 												</div>
-											</div>
 											)
 										)}
 
@@ -2119,9 +2184,7 @@ function RightOnline({ open }: { open: boolean }) {
 																</div>
 															)}
 															{update.summary && (
-																<div className="mt-2 text-sm text-muted-foreground break-words">
-																	{update.summary}
-																</div>
+																<div className="mt-2 text-sm text-muted-foreground break-words">{update.summary}</div>
 															)}
 															{update.url && (
 																<Button
@@ -2202,7 +2265,10 @@ function RightOnline({ open }: { open: boolean }) {
 											<div className="mt-3 flex flex-col gap-2">
 												{unifiedDuplicateEvidenceRows.length > 0 ? (
 													unifiedDuplicateEvidenceRows.map((row) => (
-														<div key={`evidence-${row.label}`} className="rounded-md border bg-background/40 p-3 text-sm">
+														<div
+															key={`evidence-${row.label}`}
+															className="rounded-md border bg-background/40 p-3 text-sm"
+														>
 															<div className="text-xs text-muted-foreground">{row.label}</div>
 															<div className="mt-1 font-medium break-words">{row.value}</div>
 														</div>
@@ -2219,7 +2285,10 @@ function RightOnline({ open }: { open: boolean }) {
 											<div className="text-sm font-medium">来源列表</div>
 											<div className="mt-3 flex flex-col gap-2">
 												{(effectiveUnifiedCard?.sources || []).map((source: UnifiedSourceVariant) => (
-													<div key={`${source.sourceId}:${source.sourceModId}`} className="rounded-md border bg-background/40 p-3">
+													<div
+														key={`${source.sourceId}:${source.sourceModId}`}
+														className="rounded-md border bg-background/40 p-3"
+													>
 														<div className="flex items-center justify-between gap-2">
 															<div className="font-medium break-words">{source.title}</div>
 															<div className="text-xs text-muted-foreground">{source.sourceId}</div>
@@ -2321,16 +2390,16 @@ function RightOnline({ open }: { open: boolean }) {
 																<Button
 																	className="min-w-24"
 																	onClick={async () => {
-																	if (!effectiveUnifiedCard) return;
-																	try {
-																		const detail = await attachAfdianCandidateToUnifiedCard(
-																			effectiveUnifiedCard.cardId,
-																			candidate.detailUrl
-																		);
-																		applyAdoptedAfdianDetail(detail, candidate.detailUrl);
-																		addToast({
-																			type: "success",
-																			message: "已采纳爱发电候选来源",
+																		if (!effectiveUnifiedCard) return;
+																		try {
+																			const detail = await attachAfdianCandidateToUnifiedCard(
+																				effectiveUnifiedCard.cardId,
+																				candidate.detailUrl
+																			);
+																			applyAdoptedAfdianDetail(detail, candidate.detailUrl);
+																			addToast({
+																				type: "success",
+																				message: "已采纳爱发电候选来源",
 																			});
 																		} catch (error) {
 																			logError("Error adopting Afdian candidate:", error);
@@ -2388,12 +2457,13 @@ function RightOnline({ open }: { open: boolean }) {
 							>
 								<div className="text-accent min-h-16 flex items-center justify-start w-full gap-3 px-3 border-b">
 									<div className="min-w-fit trs bg-button zzz-border flex items-center gap-2 p-2 rounded-md">
-										<img
+										<RemoteImage
 											className="aspect-square min-w-6 max-w-6 scale-120 ctrs h-full rounded-full pointer-events-none"
 											onError={(e) => {
 												e.currentTarget.src = "/who.jpg";
 											}}
 											src={item._aCategory?._sIconUrl || "err"}
+											fallbackSrc="/who.jpg"
 										/>
 
 										<span className="ctrs">{item._aCategory?._sName.split(" ")[0]}</span>
@@ -2482,6 +2552,7 @@ function RightOnline({ open }: { open: boolean }) {
 																						savePath: await createModDownloadDir(mod.parent, mod.name),
 																						key: "link_preview_" + mod.name,
 																						emit: false,
+																						game,
 																					});
 																				}
 																				setData((prev) => {
@@ -2516,12 +2587,13 @@ function RightOnline({ open }: { open: boolean }) {
 																			}}
 																			className="button-like zzz-fg-text data-zzz:mt-1"
 																		>
-																			<img
+																			<RemoteImage
 																				className="aspect-square outline bg-accent/10 flex items-center justify-center object-cover h-12 text-white rounded-full pointer-events-none"
 																				onError={(e) => {
 																					e.currentTarget.src = "/who.jpg";
 																				}}
 																				src={getImageUrl(mod.path) || "err"}
+																				fallbackSrc="/who.jpg"
 																				style={{}}
 																			/>
 
@@ -2544,12 +2616,13 @@ function RightOnline({ open }: { open: boolean }) {
 										</PopoverContent>
 									</Popover>
 									<div className="min-w-fit trs bg-button zzz-border flex items-center gap-2 p-2 rounded-md">
-										<img
+										<RemoteImage
 											className="aspect-square min-w-6 max-w-6 scale-120 ctrs h-full rounded-full pointer-events-none"
 											onError={(e) => {
 												e.currentTarget.src = "/who.jpg";
 											}}
 											src={item._aSubmitter?._sAvatarUrl || "err"}
+											fallbackSrc="/who.jpg"
 										/>
 
 										<span className="ctrs">{item._aSubmitter?._sName}</span>

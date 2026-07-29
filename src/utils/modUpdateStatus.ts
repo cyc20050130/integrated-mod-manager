@@ -23,11 +23,7 @@ export function computeLatestRemoteTimestamp(profile: GameBananaProfileLike, fal
 	return latest;
 }
 
-export function computeModUpdateStatus(input: {
-	updatedAt: number;
-	viewedAt: number;
-	profile: GameBananaProfileLike;
-}) {
+export function computeModUpdateStatus(input: { updatedAt: number; viewedAt: number; profile: GameBananaProfileLike }) {
 	const latest = computeLatestRemoteTimestamp(input.profile, input.updatedAt || 0);
 	if (!(input.updatedAt < latest)) {
 		return { latest, modStatus: 0 as const };

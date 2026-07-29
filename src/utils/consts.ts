@@ -9,14 +9,15 @@ import {
 	Language,
 	Mod,
 	ModDataObj,
+	NteRegion,
 	OnlineData,
 	PreviewBackfillState,
 	Preset,
 	Settings,
 } from "./types";
 import { info } from "@/lib/logger";
+import { GAME_REGISTRY } from "./gameRegistry";
 
-export const IMAGE_SERVER = "http://127.0.0.1:1469/preview";
 export const OLD_RESTORE = "DISABLED_RESTORE";
 export const RESTORE = "RESTORE";
 export const IGNORE = "IGNORE";
@@ -28,24 +29,16 @@ export const OLD_managedSRC = "DISABLED (Managed by IMM)";
 export const OLD_managedTGT = "Mods (Managed by IMM)";
 export const managedSRC = "DISABLED - ALL MODS ARE STORED HERE (Managed by IMM)";
 export const managedTGT = "DO NOT MODIFY (Managed by IMM)";
-export const VERSION = "3.2.19";
-export const GAMES: Games[] = ["WW", "ZZ", "GI", "SR", "EF"];
+export const VERSION = "3.2.20";
+export const GAMES: Games[] = Object.keys(GAME_REGISTRY) as Games[];
 export const GAME_GB_IDS: { [key: number]: Games } = {
-	20357: "WW",
-	19567: "ZZ",
-	8552: "GI",
-	18366: "SR",
-	21842: "EF",
+	...Object.fromEntries(Object.values(GAME_REGISTRY).map((entry) => [entry.gameBananaId, entry.key])),
 	0: "",
 };
 export const GAME_NAMES: { [key in Games]: string } = {
-	WW: "WuWa",
-	ZZ: "Z·Z·Z",
+	...Object.fromEntries(Object.values(GAME_REGISTRY).map((entry) => [entry.key, entry.displayName])),
 	"": "Integrated",
-	GI: "Genshin",
-	SR: "Star Rail",
-	EF: "Endfield",
-};
+} as { [key in Games]: string };
 export const exts = ["png", "jpg", "jpeg", "webp", "gif"];
 export const PRIORITY_KEYS = ["Alt", "Ctrl", "Shift", "Capslock", "Tab", "Up", "Down", "Left", "Right"] as const;
 export const LANG_LIST: { Name: string; Flag: string; Code: Language }[] = [
@@ -81,13 +74,9 @@ export const ONLINE_TRANSITION = (online: boolean, move = false) => ({
 	exit: { opacity: 0, x: move ? (online ? "25%" : "-25%") : 0 },
 	transition: { duration: 0.2 },
 });
-export const GAME_ID_MAP: { [key: string]: number } = {
-	WW: 0,
-	ZZ: 1,
-	GI: 2,
-	SR: 3,
-	EF: 4,
-};
+export const GAME_ID_MAP: { [key: string]: number } = Object.fromEntries(
+	Object.values(GAME_REGISTRY).map((entry) => [entry.key, entry.serializedId])
+);
 export const DEFAULTS = {
 	INIT_DONE: false,
 	LANG: "en" as Language,
@@ -102,20 +91,20 @@ export const DEFAULTS = {
 			nsfw: 1,
 			toggleClick: 2,
 			ignore: "",
-				clientDate: "1759866302559426603",
-				XXMI: "",
-				lang: "",
-				game: "",
-				preReleases: false,
-				chkModUpdates: true,
-				onlineBlacklist: [],
-				wuwaModFixer: {
-					version: "",
-					exePath: "",
-					checkedAt: 0,
-					releaseUrl: "",
-				},
+			clientDate: "1759866302559426603",
+			XXMI: "",
+			lang: "",
+			game: "",
+			preReleases: false,
+			chkModUpdates: true,
+			onlineBlacklist: [],
+			wuwaModFixer: {
+				version: "",
+				exePath: "",
+				checkedAt: 0,
+				releaseUrl: "",
 			},
+		},
 		game: {
 			launch: 0,
 			hotReload: 1,
@@ -137,6 +126,7 @@ export const DEFAULTS = {
 	SOURCE: "",
 	TARGET: "",
 	XXMI_MODE: 0 as 0 | 1,
+	NTE_REGION: "auto" as NteRegion,
 	DATA: {} as ModDataObj,
 	PRESETS: [] as Preset[],
 	CATEGORIES: [] as Category[],

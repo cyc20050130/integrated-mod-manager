@@ -10,6 +10,7 @@ import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { open } from "@tauri-apps/plugin-dialog";
 import { error } from "@/lib/logger";
 import { invoke } from "@tauri-apps/api/core";
+import { persistNteConfig } from "./nteConfigRevision";
 
 const DISCORD_LINK = "https://discord.gg/QGkKzNapXZ";
 const BANANA_LINK = "https://gamebanana.com/mods/593490";
@@ -102,7 +103,9 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, S
 			if (filePath) {
 				const content = JSON.parse(await readTextFile(filePath as string));
 				if (content && content.game && error.includes(content.game)) {
-					await writeTextFile(`config${content.game}.json`, JSON.stringify(content, null, 2));
+					const serialized = JSON.stringify(content, null, 2);
+					if (content.game === "NTE") await persistNteConfig(serialized);
+					else await writeTextFile(`config${content.game}.json`, serialized);
 					window.location.reload();
 				}
 			}
@@ -126,10 +129,7 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, S
 					}}
 				></div>
 				<div className="w-full font-en flex flex-col backdrop-blur-[3px] gap-2 h-screen items-center justify-center bg-background/25 game-font">
-					<img
-						src="https://media.tenor.com/gSPV57XXMsAAAAAj/seseren.gif"
-						style={{ objectFit: "cover", objectPosition: "0 -12px" }}
-					/>
+					<img src="/IMMDecor.png" style={{ objectFit: "cover", objectPosition: "0 -12px" }} />
 					<div className="text-accent text-5xl">Oh no!</div>
 					<div className="text-sm text-muted-foreground mb-4">Something went wrong and the app cannot continue.</div>
 
@@ -160,7 +160,7 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, S
 						<Button className="w-36" onClick={() => resetWithBackup()} aria-label="Copy error details">
 							Backup & Reset
 						</Button>
-						<Button className="w-36" onClick={() => invoke('open_logs_folder')} aria-label="Copy error details">
+						<Button className="w-36" onClick={() => invoke("open_logs_folder")} aria-label="Copy error details">
 							Open Logs Folder
 						</Button>
 					</div>

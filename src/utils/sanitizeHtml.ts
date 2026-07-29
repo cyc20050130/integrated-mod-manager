@@ -2,6 +2,22 @@ import DOMPurify from "dompurify";
 
 const ALLOWED_URI_REGEXP = /^(?:(?:https?|mailto|tel):|[/?#])/i;
 const SAFE_HTML_URL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
+const FORBID_TAGS = [
+	"img",
+	"picture",
+	"source",
+	"video",
+	"audio",
+	"iframe",
+	"object",
+	"embed",
+	"svg",
+	"math",
+	"form",
+	"input",
+	"button",
+	"style",
+];
 
 export const isSafeExternalUrl = (url: string): boolean => {
 	try {
@@ -81,6 +97,7 @@ export const sanitizeHtml = (html: string): string => {
 	const sanitized = DOMPurify.sanitize(html, {
 		ALLOWED_URI_REGEXP,
 		ADD_ATTR: ["target", "rel"],
+		FORBID_TAGS,
 	});
 	return hardenAnchorElements(sanitized);
 };
