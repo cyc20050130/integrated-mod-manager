@@ -2,6 +2,7 @@ import { addToast } from "@/_Toaster/ToastProvider";
 import { invoke } from "@tauri-apps/api/core";
 import { managedSRC, exts, GAMES } from "./consts";
 import { getGameBananaProvider } from "./api";
+import { normalizeGameBananaPreviewMedia } from "./gameBananaPreview";
 import {
 	DATA,
 	GAME,
@@ -525,9 +526,8 @@ async function fetchPreviewUrl(game: Games, source: string) {
 	if (!route) return "";
 	try {
 		const mod = (await getGameBananaProvider(game).mod(route)) as Pick<OnlineMod, "_aPreviewMedia">;
-		const image = mod?._aPreviewMedia?._aImages?.[0];
-		if (!image?._sBaseUrl || !image?._sFile) return "";
-		return `${image._sBaseUrl}/${image._sFile}`;
+		const preview = normalizeGameBananaPreviewMedia(mod?._aPreviewMedia);
+		return preview.kind === "ready" ? preview.url : "";
 	} catch {
 		return "";
 	}

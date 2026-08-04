@@ -1,14 +1,30 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Carousel as CarouselCN, CarouselContent, CarouselItem } from "@/components/ui/carousel";
 // import { OnlineModImage } from "@/utils/types";
 import type { EmblaCarouselType } from "embla-carousel";
 import { RemoteImage } from "@/components/RemoteImage";
+import { GameBananaModPreview } from "@/components/GameBananaModPreview";
+import { normalizeGameBananaImage } from "@/utils/gameBananaPreview";
+import type { OnlineModImage } from "@/utils/types";
 
-type PreviewImageLike = { _sBaseUrl: string; _sFile: string };
+type PreviewImageLike = OnlineModImage;
 
-function Carousel({ data, big }: { data: PreviewImageLike[]; big?: boolean }) {
+function Carousel({ data, big, modOnly = false }: { data: PreviewImageLike[]; big?: boolean; modOnly?: boolean }) {
 	big = big || false;
 	const w = big ? "45rem" : "12.5rem";
+	const previews = useMemo(() => {
+		const seen = new Set<string>();
+		if (!modOnly)
+			return data.map((item) => ({ item, preview: null as ReturnType<typeof normalizeGameBananaImage> | null }));
+		return data.flatMap((item) => {
+			const preview = normalizeGameBananaImage(item);
+			if (preview.kind === "ready") {
+				if (seen.has(preview.url)) return [];
+				seen.add(preview.url);
+			}
+			return [{ item, preview }];
+		});
+	}, [data, modOnly]);
 	const [current, setCurrent] = useState(0);
 	const [api, setApi] = useState<EmblaCarouselType | undefined>();
 	useEffect(() => {
@@ -21,25 +37,43 @@ function Carousel({ data, big }: { data: PreviewImageLike[]; big?: boolean }) {
 			api.off("select", onSelect);
 		};
 	}, [api]);
+	useEffect(() => {
+		setCurrent(0);
+		api?.scrollTo(0);
+	}, [api, previews]);
 	return (
 		<>
 			<CarouselCN
 				setApi={setApi}
 				opts={{ loop: true }}
-				className="aspect-video min-w-full max-w-full min-h-[calc(100%-4rem)] overflow-hidden  pointer-events-none rounded-lg"
+				className="aspect-video min-w-full max-w-full min-h-[calc(100%-4rem)] overflow-hidden rounded-lg"
 			>
 				<CarouselContent className="aspect-video min-w-full min-h-full">
-					{data?.map((item, index) => (
-						<CarouselItem key={index} className="flex flex-col overflow-hidden">
+					{previews.map(({ item, preview }, index) => (
+						<CarouselItem
+							key={preview?.kind === "ready" ? preview.url : `${preview?.kind || "raw"}:${index}`}
+							className="flex flex-col overflow-hidden"
+						>
 							<div className="flex aspect-video flex-col overflow-hidden rounded-lg border bg-black/20">
-								<RemoteImage
-									className="h-full w-full object-contain"
-									src={item._sBaseUrl + "/" + item._sFile}
-									fallbackSrc="/who.jpg"
-									loading={index === 0 ? "eager" : "lazy"}
-									decoding="async"
-									alt=""
-								/>
+								{modOnly ? (
+									<GameBananaModPreview
+										className="h-full w-full object-contain"
+										source={preview?.kind === "ready" ? preview.url : ""}
+										{...(preview ? { resolution: preview } : {})}
+										loading={index === 0 ? "eager" : "lazy"}
+										decoding="async"
+										alt=""
+									/>
+								) : (
+									<RemoteImage
+										className="h-full w-full object-contain"
+										src={`${item._sBaseUrl}/${item._sFile}`}
+										fallbackSrc="/who.jpg"
+										loading={index === 0 ? "eager" : "lazy"}
+										decoding="async"
+										alt=""
+									/>
+								)}
 							</div>
 						</CarouselItem>
 					))}
@@ -51,7 +85,7 @@ function Carousel({ data, big }: { data: PreviewImageLike[]; big?: boolean }) {
 					width: w,
 				}}
 			>
-				{data?.map((_, index) => (
+				{previews.map((_, index) => (
 					<div
 						key={`preview-dot-${index}`}
 						className={

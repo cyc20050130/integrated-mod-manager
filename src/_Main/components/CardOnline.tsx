@@ -3,6 +3,8 @@ import { EyeOffIcon, LoaderIcon, MessageSquareIcon, PlusIcon, ThumbsUpIcon, Tria
 import { getTimeDifference } from "@/utils/utils";
 import { Button } from "@/components/ui/button";
 import { RemoteImage } from "@/components/RemoteImage";
+import { GameBananaModPreview } from "@/components/GameBananaModPreview";
+import { normalizeGameBananaPreviewMedia } from "@/utils/gameBananaPreview";
 
 interface CardOnlineProps {
 	_sName: string;
@@ -34,24 +36,40 @@ const statusBadgeClass =
 
 const Online = React.memo((data: CardOnlineProps) => {
 	const [revealed, setRevealed] = useState(false);
-	const backgroundImage = data._aPreviewMedia?._aImages?.[0]
+	const preview = normalizeGameBananaPreviewMedia(data._aPreviewMedia);
+	const rawBackgroundImage = data._aPreviewMedia?._aImages?.[0]
 		? `${data._aPreviewMedia._aImages[0]._sBaseUrl}/${data._aPreviewMedia._aImages[0]._sFile}`
-		: "/err";
+		: "";
+	const backgroundImage =
+		data._sModelName === "Mod" ? (preview.kind === "ready" ? preview.url : "") : rawBackgroundImage;
 	const needsBlur = data._sInitialVisibility === "hide" && data.blur === true && !revealed;
 
 	return (
 		<div className="card-generic card-online">
 			<div className="relative min-h-full overflow-hidden rounded-t-lg data-gi:rounded-none">
-				<RemoteImage
-					className="fadein flex min-h-full w-full items-center justify-center object-cover duration-200 pointer-events-none"
-					src={backgroundImage}
-					fallbackSrc="/who.jpg"
-					loading="lazy"
-					decoding="async"
-					style={{
-						filter: needsBlur ? "brightness(0.5) blur(4px)" : "brightness(1)",
-					}}
-				/>
+				{data._sModelName === "Mod" ? (
+					<GameBananaModPreview
+						className="fadein flex min-h-full w-full items-center justify-center object-cover duration-200 pointer-events-none"
+						source={backgroundImage}
+						resolution={preview}
+						loading="lazy"
+						decoding="async"
+						style={{
+							filter: needsBlur ? "brightness(0.5) blur(4px)" : "brightness(1)",
+						}}
+					/>
+				) : (
+					<RemoteImage
+						className="fadein flex min-h-full w-full items-center justify-center object-cover duration-200 pointer-events-none"
+						src={backgroundImage}
+						fallbackSrc="/who.jpg"
+						loading="lazy"
+						decoding="async"
+						style={{
+							filter: needsBlur ? "brightness(0.5) blur(4px)" : "brightness(1)",
+						}}
+					/>
+				)}
 				<div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2">
 					<div className="max-w-[6.5rem] rounded-md bg-background/60 px-2 py-1 text-xs text-accent backdrop-blur">
 						{data._sModelName}

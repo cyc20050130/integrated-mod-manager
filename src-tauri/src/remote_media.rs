@@ -36,6 +36,7 @@ static REMOTE_MEDIA_DOWNLOADS: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(4))
 static REMOTE_MEDIA_DECODERS: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
 static REMOTE_MEDIA_REQUEST_SLOTS: Lazy<Semaphore> =
     Lazy::new(|| Semaphore::new(MAX_REMOTE_MEDIA_REQUESTS));
+static GAMEBANANA_MOD_PREVIEW_SLOTS: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(3));
 type RemoteMediaFlightResult = Result<String, String>;
 type RemoteMediaFlightSender = watch::Sender<Option<RemoteMediaFlightResult>>;
 static REMOTE_MEDIA_FLIGHTS: Lazy<AsyncMutex<BTreeMap<String, Arc<RemoteMediaFlightSender>>>> =
@@ -817,9 +818,6 @@ pub(crate) async fn resolve_remote_media_in_app_data(
         return Ok(PathBuf::from(path));
     }
 
-    let _request_slot = REMOTE_MEDIA_REQUEST_SLOTS
-        .try_acquire()
-        .map_err(|_| "Remote media request queue is full.".to_string())?;
     let (leader, follower) = {
         let mut flights = REMOTE_MEDIA_FLIGHTS.lock().await;
         if let Some(sender) = flights.get(&normalized_url) {
@@ -836,6 +834,12 @@ pub(crate) async fn resolve_remote_media_in_app_data(
             .await
             .map(PathBuf::from);
     }
+
+    let _request_slot =
+        tokio::time::timeout(Duration::from_secs(8), REMOTE_MEDIA_REQUEST_SLOTS.acquire())
+            .await
+            .map_err(|_| "Remote media request queue timed out.".to_string())?
+            .map_err(|_| "Remote media request queue is unavailable.".to_string())?;
 
     let result = resolve_remote_media_leader(&cache_dir, &normalized_url, validated).await;
     if let Some(sender) = leader {
@@ -857,6 +861,81 @@ pub async fn resolve_remote_media(
     resolve_remote_media_in_app_data(&app_local_data, &url)
         .await
         .map(|path| path.to_string_lossy().to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameBananaModPreviewAsset {
+    pub path: String,
+    pub content_hash: String,
+    pub cache_generation: u64,
+}
+
+pub(crate) async fn resolve_gamebanana_mod_preview_in_app_data(
+    app_local_data: &Path,
+    url: &str,
+) -> Result<GameBananaModPreviewAsset, String> {
+    let _mod_slot = tokio::time::timeout(
+        Duration::from_secs(8),
+        GAMEBANANA_MOD_PREVIEW_SLOTS.acquire(),
+    )
+    .await
+    .map_err(|_| "GameBanana Mod preview queue timed out.".to_string())?
+    .map_err(|_| "GameBanana Mod preview queue is unavailable.".to_string())?;
+    let path = resolve_remote_media_in_app_data(app_local_data, url).await?;
+    let content_hash = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| is_lower_hex_hash(value))
+        .ok_or_else(|| "GameBanana Mod preview cache identity is invalid.".to_string())?
+        .to_string();
+    Ok(GameBananaModPreviewAsset {
+        path: path.to_string_lossy().to_string(),
+        content_hash,
+        cache_generation: now_millis(),
+    })
+}
+
+pub(crate) fn invalidate_remote_media_in_app_data(
+    app_local_data: &Path,
+    url: &str,
+) -> Result<(), String> {
+    let validated = validate_remote_media_url(url)?;
+    let normalized_url = validated.to_string();
+    let cache_dir = app_local_data.join("preview-cache").join("remote-media");
+    let _guard = REMOTE_MEDIA_CACHE_LOCK
+        .lock()
+        .map_err(|_| "Remote media cache lock is poisoned.".to_string())?;
+    let mut index = read_cache_index(&cache_dir);
+    let url_key = sha256_hex(normalized_url.as_bytes());
+    if index.entries.remove(&url_key).is_some() {
+        write_cache_index(&cache_dir, &index)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn resolve_gamebanana_mod_preview(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> Result<GameBananaModPreviewAsset, String> {
+    let app_local_data = app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| format!("Unable to resolve remote media cache: {err}"))?;
+    resolve_gamebanana_mod_preview_in_app_data(&app_local_data, &url).await
+}
+
+#[tauri::command]
+pub async fn invalidate_gamebanana_mod_preview(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> Result<(), String> {
+    let app_local_data = app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| format!("Unable to resolve remote media cache: {err}"))?;
+    invalidate_remote_media_in_app_data(&app_local_data, &url)
 }
 
 fn validate_health_segment(value: &str, label: &str, max_len: usize) -> Result<(), String> {

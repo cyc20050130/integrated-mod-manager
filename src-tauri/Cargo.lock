@@ -2186,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "integrated-mod-manager"
-version = "3.2.21"
+version = "3.2.22"
 dependencies = [
  "atomic-write-file",
  "cap-fs-ext",

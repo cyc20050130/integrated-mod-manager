@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Switch } from "@/components/ui/switch";
 import { getGameBananaProvider, isGameBananaAbortError } from "@/utils/api";
 import { GAME_GB_IDS, UNCATEGORIZED } from "@/utils/consts";
+import { normalizeGameBananaPreviewMedia } from "@/utils/gameBananaPreview";
 import { refreshModList, saveConfigs, saveGameBananaBinding } from "@/utils/filesys";
 import {
 	createGameBananaBinding,
@@ -161,7 +162,9 @@ function getSelectedDetail(data: OnlineData, selected: string): OnlineDetail | n
 
 function previewUrl(item: OnlineDetail | null): string {
 	const image = item?._aPreviewMedia?._aImages?.[0];
-	return image ? `${image._sBaseUrl}/${image._sFile}` : "";
+	if (item?._sModelName !== "Mod") return image ? `${image._sBaseUrl}/${image._sFile}` : "";
+	const preview = normalizeGameBananaPreviewMedia(item?._aPreviewMedia);
+	return preview.kind === "ready" ? preview.url : "";
 }
 
 function buildCommentState(
@@ -812,7 +815,9 @@ function RightOnline({ open }: { open: boolean }) {
 										已加入黑名单
 									</div>
 								)}
-								{item._aPreviewMedia?._aImages?.length ? <Carousel data={item._aPreviewMedia._aImages} big /> : null}
+								{item._aPreviewMedia?._aImages?.length ? (
+									<Carousel data={item._aPreviewMedia._aImages} big modOnly={item._sModelName === "Mod"} />
+								) : null}
 								<div className="grid grid-cols-2 gap-x-4 gap-y-2 border-y py-3 text-sm sm:grid-cols-4">
 									<span className="flex items-center gap-1">
 										<ThumbsUpIcon className="h-4 w-4" /> {item._nLikeCount || 0}

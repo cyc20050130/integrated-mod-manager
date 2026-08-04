@@ -27,8 +27,11 @@ test("renderer remote media and health requests cross narrow Rust commands", () 
 	const modPreview = readSource("src/_RightSidebar/components/ModPreview.tsx");
 
 	assert.match(rust, /remote_media::resolve_remote_media/);
+	assert.match(rust, /remote_media::resolve_gamebanana_mod_preview/);
+	assert.match(rust, /remote_media::invalidate_gamebanana_mod_preview/);
 	assert.match(rust, /service_health_check/);
 	assert.match(remoteMedia, /invoke<string>\("resolve_remote_media"/);
+	assert.match(remoteMedia, /resolve_gamebanana_mod_preview/);
 	assert.doesNotMatch(api, /\bfetch\s*\(/);
 	assert.doesNotMatch(modPreview, /\bfetch\s*\(/);
 	assert.match(readSource("src-tauri/src/remote_media.rs"), /Health check response is not JSON/);
@@ -52,6 +55,11 @@ test("renderer HTTP plugin is removed from dependencies, registration, and capab
 	assert.doesNotMatch(sources, /tauri-plugin-http|plugin_http|@tauri-apps\/plugin-http|http:default/);
 });
 
+test("Tauri CSP allows the asset origin emitted by convertFileSrc", () => {
+	const config = readSource("src-tauri/tauri.conf.json");
+	assert.ok(config.includes("img-src 'self' asset: http://asset.localhost data:"));
+});
+
 test("untrusted HTML cannot create remote media elements", () => {
 	const sanitizer = readSource("src/utils/sanitizeHtml.ts");
 	assert.match(sanitizer, /FORBID_TAGS/);
@@ -69,4 +77,14 @@ test("online cards, carousel, and details render through RemoteImage", () => {
 		const source = readSource(path);
 		assert.match(source, /RemoteImage/, path);
 	}
+});
+
+test("Mod preview call sites use the dedicated state machine and remove the broken sentinel", () => {
+	const card = readSource("src/_Main/components/CardOnline.tsx");
+	const banner = readSource("src/_Main/components/Carousel.tsx");
+	const detail = readSource("src/_RightSidebar/components/Carousel.tsx");
+	assert.match(card, /GameBananaModPreview/);
+	assert.match(banner, /GameBananaModPreview/);
+	assert.match(detail, /GameBananaModPreview/);
+	assert.doesNotMatch(card, /["']\/err["']/);
 });

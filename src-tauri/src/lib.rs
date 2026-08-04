@@ -8917,6 +8917,8 @@ pub fn run() {
             fetch_gamebanana_json,
             cancel_gamebanana_request,
             remote_media::resolve_remote_media,
+            remote_media::resolve_gamebanana_mod_preview,
+            remote_media::invalidate_gamebanana_mod_preview,
             remote_media::service_health_check,
             get_session_id,
             get_runtime_data_dir,

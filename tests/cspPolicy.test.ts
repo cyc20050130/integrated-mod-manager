@@ -15,7 +15,8 @@ test("production CSP limits network and image origins", () => {
 	assert.ok(imageSrc);
 	assert.match(connectSrc, /http:\/\/ipc\.localhost/);
 	assert.doesNotMatch(connectSrc.replace("http://ipc.localhost", ""), /https?:/);
-	assert.doesNotMatch(imageSrc, /https?:/);
+	assert.doesNotMatch(imageSrc.replace("http://asset.localhost", ""), /https?:/);
+	assert.match(imageSrc, /http:\/\/asset\.localhost/);
 	assert.match(imageSrc, /asset:/);
 	assert.match(imageSrc, /data:/);
 	assert.match(csp, /object-src 'none'/);
