@@ -1,8 +1,14 @@
-use cap_std::fs::Dir as CapDir;
+use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir as CapDir, OpenOptions as CapOpenOptions};
 use futures_util::StreamExt;
+use log as tracing;
+use log::LevelFilter;
 use md5::{Digest, Md5};
 use once_cell::sync::Lazy;
-use reqwest::header::{CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE};
+use reqwest::header::{
+    ACCEPT, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE, REFERER, USER_AGENT,
+};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -19,19 +25,26 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_tracing::{
-    tracing, Builder as Tracing, LevelFilter, MaxFileSize, Rotation, RotationStrategy,
-};
+use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
 
+mod app_state;
 mod hotreload;
 mod ini_watcher;
 mod logger_utils;
+mod managed_fs;
+mod managed_junction;
+mod managed_text;
+mod mod_mutation;
 mod nte;
 mod nte_wal;
+#[cfg(windows)]
+mod privileged_helper;
 mod remote_media;
-mod ww_bridge;
+#[cfg(windows)]
+mod wer_registry;
 
 const PROGRESS_UPDATE_THRESHOLD: u64 = 1024;
 const BUFFER_SIZE: usize = 8192;
@@ -46,8 +59,7 @@ const DEFAULT_BACKOFF_BASE_MS: u64 = 2000;
 const DEFAULT_MAX_CONCURRENT_EXTRACTS: usize = 2;
 const PREVIEW_IDLE_WAIT_TIMEOUT_SECS: u64 = 90;
 const PREVIEW_IDLE_POLL_MS: u64 = 250;
-const LOW_SPEED_THRESHOLD_BPS: f64 = 48.0 * 1024.0;
-const LOW_SPEED_GRACE_SECS: u64 = 12;
+const DOWNLOAD_USER_AGENT: &str = "IntegratedModManager/3.2";
 
 fn ensure_rustls_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
@@ -75,8 +87,15 @@ mod tls_provider_tests {
 }
 const WINDOWS_INSTALL_DIR_NAME: &str = "Integrated Mod Manager (IMM)";
 const GAMEBANANA_JSON_LIMIT: usize = 4 * 1024 * 1024;
+const GAMEBANANA_REQUEST_ID_LIMIT: usize = 128;
+const GAMEBANANA_CANCELLED_REQUEST_LIMIT: usize = 256;
+const GAMEBANANA_CANCELLED_MESSAGE: &str = "GameBanana request cancelled";
+const INSTALL_PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const INSTALL_PREVIEW_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
 const DOWNLOAD_MAX_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const REGISTERED_GAME_KEYS: &[&str] = &["WW", "ZZ", "GI", "SR", "EF", "NTE"];
+const MAX_MOD_PAYLOAD_SCAN_PATHS: usize = 2_048;
+const MAX_MOD_PAYLOAD_SCAN_ENTRIES: usize = 100_000;
 
 fn validate_gamebanana_api_url(raw_url: &str) -> Result<reqwest::Url, String> {
     let url =
@@ -93,27 +112,236 @@ fn validate_gamebanana_api_url(raw_url: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
-async fn fetch_gamebanana_json_value(raw_url: String) -> Result<serde_json::Value, String> {
-    let url = validate_gamebanana_api_url(&raw_url)?;
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let next = attempt.url();
-            let host_allowed = next
-                .host_str()
-                .is_some_and(|host| host == "gamebanana.com" || host.ends_with(".gamebanana.com"));
-            if attempt.previous().len() >= 5 {
-                return attempt.error("too many redirects");
-            }
-            if next.scheme() != "https" || !host_allowed || !next.path().starts_with("/apiv11/") {
-                return attempt.error("redirect left the GameBanana API allowlist");
-            }
-            attempt.follow()
-        }))
-        .build()
-        .map_err(|err| format!("Unable to create GameBanana client: {err}"))?;
+enum GameBananaRequestEntry {
+    Active(oneshot::Sender<()>),
+    Cancelled,
+}
 
+struct GameBananaHttpState {
+    client: Option<Client>,
+    initialization_error: Option<String>,
+    requests: Mutex<HashMap<String, GameBananaRequestEntry>>,
+}
+
+impl GameBananaHttpState {
+    fn new() -> Self {
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let next = attempt.url();
+                let host_allowed = next.host_str().is_some_and(|host| {
+                    host == "gamebanana.com" || host.ends_with(".gamebanana.com")
+                });
+                if attempt.previous().len() >= 5 {
+                    return attempt.error("too many redirects");
+                }
+                if next.scheme() != "https" || !host_allowed || !next.path().starts_with("/apiv11/")
+                {
+                    return attempt.error("redirect left the GameBanana API allowlist");
+                }
+                attempt.follow()
+            }))
+            .build();
+        match client {
+            Ok(client) => Self {
+                client: Some(client),
+                initialization_error: None,
+                requests: Mutex::new(HashMap::new()),
+            },
+            Err(err) => Self {
+                client: None,
+                initialization_error: Some(format!("Unable to create GameBanana client: {err}")),
+                requests: Mutex::new(HashMap::new()),
+            },
+        }
+    }
+
+    fn client(&self) -> Result<&Client, String> {
+        self.client.as_ref().ok_or_else(|| {
+            self.initialization_error
+                .clone()
+                .unwrap_or_else(|| "GameBanana client is unavailable".to_string())
+        })
+    }
+
+    fn validate_request_id(request_id: &str) -> Result<(), String> {
+        if request_id.is_empty()
+            || request_id.len() > GAMEBANANA_REQUEST_ID_LIMIT
+            || !request_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            return Err("Invalid GameBanana request id".to_string());
+        }
+        Ok(())
+    }
+
+    fn register(&self, request_id: &str) -> Result<oneshot::Receiver<()>, String> {
+        Self::validate_request_id(request_id)?;
+        let mut requests = self
+            .requests
+            .lock()
+            .map_err(|_| "GameBanana request registry lock is poisoned".to_string())?;
+        match requests.get(request_id) {
+            Some(GameBananaRequestEntry::Cancelled) => {
+                requests.remove(request_id);
+                return Err(GAMEBANANA_CANCELLED_MESSAGE.to_string());
+            }
+            Some(GameBananaRequestEntry::Active(_)) => {
+                return Err("Duplicate GameBanana request id".to_string());
+            }
+            None => {}
+        }
+        let (sender, receiver) = oneshot::channel();
+        requests.insert(
+            request_id.to_string(),
+            GameBananaRequestEntry::Active(sender),
+        );
+        Ok(receiver)
+    }
+
+    fn finish(&self, request_id: &str) {
+        if let Ok(mut requests) = self.requests.lock() {
+            requests.remove(request_id);
+        }
+    }
+
+    fn cancel(&self, request_id: &str) -> Result<(), String> {
+        Self::validate_request_id(request_id)?;
+        let mut requests = self
+            .requests
+            .lock()
+            .map_err(|_| "GameBanana request registry lock is poisoned".to_string())?;
+        if let Some(GameBananaRequestEntry::Active(sender)) = requests.remove(request_id) {
+            let _ = sender.send(());
+            return Ok(());
+        }
+        if requests
+            .values()
+            .filter(|entry| matches!(entry, GameBananaRequestEntry::Cancelled))
+            .count()
+            >= GAMEBANANA_CANCELLED_REQUEST_LIMIT
+        {
+            if let Some(oldest_cancelled) = requests.iter().find_map(|(id, entry)| {
+                matches!(entry, GameBananaRequestEntry::Cancelled).then(|| id.clone())
+            }) {
+                requests.remove(&oldest_cancelled);
+            }
+        }
+        requests.insert(request_id.to_string(), GameBananaRequestEntry::Cancelled);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod gamebanana_http_state_tests {
+    use super::*;
+
+    fn state() -> GameBananaHttpState {
+        ensure_rustls_crypto_provider();
+        GameBananaHttpState::new()
+    }
+
+    #[test]
+    fn reuses_one_reqwest_client() {
+        let state = state();
+        let first = state.client().expect("shared client should initialize") as *const Client;
+        let second = state
+            .client()
+            .expect("shared client should remain available") as *const Client;
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn validates_request_ids() {
+        assert!(GameBananaHttpState::validate_request_id("renderer-1_valid").is_ok());
+        assert!(GameBananaHttpState::validate_request_id("").is_err());
+        assert!(GameBananaHttpState::validate_request_id("contains spaces").is_err());
+        assert!(GameBananaHttpState::validate_request_id("non-ascii-测试").is_err());
+        assert!(GameBananaHttpState::validate_request_id(
+            &"a".repeat(GAMEBANANA_REQUEST_ID_LIMIT + 1)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn pre_cancel_is_consumed_by_registration() {
+        let state = state();
+        state
+            .cancel("pre-cancelled")
+            .expect("pre-cancel should register");
+
+        assert_eq!(
+            state.register("pre-cancelled").unwrap_err(),
+            GAMEBANANA_CANCELLED_MESSAGE
+        );
+
+        let _receiver = state
+            .register("pre-cancelled")
+            .expect("consuming a tombstone should allow a later unique request");
+        state.finish("pre-cancelled");
+    }
+
+    #[test]
+    fn cancelling_an_active_request_notifies_its_receiver() {
+        let state = state();
+        let mut receiver = state
+            .register("active-request")
+            .expect("request should register");
+
+        state
+            .cancel("active-request")
+            .expect("active request should cancel");
+
+        assert_eq!(receiver.try_recv(), Ok(()));
+        assert!(!state
+            .requests
+            .lock()
+            .expect("registry lock should remain healthy")
+            .contains_key("active-request"));
+    }
+
+    #[test]
+    fn duplicate_active_request_ids_are_rejected() {
+        let state = state();
+        let _receiver = state
+            .register("duplicate")
+            .expect("first request should register");
+
+        assert_eq!(
+            state.register("duplicate").unwrap_err(),
+            "Duplicate GameBanana request id"
+        );
+        state.finish("duplicate");
+    }
+
+    #[test]
+    fn pre_cancel_registry_is_bounded() {
+        let state = state();
+        for index in 0..(GAMEBANANA_CANCELLED_REQUEST_LIMIT + 32) {
+            state
+                .cancel(&format!("cancelled-{index}"))
+                .expect("valid pre-cancel should be recorded");
+        }
+
+        let requests = state
+            .requests
+            .lock()
+            .expect("registry lock should remain healthy");
+        assert_eq!(requests.len(), GAMEBANANA_CANCELLED_REQUEST_LIMIT);
+        assert!(requests
+            .values()
+            .all(|entry| matches!(entry, GameBananaRequestEntry::Cancelled)));
+    }
+}
+
+async fn fetch_gamebanana_json_value(
+    client: &Client,
+    raw_url: String,
+) -> Result<serde_json::Value, String> {
+    let url = validate_gamebanana_api_url(&raw_url)?;
     let response = client
         .get(url)
         .header("accept", "application/json")
@@ -156,14 +384,17 @@ async fn fetch_gamebanana_json_value(raw_url: String) -> Result<serde_json::Valu
 enum DownloadUrlClass {
     GameBananaFile,
     GameBananaPreview,
-    GenericHttps,
 }
 
-fn is_gamebanana_host(host: &str) -> bool {
-    host == "gamebanana.com" || host.ends_with(".gamebanana.com")
+fn request_range_start(url_class: DownloadUrlClass, resume_from: u64) -> Option<u64> {
+    if resume_from > 0 || url_class == DownloadUrlClass::GameBananaFile {
+        Some(resume_from)
+    } else {
+        None
+    }
 }
 
-fn is_gamebanana_file_url(url: &reqwest::Url) -> bool {
+fn is_gamebanana_file_entry_url(url: &reqwest::Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
@@ -171,11 +402,28 @@ fn is_gamebanana_file_url(url: &reqwest::Url) -> bool {
         return false;
     }
     let path = url.path();
-    host == "gamebanana.com" && path.starts_with("/dl/")
-        || host == "files.gamebanana.com" && path.starts_with("/mods/")
-        || host.starts_with("filecache")
-            && host.ends_with(".gamebanana.com")
-            && path.starts_with("/mods/")
+    let has_file_identity = |prefix: &str| {
+        path.strip_prefix(prefix)
+            .and_then(|value| value.split('/').next())
+            .is_some_and(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()))
+    };
+    host == "gamebanana.com" && has_file_identity("/dl/")
+}
+
+fn is_gamebanana_file_redirect_url(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if url.scheme() != "https" {
+        return false;
+    }
+    let has_cdn_path = url
+        .path()
+        .strip_prefix("/mods/")
+        .is_some_and(|value| !value.is_empty());
+    is_gamebanana_file_entry_url(url)
+        || (host == "files.gamebanana.com" && has_cdn_path)
+        || (host.starts_with("filecache") && host.ends_with(".gamebanana.com") && has_cdn_path)
 }
 
 fn is_gamebanana_preview_url(url: &reqwest::Url) -> bool {
@@ -183,9 +431,8 @@ fn is_gamebanana_preview_url(url: &reqwest::Url) -> bool {
         return false;
     };
     url.scheme() == "https"
-        && ((host == "images.gamebanana.com"
+        && (host == "images.gamebanana.com"
             && (url.path().starts_with("/img/") || url.path().starts_with("/static/")))
-            || (host == "api.hakush.in" && url.path().starts_with("/")))
 }
 
 fn is_private_or_local_host(url: &reqwest::Url) -> bool {
@@ -246,17 +493,11 @@ fn classify_download_url(
     if preview && is_gamebanana_preview_url(&url) {
         return Ok((url, DownloadUrlClass::GameBananaPreview));
     }
-    if !preview && is_gamebanana_file_url(&url) {
+    if !preview && is_gamebanana_file_entry_url(&url) {
         return Ok((url, DownloadUrlClass::GameBananaFile));
     }
-    if is_gamebanana_host(url.host_str().unwrap_or_default()) {
-        return Err(if preview {
-            "Only official GameBanana and Hakush preview URLs are allowed".to_string()
-        } else {
-            "Only official GameBanana file URLs are allowed".to_string()
-        });
-    }
-    Ok((url, DownloadUrlClass::GenericHttps))
+    let _ = preview;
+    Err("Only official GameBanana file and preview URLs are allowed".to_string())
 }
 
 fn redirect_allowed(url: &reqwest::Url, class: DownloadUrlClass) -> bool {
@@ -264,9 +505,8 @@ fn redirect_allowed(url: &reqwest::Url, class: DownloadUrlClass) -> bool {
         return false;
     }
     match class {
-        DownloadUrlClass::GameBananaFile => is_gamebanana_file_url(url),
+        DownloadUrlClass::GameBananaFile => is_gamebanana_file_redirect_url(url),
         DownloadUrlClass::GameBananaPreview => is_gamebanana_preview_url(url),
-        DownloadUrlClass::GenericHttps => true,
     }
 }
 
@@ -316,6 +556,74 @@ fn normalized_expected_md5(
         return Err("Unsupported or malformed expected download hash".to_string());
     }
     Ok(Some(expected.value.to_ascii_lowercase()))
+}
+
+fn validate_required_gamebanana_integrity(
+    expected_size: Option<u64>,
+    expected_hash: Option<&ExpectedDownloadHash>,
+) -> Result<String, String> {
+    let size = expected_size
+        .filter(|size| *size > 0)
+        .ok_or_else(|| "GameBanana download metadata is missing a positive file size. Remove it and add the file again.".to_string())?;
+    if size > DOWNLOAD_MAX_BYTES {
+        return Err("Expected download size exceeds the 16 GiB safety limit".to_string());
+    }
+    normalized_expected_md5(expected_hash)?.ok_or_else(|| {
+        "GameBanana download metadata is missing a valid MD5 checksum. Remove it and add the file again.".to_string()
+    })
+}
+
+fn validate_gamebanana_completed_download(
+    completed: &serde_json::Value,
+    source: &str,
+    expected_size: Option<u64>,
+    expected_hash: Option<&ExpectedDownloadHash>,
+) -> Result<(), String> {
+    let object = completed
+        .as_object()
+        .ok_or_else(|| "Completed GameBanana download metadata is not an object.".to_string())?;
+    let mod_id = object
+        .get("gameBananaModId")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "Completed download has no valid GameBanana Mod ID.".to_string())?;
+    if app_state::gamebanana_mod_id_from_profile_url(source) != Some(mod_id) {
+        return Err("Completed download source does not match its GameBanana Mod ID.".to_string());
+    }
+    let file_id = object
+        .get("gameBananaFileId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty() && value.len() <= 2_048)
+        .ok_or_else(|| "Completed download has no valid GameBanana file ID.".to_string())?;
+    if !file_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err("Completed download has an invalid GameBanana file ID.".to_string());
+    }
+
+    let recorded_size = object
+        .get("expectedSize")
+        .and_then(serde_json::Value::as_u64);
+    if recorded_size != expected_size || recorded_size.is_none_or(|size| size == 0) {
+        return Err("GameBanana download size metadata changed or is missing. Remove it and add the file again.".to_string());
+    }
+    let recorded_hash = object
+        .get("expectedHash")
+        .cloned()
+        .map(serde_json::from_value::<ExpectedDownloadHash>)
+        .transpose()
+        .map_err(|error| format!("Invalid GameBanana checksum metadata: {error}"))?;
+    let recorded_md5 =
+        validate_required_gamebanana_integrity(recorded_size, recorded_hash.as_ref())?;
+    let requested_md5 = validate_required_gamebanana_integrity(expected_size, expected_hash)?;
+    if recorded_md5 != requested_md5 {
+        return Err(
+            "GameBanana download checksum metadata changed. Remove it and add the file again."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn verify_download_md5(path: &Path, expected: &str) -> Result<(), String> {
@@ -385,13 +693,6 @@ struct DownloadProgress {
     key: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct NativeDirEntry {
-    name: String,
-    is_directory: bool,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewCacheRequest {
@@ -406,7 +707,7 @@ struct ResolvedPreviewAsset {
 }
 
 fn resolve_managed_preview_file(
-    source_root: &Path,
+    managed_root: &Path,
     relative_path: &str,
 ) -> Result<Option<PathBuf>, String> {
     let separator = std::path::MAIN_SEPARATOR.to_string();
@@ -420,8 +721,7 @@ fn resolve_managed_preview_file(
         return Err(format!("Invalid preview path: {relative_path}"));
     }
 
-    let managed_root = source_root
-        .join(MANAGED_SOURCE_DIR)
+    let managed_root = managed_root
         .canonicalize()
         .map_err(|err| format!("Unable to resolve managed mod directory: {err}"))?;
     let preview_dir = managed_root
@@ -453,6 +753,9 @@ fn resolve_managed_preview_file(
 }
 
 fn copy_preview_to_cache(source: &Path, cache_root: &Path) -> Result<PathBuf, String> {
+    let _cache_guard = PREVIEW_CACHE_LOCK
+        .lock()
+        .map_err(|_| "Preview cache lock is poisoned".to_string())?;
     std::fs::create_dir_all(cache_root)
         .map_err(|err| format!("Unable to create preview cache directory: {err}"))?;
     let extension = source
@@ -467,40 +770,84 @@ fn copy_preview_to_cache(source: &Path, cache_root: &Path) -> Result<PathBuf, St
     } else {
         source.to_string_lossy().into_owned()
     };
-    let hash = hash_input
+    let legacy_hash = hash_input
         .bytes()
         .fold(0xcbf29ce484222325_u64, |value, byte| {
             value.wrapping_mul(0x100000001b3) ^ u64::from(byte)
         });
-    let destination = cache_root.join(format!("{hash:016x}.{extension}"));
-
-    let source_metadata = source
-        .metadata()
-        .map_err(|err| format!("Unable to read preview metadata: {err}"))?;
-    let cache_is_current = destination.metadata().is_ok_and(|cached_metadata| {
-        cached_metadata.len() == source_metadata.len()
-            && match (source_metadata.modified(), cached_metadata.modified()) {
-                (Ok(source_modified), Ok(cached_modified)) => cached_modified >= source_modified,
-                _ => false,
+    let source_hash = format!("{:x}", Sha256::digest(hash_input.as_bytes()));
+    let counter = PREVIEW_CACHE_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    let staging = cache_root.join(format!(".preview-{}-{counter}.tmp", std::process::id()));
+    let staged_result = (|| {
+        let mut input = OpenOptions::new()
+            .read(true)
+            .open(source)
+            .map_err(|err| format!("Unable to open the preview source: {err}"))?;
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+            .map_err(|err| format!("Unable to create the preview cache staging file: {err}"))?;
+        let mut content_hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = input
+                .read(&mut buffer)
+                .map_err(|err| format!("Unable to read the preview source: {err}"))?;
+            if read == 0 {
+                break;
             }
-    });
-    if !cache_is_current {
-        std::fs::copy(source, &destination)
-            .map_err(|err| format!("Unable to copy preview into the managed cache: {err}"))?;
+            content_hasher.update(&buffer[..read]);
+            output
+                .write_all(&buffer[..read])
+                .map_err(|err| format!("Unable to write the preview cache staging file: {err}"))?;
+        }
+        output
+            .sync_all()
+            .map_err(|err| format!("Unable to flush the preview cache staging file: {err}"))?;
+        Ok::<String, String>(format!("{:x}", content_hasher.finalize()))
+    })();
+    let content_hash = match staged_result {
+        Ok(hash) => hash,
+        Err(err) => {
+            let _ = std::fs::remove_file(&staging);
+            return Err(err);
+        }
+    };
+    let destination = cache_root.join(format!("{source_hash}-{content_hash}.{extension}"));
+    if destination.is_file() {
+        let _ = std::fs::remove_file(&staging);
+    } else if let Err(err) = std::fs::rename(&staging, &destination) {
+        let destination_won_race = destination.is_file();
+        let _ = std::fs::remove_file(&staging);
+        if !destination_won_race {
+            return Err(format!("Unable to publish the preview cache file: {err}"));
+        }
     }
 
-    for stale_extension in PREVIEW_EXTENSIONS {
-        if *stale_extension == extension {
-            continue;
-        }
-        let stale_path = cache_root.join(format!("{hash:016x}.{stale_extension}"));
-        if let Err(err) = std::fs::remove_file(&stale_path) {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    "Unable to remove stale preview cache file {:?}: {}",
-                    stale_path,
-                    err
-                );
+    if let Ok(entries) = std::fs::read_dir(cache_root) {
+        let content_prefix = format!("{source_hash}-");
+        for entry in entries.flatten() {
+            let stale_path = entry.path();
+            if stale_path == destination {
+                continue;
+            }
+            let Some(name) = stale_path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let is_legacy = PREVIEW_EXTENSIONS
+                .iter()
+                .any(|stale_extension| name == format!("{legacy_hash:016x}.{stale_extension}"));
+            if name.starts_with(&content_prefix) || is_legacy {
+                if let Err(err) = std::fs::remove_file(&stale_path) {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(
+                            "Unable to remove stale preview cache file {:?}: {}",
+                            stale_path,
+                            err
+                        );
+                    }
+                }
             }
         }
     }
@@ -538,6 +885,26 @@ struct DownloadOptions {
     backoff_base_ms: Option<u64>,
     max_concurrent_extracts: Option<usize>,
     wait_for_primary_idle: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GameBananaDownloadState {
+    relative_path: String,
+    source: String,
+    updated_at: u64,
+    viewed_at: u64,
+    config_updated_at: String,
+    completed_download: serde_json::Value,
+    #[serde(default)]
+    expected_data_entry: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+struct PreparedDownloadStateMutation {
+    next_game: serde_json::Value,
+    expected_game_revision: u64,
+    plan: GenericModMutationStatePlan,
 }
 
 impl Default for DownloadOptions {
@@ -602,27 +969,6 @@ fn format_duration(seconds: u64) -> String {
     } else {
         format!("{}s", secs)
     }
-}
-
-#[cfg(target_os = "windows")]
-fn to_windows_extended_path(path: &str) -> String {
-    let normalized = path.replace('/', "\\");
-    if normalized.starts_with(r"\\?\") {
-        return normalized;
-    }
-    if normalized.starts_with(r"\\") {
-        return format!(r"\\?\UNC\{}", normalized.trim_start_matches('\\'));
-    }
-    let bytes = normalized.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' {
-        return format!(r"\\?\{}", normalized);
-    }
-    normalized
-}
-
-#[cfg(not(target_os = "windows"))]
-fn to_windows_extended_path(path: &str) -> String {
-    path.to_string()
 }
 
 fn local_app_data_install_dir() -> Option<PathBuf> {
@@ -722,460 +1068,9 @@ static CANCELLED_DOWNLOADS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::n
 static ACTIVE_EXTRACTIONS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_PREVIEW_DOWNLOADS: AtomicUsize = AtomicUsize::new(0);
 static DEPLOYMENT_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn canonicalize_allowed_roots(allowed_roots: &[String]) -> Result<Vec<PathBuf>, String> {
-    if allowed_roots.is_empty() {
-        return Err("At least one allowed root is required".to_string());
-    }
-
-    let mut roots = Vec::new();
-    for root in allowed_roots {
-        if root.trim().is_empty() {
-            return Err("Allowed root cannot be empty".to_string());
-        }
-        let root_path = Path::new(root);
-        if !root_path.exists() {
-            continue;
-        }
-        let canonical = root_path
-            .canonicalize()
-            .map_err(|err| format!("Failed to canonicalize allowed root '{}': {}", root, err))?;
-        roots.push(canonical);
-    }
-
-    if roots.is_empty() {
-        return Err("At least one existing allowed root is required".to_string());
-    }
-
-    Ok(roots)
-}
-
-fn path_is_within_root(path: &Path, root: &Path) -> bool {
-    path == root || path.starts_with(root)
-}
-
-fn ensure_guarded_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|err| format!("Failed to canonicalize path '{}': {}", path.display(), err))?;
-
-    if allowed_roots
-        .iter()
-        .any(|root| path_is_within_root(&canonical, root))
-    {
-        Ok(canonical)
-    } else {
-        Err(format!(
-            "Path '{}' is outside the allowed roots",
-            canonical.display()
-        ))
-    }
-}
-
-fn ensure_guarded_remove_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| format!("Failed to inspect path '{}': {}", path.display(), err))?;
-
-    if metadata.file_type().is_symlink() {
-        let parent = path
-            .parent()
-            .ok_or_else(|| format!("Path '{}' has no parent", path.display()))?;
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| format!("Path '{}' has no file name", path.display()))?;
-        let canonical_parent = ensure_guarded_path(parent, allowed_roots)?;
-        return Ok(canonical_parent.join(file_name));
-    }
-
-    ensure_guarded_path(path, allowed_roots)
-}
-
-fn ensure_guarded_new_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
-    if path.exists() {
-        return ensure_guarded_path(path, allowed_roots);
-    }
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("Path '{}' has no parent", path.display()))?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| format!("Path '{}' has no file name", path.display()))?;
-    let canonical_parent = ensure_guarded_path(parent, allowed_roots)?;
-    Ok(canonical_parent.join(file_name))
-}
-
-fn ensure_not_allowed_root(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), String> {
-    if allowed_roots.iter().any(|root| path == root) {
-        Err("Refusing to operate on an allowed root directly".to_string())
-    } else {
-        Ok(())
-    }
-}
-
-#[tauri::command]
-fn guarded_remove_path(
-    path: String,
-    allowed_roots: Vec<String>,
-    recursive: bool,
-) -> Result<(), String> {
-    let roots = canonicalize_allowed_roots(&allowed_roots)?;
-    let target = ensure_guarded_remove_path(Path::new(&path), &roots)?;
-    ensure_not_allowed_root(&target, &roots)?;
-
-    let metadata = std::fs::symlink_metadata(&target).map_err(|err| {
-        format!(
-            "Failed to inspect '{}' before removal: {}",
-            target.display(),
-            err
-        )
-    })?;
-
-    if metadata.file_type().is_symlink() {
-        std::fs::remove_file(&target).or_else(|file_err| {
-            std::fs::remove_dir(&target).map_err(|dir_err| {
-                format!(
-                    "Failed to remove symlink '{}': file error: {}; dir error: {}",
-                    target.display(),
-                    file_err,
-                    dir_err
-                )
-            })
-        })
-    } else if metadata.is_dir() {
-        if recursive {
-            std::fs::remove_dir_all(&target)
-        } else {
-            std::fs::remove_dir(&target)
-        }
-        .map_err(|err| err.to_string())
-    } else {
-        std::fs::remove_file(&target).map_err(|err| err.to_string())
-    }
-    .map_err(|err| format!("Failed to remove '{}': {}", target.display(), err))
-}
-
-#[tauri::command]
-fn guarded_rename_path(from: String, to: String, allowed_roots: Vec<String>) -> Result<(), String> {
-    let roots = canonicalize_allowed_roots(&allowed_roots)?;
-    let from_path = ensure_guarded_path(Path::new(&from), &roots)?;
-    let to_path = ensure_guarded_new_path(Path::new(&to), &roots)?;
-    ensure_not_allowed_root(&from_path, &roots)?;
-
-    std::fs::rename(&from_path, &to_path).map_err(|err| {
-        format!(
-            "Failed to rename '{}' to '{}': {}",
-            from_path.display(),
-            to_path.display(),
-            err
-        )
-    })
-}
-
-#[tauri::command]
-fn guarded_copy_file_path(
-    from: String,
-    to: String,
-    allowed_roots: Vec<String>,
-) -> Result<(), String> {
-    let roots = canonicalize_allowed_roots(&allowed_roots)?;
-    let from_path = ensure_guarded_path(Path::new(&from), &roots)?;
-    let to_path = ensure_guarded_new_path(Path::new(&to), &roots)?;
-    if !from_path.is_file() {
-        return Err(format!("Source '{}' is not a file", from_path.display()));
-    }
-
-    std::fs::copy(&from_path, &to_path)
-        .map(|_| ())
-        .map_err(|err| {
-            format!(
-                "Failed to copy '{}' to '{}': {}",
-                from_path.display(),
-                to_path.display(),
-                err
-            )
-        })
-}
-
-#[tauri::command]
-fn guarded_import_file_path(
-    from: String,
-    to: String,
-    allowed_roots: Vec<String>,
-) -> Result<(), String> {
-    let roots = canonicalize_allowed_roots(&allowed_roots)?;
-    let from_path = Path::new(&from)
-        .canonicalize()
-        .map_err(|err| format!("Failed to canonicalize source '{}': {}", from, err))?;
-    let to_path = ensure_guarded_new_path(Path::new(&to), &roots)?;
-    if !from_path.is_file() {
-        return Err(format!("Source '{}' is not a file", from_path.display()));
-    }
-
-    std::fs::copy(&from_path, &to_path)
-        .map(|_| ())
-        .map_err(|err| {
-            format!(
-                "Failed to import '{}' to '{}': {}",
-                from_path.display(),
-                to_path.display(),
-                err
-            )
-        })
-}
-
-#[cfg(test)]
-mod guarded_file_tests {
-    use super::*;
-    use std::fs;
-    use tempfile::tempdir;
-
-    fn roots(root: &Path) -> Vec<String> {
-        vec![root.display().to_string()]
-    }
-
-    #[test]
-    fn guarded_remove_allows_child_inside_allowed_root() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        fs::create_dir_all(&root).expect("root");
-        let file = root.join("mod.txt");
-        fs::write(&file, "ok").expect("write");
-
-        guarded_remove_path(file.display().to_string(), roots(&root), false).expect("remove child");
-
-        assert!(!file.exists());
-    }
-
-    #[test]
-    fn guarded_roots_skip_missing_entries_when_one_root_exists() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let missing = temp.path().join("missing-root");
-        fs::create_dir_all(&root).expect("root");
-        let file = root.join("mod.txt");
-        fs::write(&file, "ok").expect("write");
-
-        guarded_remove_path(
-            file.display().to_string(),
-            vec![missing.display().to_string(), root.display().to_string()],
-            false,
-        )
-        .expect("remove with missing sibling root");
-
-        assert!(!file.exists());
-    }
-
-    #[test]
-    fn guarded_path_rejects_parent_escape() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&root).expect("root");
-        fs::create_dir_all(&outside).expect("outside");
-        let escaped = outside.join("secret.txt");
-        fs::write(&escaped, "no").expect("write escaped");
-        let traversal = root.join("..").join("outside").join("secret.txt");
-        let allowed = canonicalize_allowed_roots(&roots(&root)).expect("roots");
-
-        assert!(ensure_guarded_path(&traversal, &allowed).is_err());
-    }
-
-    #[test]
-    fn guarded_path_rejects_absolute_outside_root() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&root).expect("root");
-        fs::create_dir_all(&outside).expect("outside");
-        let escaped = outside.join("secret.txt");
-        fs::write(&escaped, "no").expect("write escaped");
-
-        let result = guarded_remove_path(escaped.display().to_string(), roots(&root), false);
-
-        assert!(result.is_err());
-        assert!(escaped.exists());
-    }
-
-    #[test]
-    fn guarded_remove_refuses_allowed_root_itself() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        fs::create_dir_all(&root).expect("root");
-
-        let result = guarded_remove_path(root.display().to_string(), roots(&root), true);
-
-        assert!(result.is_err());
-        assert!(root.exists());
-    }
-
-    #[test]
-    fn guarded_rename_requires_destination_parent_inside_root() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&root).expect("root");
-        fs::create_dir_all(&outside).expect("outside");
-        let from = root.join("mod.txt");
-        let to = outside.join("mod.txt");
-        fs::write(&from, "ok").expect("write");
-
-        let result = guarded_rename_path(
-            from.display().to_string(),
-            to.display().to_string(),
-            roots(&root),
-        );
-
-        assert!(result.is_err());
-        assert!(from.exists());
-        assert!(!to.exists());
-    }
-
-    #[test]
-    fn guarded_copy_requires_destination_parent_inside_root() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&root).expect("root");
-        fs::create_dir_all(&outside).expect("outside");
-        let from = root.join("mod.txt");
-        let to = outside.join("mod.txt");
-        fs::write(&from, "ok").expect("write");
-
-        let result = guarded_copy_file_path(
-            from.display().to_string(),
-            to.display().to_string(),
-            roots(&root),
-        );
-
-        assert!(result.is_err());
-        assert!(from.exists());
-        assert!(!to.exists());
-    }
-
-    #[test]
-    fn guarded_import_allows_external_source_but_requires_destination_inside_root() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let external = temp.path().join("external");
-        fs::create_dir_all(&root).expect("root");
-        fs::create_dir_all(&external).expect("external");
-        let from = external.join("preview.png");
-        let to = root.join("preview.png");
-        fs::write(&from, "image").expect("write");
-
-        guarded_import_file_path(
-            from.display().to_string(),
-            to.display().to_string(),
-            roots(&root),
-        )
-        .expect("import external file");
-
-        assert_eq!(fs::read_to_string(&to).expect("read"), "image");
-    }
-
-    #[test]
-    fn guarded_import_rejects_destination_outside_root() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let external = temp.path().join("external");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&root).expect("root");
-        fs::create_dir_all(&external).expect("external");
-        fs::create_dir_all(&outside).expect("outside");
-        let from = external.join("preview.png");
-        let to = outside.join("preview.png");
-        fs::write(&from, "image").expect("write");
-
-        let result = guarded_import_file_path(
-            from.display().to_string(),
-            to.display().to_string(),
-            roots(&root),
-        );
-
-        assert!(result.is_err());
-        assert!(!to.exists());
-    }
-
-    #[test]
-    fn guarded_path_rejects_symlink_escape_when_symlinks_are_available() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&root).expect("root");
-        fs::create_dir_all(&outside).expect("outside");
-        let target = outside.join("secret.txt");
-        let link = root.join("linked-secret.txt");
-        fs::write(&target, "no").expect("write target");
-
-        #[cfg(unix)]
-        let link_result = std::os::unix::fs::symlink(&target, &link);
-        #[cfg(windows)]
-        let link_result = std::os::windows::fs::symlink_file(&target, &link);
-
-        if link_result.is_err() {
-            return;
-        }
-
-        let allowed = canonicalize_allowed_roots(&roots(&root)).expect("roots");
-        assert!(ensure_guarded_path(&link, &allowed).is_err());
-    }
-
-    #[test]
-    fn guarded_remove_deletes_directory_symlink_without_touching_target() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path().join("root");
-        let target_dir = root.join("Managed").join("Enabled Source");
-        let link = root.join("Mods").join("Enabled Source");
-        fs::create_dir_all(target_dir.parent().expect("target parent")).expect("target parent");
-        fs::create_dir_all(link.parent().expect("link parent")).expect("link parent");
-        fs::create_dir_all(&target_dir).expect("target dir");
-        fs::write(target_dir.join("mod.ini"), "ok").expect("write target file");
-
-        #[cfg(unix)]
-        let link_result = std::os::unix::fs::symlink(&target_dir, &link);
-        #[cfg(windows)]
-        let link_result = std::os::windows::fs::symlink_dir(&target_dir, &link);
-
-        if link_result.is_err() {
-            return;
-        }
-
-        guarded_remove_path(link.display().to_string(), roots(&root), false)
-            .expect("remove symlink");
-
-        assert!(!link.exists());
-        assert!(target_dir.exists());
-        assert!(target_dir.join("mod.ini").exists());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_extended_path_prefixes_drive_paths() {
-        assert_eq!(
-            to_windows_extended_path("D:\\IMM\\Mods\\Hiyuki"),
-            r"\\?\D:\IMM\Mods\Hiyuki"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_extended_path_keeps_existing_prefixed_paths() {
-        assert_eq!(
-            to_windows_extended_path(r"\\?\D:\IMM\Mods\Hiyuki"),
-            r"\\?\D:\IMM\Mods\Hiyuki"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_extended_path_converts_unc_paths() {
-        assert_eq!(
-            to_windows_extended_path(r"\\server\share\IMM"),
-            r"\\?\UNC\server\share\IMM"
-        );
-    }
-}
+static PREVIEW_CACHE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PREVIEW_CACHE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static MOD_MUTATION_PROCESS_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[cfg(test)]
 mod preview_cache_tests {
@@ -1192,7 +1087,7 @@ mod preview_cache_tests {
         let preview = mod_dir.join("preview.webp");
         fs::write(&preview, b"preview").expect("preview");
 
-        let resolved = resolve_managed_preview_file(temp.path(), "Category/Mod Name")
+        let resolved = resolve_managed_preview_file(&managed_root, "Category/Mod Name")
             .expect("resolve")
             .expect("preview file");
 
@@ -1204,7 +1099,8 @@ mod preview_cache_tests {
         let temp = tempdir().expect("tempdir");
         fs::create_dir_all(temp.path().join(MANAGED_SOURCE_DIR)).expect("managed root");
 
-        let result = resolve_managed_preview_file(temp.path(), "../outside");
+        let result =
+            resolve_managed_preview_file(&temp.path().join(MANAGED_SOURCE_DIR), "../outside");
 
         assert!(result.is_err());
     }
@@ -1216,15 +1112,43 @@ mod preview_cache_tests {
         let cache_root = temp.path().join("cache");
         fs::write(&source, b"preview bytes").expect("source");
 
-        let cached = copy_preview_to_cache(&source, &cache_root).expect("cache preview");
+        let first_cached = copy_preview_to_cache(&source, &cache_root).expect("cache preview");
 
-        assert!(cached.is_absolute());
-        assert!(cached.starts_with(&cache_root));
+        assert!(first_cached.is_absolute());
+        assert!(first_cached.starts_with(&cache_root));
         assert_eq!(
-            cached.extension().and_then(|value| value.to_str()),
+            first_cached.extension().and_then(|value| value.to_str()),
             Some("png")
         );
-        assert_eq!(fs::read(cached).expect("cached bytes"), b"preview bytes");
+        assert_eq!(
+            fs::read(&first_cached).expect("cached bytes"),
+            b"preview bytes"
+        );
+        let first_name = first_cached
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .expect("content-addressed cache name");
+        let (source_hash, content_hash) = first_name.split_once('-').expect("two cache hashes");
+        assert_eq!(source_hash.len(), 64);
+        assert_eq!(content_hash.len(), 64);
+
+        fs::write(&source, b"updated preview bytes").expect("updated source");
+        let second_cached =
+            copy_preview_to_cache(&source, &cache_root).expect("updated cache preview");
+
+        assert_ne!(second_cached, first_cached);
+        assert!(!first_cached.exists());
+        assert_eq!(
+            fs::read(&second_cached).expect("updated cached bytes"),
+            b"updated preview bytes"
+        );
+        assert!(fs::read_dir(&cache_root)
+            .expect("cache entries")
+            .all(|entry| !entry
+                .expect("cache entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".preview-")));
     }
 }
 
@@ -1276,10 +1200,9 @@ mod gamebanana_provider_tests {
     }
 
     #[test]
-    fn download_redirect_validation_rejects_insecure_and_local_network_targets() {
-        let (_, class) = classify_download_url("https://example.com/public/example.zip", false)
-            .expect("generic public download");
-        assert_eq!(class, DownloadUrlClass::GenericHttps);
+    fn download_redirect_validation_rejects_non_gamebanana_and_local_network_targets() {
+        assert!(classify_download_url("https://example.com/public/example.zip", false).is_err());
+        let class = DownloadUrlClass::GameBananaFile;
         assert!(!redirect_allowed(
             &reqwest::Url::parse("http://example.com/example.zip").unwrap(),
             class
@@ -1318,6 +1241,22 @@ mod gamebanana_provider_tests {
         assert!(validate_download_file_name("mod.zip").is_ok());
         assert!(validate_download_file_name("../mod.zip").is_err());
         assert!(validate_download_file_name("C:\\temp\\mod.zip").is_err());
+        assert_eq!(
+            request_range_start(DownloadUrlClass::GameBananaFile, 0),
+            Some(0)
+        );
+        assert_eq!(
+            request_range_start(DownloadUrlClass::GameBananaFile, 4096),
+            Some(4096)
+        );
+        assert_eq!(
+            request_range_start(DownloadUrlClass::GameBananaPreview, 0),
+            None
+        );
+        assert_eq!(
+            request_range_start(DownloadUrlClass::GameBananaPreview, 4096),
+            Some(4096)
+        );
     }
 
     #[test]
@@ -1337,15 +1276,79 @@ mod gamebanana_provider_tests {
         assert!(verify_download_md5(&file, &normalized).is_ok());
         assert!(verify_download_md5(&file, "00000000000000000000000000000000").is_err());
     }
+
+    #[test]
+    fn gamebanana_download_requires_size_hash_and_stable_identity() {
+        let hash = ExpectedDownloadHash {
+            algorithm: "md5".to_string(),
+            value: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+        };
+        assert!(validate_required_gamebanana_integrity(None, Some(&hash)).is_err());
+        assert!(validate_required_gamebanana_integrity(Some(1200), None).is_err());
+
+        let completed = serde_json::json!({
+            "gameBananaModId": 42,
+            "gameBananaFileId": "7",
+            "expectedSize": 1200,
+            "expectedHash": {
+                "algorithm": hash.algorithm,
+                "value": hash.value,
+            },
+        });
+        assert!(validate_gamebanana_completed_download(
+            &completed,
+            "https://gamebanana.com/mods/42",
+            Some(1200),
+            Some(&ExpectedDownloadHash {
+                algorithm: "MD5".to_string(),
+                value: "D41D8CD98F00B204E9800998ECF8427E".to_string(),
+            })
+        )
+        .is_ok());
+        assert!(validate_gamebanana_completed_download(
+            &completed,
+            "https://gamebanana.com/mods/42",
+            None,
+            None
+        )
+        .is_err());
+    }
 }
 
 #[cfg(test)]
 mod zip_extraction_tests {
     use super::*;
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
     use std::fs;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
     use tempfile::tempdir;
     use zip::write::{FileOptions, ZipWriter};
+
+    #[derive(Clone)]
+    struct PreviewTestApp {
+        app_local_data: PathBuf,
+    }
+
+    impl DownloadAppContext for PreviewTestApp {
+        fn app_local_data_dir(&self) -> Result<PathBuf, String> {
+            Ok(self.app_local_data.clone())
+        }
+
+        fn emit_event<S: Serialize + Clone>(
+            &self,
+            _event: &str,
+            _payload: S,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn image_bytes(format: ImageFormat, color: [u8; 3]) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(4, 4, Rgb(color)));
+        let mut output = Cursor::new(Vec::new());
+        image.write_to(&mut output, format).unwrap();
+        output.into_inner()
+    }
 
     #[test]
     fn zip_extraction_rejects_parent_escape_without_writing_outside_root() {
@@ -1410,6 +1413,7 @@ mod zip_extraction_tests {
         fs::write(valid.join("demo.pak"), b"pak").expect("pak");
         fs::write(valid.join("demo.utoc"), b"utoc").expect("utoc");
         fs::write(valid.join("demo.ucas"), b"ucas").expect("ucas");
+        fs::write(valid.join("preview.jpg"), b"jpeg fixture").expect("preview");
         assert!(validate_nte_staged_content(&valid).is_ok());
 
         let invalid = temp.path().join("invalid");
@@ -1417,6 +1421,911 @@ mod zip_extraction_tests {
         fs::write(invalid.join("demo.pak"), b"pak").expect("pak");
         fs::write(invalid.join("installer.exe"), b"exe").expect("exe");
         assert!(validate_nte_staged_content(&invalid).is_err());
+    }
+
+    #[test]
+    fn selected_preview_file_is_read_through_a_bound_file_handle() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("selected.png");
+        let expected = image_bytes(ImageFormat::Png, [12, 34, 56]);
+        fs::write(&source, &expected).expect("selected preview");
+
+        let (extension, data) = read_selected_preview_file(&source).expect("read selected preview");
+
+        assert_eq!(extension, "png");
+        assert_eq!(data, expected);
+    }
+
+    #[test]
+    fn managed_preview_data_is_reencoded_to_the_only_preview_jpeg() {
+        let temp = tempdir().expect("tempdir");
+        let app = PreviewTestApp {
+            app_local_data: temp.path().join("app-local"),
+        };
+        let png = image_bytes(ImageFormat::Png, [90, 120, 150]);
+
+        let (staging, preview) =
+            prepare_normalized_preview_data_staging(&app, "managed-preview", "png", &png)
+                .expect("normalize managed preview");
+
+        assert_eq!(
+            preview.file_name().and_then(|name| name.to_str()),
+            Some("preview.jpg")
+        );
+        let jpeg = fs::read(&preview).expect("normalized preview");
+        assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]));
+        let entries = fs::read_dir(&staging.path)
+            .expect("read staging")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect staging");
+        assert!(entries
+            .iter()
+            .any(|entry| entry.file_name() == "preview.jpg"));
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.file_name() == "preview.png"));
+        staging.cleanup().expect("cleanup staging");
+    }
+
+    #[test]
+    fn managed_preview_rejects_an_extension_signature_mismatch() {
+        let temp = tempdir().expect("tempdir");
+        let app = PreviewTestApp {
+            app_local_data: temp.path().join("app-local"),
+        };
+        let png = image_bytes(ImageFormat::Png, [90, 120, 150]);
+
+        let error =
+            prepare_normalized_preview_data_staging(&app, "mismatched-preview", "jpg", &png)
+                .err()
+                .expect("mismatched preview must fail");
+
+        assert!(error.contains("does not match its file extension"));
+    }
+
+    #[test]
+    fn install_preview_prefers_package_image_and_publishes_only_jpeg() {
+        let temp = tempdir().expect("tempdir");
+        let staging = temp.path().join("staging");
+        let fallback = temp.path().join("fallback.png");
+        fs::create_dir(&staging).expect("staging");
+        fs::write(staging.join("mod.ini"), b"mod").expect("payload");
+        fs::write(
+            staging.join("preview.png"),
+            image_bytes(ImageFormat::Png, [220, 10, 10]),
+        )
+        .expect("package preview");
+        fs::write(&fallback, image_bytes(ImageFormat::Png, [10, 10, 220]))
+            .expect("fallback preview");
+
+        install_required_preview(&staging, &PreparedInstallPreview::Ready(fallback))
+            .expect("install preview");
+
+        assert!(!staging.join("preview.png").exists());
+        let jpeg = fs::read(staging.join("preview.jpg")).expect("preview.jpg");
+        assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]));
+        let decoded = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg)
+            .expect("decode normalized preview")
+            .to_rgb8();
+        let pixel = decoded.get_pixel(0, 0).0;
+        assert!(
+            pixel[0] > pixel[2],
+            "package preview must win over fallback"
+        );
+    }
+
+    #[test]
+    fn install_preview_normalizes_a_single_wrapper_before_selection() {
+        let temp = tempdir().expect("tempdir");
+        let staging = temp.path().join("staging");
+        let wrapper = staging.join("Downloaded Mod");
+        fs::create_dir_all(&wrapper).expect("wrapper");
+        fs::write(wrapper.join("mod.ini"), b"mod").expect("payload");
+        fs::write(
+            wrapper.join("preview.webp"),
+            image_bytes(ImageFormat::WebP, [10, 220, 10]),
+        )
+        .expect("package preview");
+
+        normalize_staged_mod_root(&staging).expect("normalize wrapper");
+        install_required_preview(
+            &staging,
+            &PreparedInstallPreview::Unavailable("fallback unavailable".to_string()),
+        )
+        .expect("package preview should be sufficient");
+
+        assert!(!wrapper.exists());
+        assert_eq!(fs::read(staging.join("mod.ini")).unwrap(), b"mod");
+        assert!(staging.join("preview.jpg").is_file());
+        assert!(!staging.join("preview.webp").exists());
+    }
+
+    #[test]
+    fn missing_required_preview_never_replaces_the_existing_mod() {
+        let temp = tempdir().expect("tempdir");
+        let save_path = temp.path().join("managed-mod");
+        let archive_path = temp.path().join("update.zip");
+        fs::create_dir(&save_path).expect("existing mod");
+        fs::write(save_path.join("old.pak"), b"old").expect("old payload");
+        let file = fs::File::create(&archive_path).expect("archive");
+        let mut writer = ZipWriter::new(file);
+        writer
+            .start_file("new.pak", FileOptions::<()>::default())
+            .expect("entry");
+        writer.write_all(b"new").expect("payload");
+        writer.finish().expect("finish");
+        let fallback = PreparedInstallPreview::Unavailable("fallback failed".to_string());
+
+        let error = stage_and_deploy_zip_archive(
+            &archive_path,
+            &save_path,
+            true,
+            Some(&fallback),
+            ArchiveDeploymentContext {
+                is_nte_archive: false,
+                trusted_library_root: None,
+                journal: None,
+                bound_destination: None,
+                generic_mutation: None,
+            },
+        )
+        .expect_err("preview is required");
+
+        assert!(error.contains("preview") || error.contains("Preview"));
+        assert_eq!(fs::read(save_path.join("old.pak")).unwrap(), b"old");
+        assert!(!save_path.join("new.pak").exists());
+        assert_eq!(
+            fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains("imm-staging"))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn generic_preview_backfill_replaces_only_preview_files_transactionally() {
+        let temp = tempdir().expect("tempdir");
+        let save_path = temp.path().join("managed-mod");
+        let downloaded = temp.path().join("preview.jpg");
+        fs::create_dir(&save_path).expect("existing mod");
+        fs::write(save_path.join("payload.ini"), b"keep").expect("payload");
+        fs::write(save_path.join("preview.png"), b"old").expect("old preview");
+        let jpeg = remote_media::decode_and_reencode_preview_jpeg(&image_bytes(
+            ImageFormat::Png,
+            [20, 30, 40],
+        ))
+        .expect("normalized jpeg");
+        fs::write(&downloaded, &jpeg).expect("downloaded preview");
+
+        stage_and_deploy_generic_preview(&downloaded, &save_path, None).expect("preview backfill");
+
+        assert_eq!(fs::read(save_path.join("payload.ini")).unwrap(), b"keep");
+        assert!(!save_path.join("preview.png").exists());
+        assert_eq!(fs::read(save_path.join("preview.jpg")).unwrap(), jpeg);
+        let leftovers = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains("imm-preview-staging") || name.contains("imm-backup"))
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "unexpected transaction leftovers: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn generic_preview_backfill_uses_global_and_library_wals() {
+        let temp = tempdir().expect("tempdir");
+        let runtime = temp.path().join("runtime");
+        let control = temp.path().join("control");
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let managed_root = source.join(MANAGED_SOURCE_DIR);
+        let save_path = managed_root.join("Characters").join("Demo");
+        let downloaded = temp.path().join("preview.jpg");
+        fs::create_dir_all(&runtime).expect("runtime");
+        fs::create_dir_all(&save_path).expect("save path");
+        fs::create_dir_all(&target).expect("target");
+        fs::create_dir_all(&control).expect("control");
+        fs::write(save_path.join("payload.ini"), b"keep").expect("payload");
+        fs::write(
+            &downloaded,
+            remote_media::decode_and_reencode_preview_jpeg(&image_bytes(
+                ImageFormat::Png,
+                [20, 30, 40],
+            ))
+            .expect("normalized preview"),
+        )
+        .expect("downloaded preview");
+        fs::write(
+            runtime.join("configWW.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "game": "WW",
+                "sourceDir": source,
+                "targetDir": target
+            }))
+            .expect("config"),
+        )
+        .expect("write config");
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            recover_generic_mod_mutation_registry(&runtime, registry)?;
+            let trusted_root = persisted_managed_source_root(&runtime, "WW")?;
+            stage_and_deploy_generic_preview(
+                &downloaded,
+                &save_path,
+                Some(GenericModMutationContext {
+                    operation: "preview_backfill",
+                    game: "WW",
+                    trusted_root: &trusted_root,
+                    registry,
+                    state: None,
+                }),
+            )
+        })
+        .expect("coordinated preview backfill");
+
+        assert_eq!(fs::read(save_path.join("payload.ini")).unwrap(), b"keep");
+        assert!(save_path.join("preview.jpg").is_file());
+        assert!(control
+            .join("mod-mutations")
+            .join("mod-mutation.wal")
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0));
+        assert!(managed_root
+            .join(".imm-mod-mutation.wal")
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0));
+    }
+
+    fn generic_registry_fixture(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let runtime = root.join("runtime");
+        let control = root.join("control");
+        let source = root.join("source");
+        let target = root.join("target");
+        let save_path = source
+            .join(MANAGED_SOURCE_DIR)
+            .join("Characters")
+            .join("Demo");
+        fs::create_dir_all(&runtime).expect("runtime");
+        fs::create_dir_all(&control).expect("control");
+        fs::create_dir_all(&target).expect("target");
+        fs::create_dir_all(&save_path).expect("save path");
+        fs::write(
+            runtime.join("configWW.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "game": "WW",
+                "sourceDir": source,
+                "targetDir": target
+            }))
+            .expect("config"),
+        )
+        .expect("write config");
+        let trusted_root = persisted_managed_source_root(&runtime, "WW").expect("managed root");
+        (runtime, control, trusted_root, save_path)
+    }
+
+    fn generic_registry_plan(
+        trusted_root: &Path,
+        before_hash: Option<String>,
+        after_hash: String,
+    ) -> GenericModMutationRegistryPlan {
+        GenericModMutationRegistryPlan {
+            schema_version: 1,
+            operation: "preview_backfill".to_string(),
+            game: "WW".to_string(),
+            trusted_root: trusted_root.to_string_lossy().into_owned(),
+            destination_relative_path: "Characters/Demo".to_string(),
+            before_hash,
+            after_hash,
+            state: None,
+        }
+    }
+
+    #[test]
+    fn generic_registry_recovers_prepared_transaction_to_before_state() {
+        let temp = tempdir().expect("tempdir");
+        let (runtime, control, trusted_root, save_path) = generic_registry_fixture(temp.path());
+        fs::write(save_path.join("payload.ini"), b"before").expect("before payload");
+        let before_hash = optional_deployment_tree_hash(&save_path).expect("before hash");
+        let after_tree = temp.path().join("after-tree");
+        fs::create_dir(&after_tree).expect("after tree");
+        fs::write(after_tree.join("payload.ini"), b"after").expect("after payload");
+        let plan = generic_registry_plan(
+            &trusted_root,
+            before_hash.clone(),
+            deployment_tree_hash(&after_tree).expect("after hash"),
+        );
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            registry.begin(&serde_json::to_vec(&plan).expect("plan"))?;
+            Ok(())
+        })
+        .expect("prepared registry");
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            recover_generic_mod_mutation_registry(&runtime, registry)?;
+            assert!(registry.incomplete_transaction()?.is_none());
+            Ok(())
+        })
+        .expect("recover before state");
+        assert_eq!(
+            optional_deployment_tree_hash(&save_path).expect("current hash"),
+            before_hash
+        );
+    }
+
+    #[test]
+    fn generic_registry_finishes_cleanup_after_committed_state() {
+        let temp = tempdir().expect("tempdir");
+        let (runtime, control, trusted_root, save_path) = generic_registry_fixture(temp.path());
+        fs::write(save_path.join("payload.ini"), b"before").expect("before payload");
+        let before_hash = optional_deployment_tree_hash(&save_path).expect("before hash");
+        fs::write(save_path.join("payload.ini"), b"after").expect("after payload");
+        let after_hash = deployment_tree_hash(&save_path).expect("after hash");
+        let plan = generic_registry_plan(&trusted_root, before_hash, after_hash.clone());
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            let transaction_id = registry.begin(&serde_json::to_vec(&plan).expect("plan"))?;
+            registry.append(transaction_id, nte_wal::WalState::Committing, b"{}")?;
+            registry.append(
+                transaction_id,
+                nte_wal::WalState::StepReceipt,
+                br#"{"step":"filesystem","outcome":"applied"}"#,
+            )?;
+            registry.append(transaction_id, nte_wal::WalState::CommittedAfter, b"{}")
+        })
+        .expect("committed registry");
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            recover_generic_mod_mutation_registry(&runtime, registry)?;
+            assert!(registry.incomplete_transaction()?.is_none());
+            Ok(())
+        })
+        .expect("finish committed cleanup");
+        assert_eq!(
+            deployment_tree_hash(&save_path).expect("current hash"),
+            after_hash
+        );
+    }
+
+    #[test]
+    fn generic_registry_fails_closed_for_ambiguous_target_hash() {
+        let temp = tempdir().expect("tempdir");
+        let (runtime, control, trusted_root, save_path) = generic_registry_fixture(temp.path());
+        fs::write(save_path.join("payload.ini"), b"before").expect("before payload");
+        let before_hash = optional_deployment_tree_hash(&save_path).expect("before hash");
+        let after_tree = temp.path().join("after-tree");
+        fs::create_dir(&after_tree).expect("after tree");
+        fs::write(after_tree.join("payload.ini"), b"after").expect("after payload");
+        let plan = generic_registry_plan(
+            &trusted_root,
+            before_hash,
+            deployment_tree_hash(&after_tree).expect("after hash"),
+        );
+        fs::write(save_path.join("payload.ini"), b"ambiguous").expect("ambiguous payload");
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            registry.begin(&serde_json::to_vec(&plan).expect("plan"))?;
+            Ok(())
+        })
+        .expect("prepared registry");
+
+        let error = mod_mutation::with_global_lock(&control, |registry| {
+            recover_generic_mod_mutation_registry(&runtime, registry)
+        })
+        .expect_err("ambiguous state must fail closed");
+        assert!(error.contains("neither its before nor after state"));
+        mod_mutation::with_global_lock(&control, |registry| {
+            assert_eq!(
+                registry
+                    .incomplete_transaction()?
+                    .expect("transaction remains incomplete")
+                    .state,
+                nte_wal::WalState::Committing
+            );
+            Ok(())
+        })
+        .expect("inspect unresolved registry");
+        assert_eq!(
+            fs::read(save_path.join("payload.ini")).unwrap(),
+            b"ambiguous"
+        );
+    }
+
+    fn prepare_incomplete_mod_library_update(
+        trusted_root: &Path,
+        save_path: &Path,
+        suffix: &str,
+        deploy_after: bool,
+    ) -> (Option<String>, String, PathBuf, PathBuf) {
+        let canonical_destination = nte::canonical_nte_library_destination(trusted_root, save_path)
+            .expect("canonical destination");
+        let destination_relative_path = canonical_destination
+            .strip_prefix(trusted_root)
+            .expect("relative destination")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let staging_name = format!(".Demo.imm-staging-{suffix}");
+        let backup_name = format!(".Demo.imm-backup-{suffix}");
+        let staging_path = save_path.parent().unwrap().join(&staging_name);
+        let backup_path = save_path.parent().unwrap().join(&backup_name);
+        fs::create_dir(&staging_path).expect("staging");
+        fs::write(staging_path.join("payload.ini"), b"after").expect("after payload");
+        let before_hash = optional_deployment_tree_hash(save_path).expect("before hash");
+        let after_hash = deployment_tree_hash(&staging_path).expect("after hash");
+        let plan = NteLibraryWalPlan {
+            operation: "library_update".to_string(),
+            destination_relative_path,
+            staging_name,
+            backup_name,
+            before_hash: before_hash.clone(),
+            after_hash: after_hash.clone(),
+        };
+        let mut journal =
+            nte_wal::WalJournal::open_mod_mutation(&trusted_root.join(".imm-mod-mutation.wal"))
+                .expect("library journal");
+        let transaction_id = journal
+            .begin(&serde_json::to_vec(&plan).expect("plan"))
+            .expect("prepared");
+        journal
+            .append(transaction_id, nte_wal::WalState::Committing, b"{}")
+            .expect("committing");
+        fs::rename(save_path, &backup_path).expect("backup rename");
+        journal
+            .append(transaction_id, nte_wal::WalState::StepReceipt, b"backup")
+            .expect("backup receipt");
+        if deploy_after {
+            fs::rename(&staging_path, save_path).expect("deploy rename");
+            journal
+                .append(transaction_id, nte_wal::WalState::StepReceipt, b"deploy")
+                .expect("deploy receipt");
+        }
+        drop(journal);
+        (before_hash, after_hash, staging_path, backup_path)
+    }
+
+    fn state_aware_registry_plan(
+        trusted_root: &Path,
+        before_hash: Option<String>,
+        after_hash: String,
+        before_game_config_hash: String,
+        after_game_config_hash: String,
+    ) -> GenericModMutationRegistryPlan {
+        GenericModMutationRegistryPlan {
+            schema_version: 2,
+            operation: "gamebanana_binding".to_string(),
+            game: "WW".to_string(),
+            trusted_root: trusted_root.to_string_lossy().into_owned(),
+            destination_relative_path: "Characters/Demo".to_string(),
+            before_hash,
+            after_hash,
+            state: Some(GenericModMutationStatePlan {
+                before_game_config_hash,
+                after_game_config_hash,
+            }),
+        }
+    }
+
+    #[test]
+    fn state_aware_registry_rolls_filesystem_back_when_config_is_before() {
+        let temp = tempdir().expect("tempdir");
+        let (runtime, control, trusted_root, save_path) = generic_registry_fixture(temp.path());
+        fs::write(save_path.join("payload.ini"), b"before").expect("before payload");
+        let before_config: serde_json::Value =
+            serde_json::from_slice(&fs::read(runtime.join("configWW.json")).unwrap()).unwrap();
+        let mut after_config = before_config.clone();
+        after_config["data"] =
+            serde_json::json!({"Characters/Demo": {"source": "https://gamebanana.com/mods/42"}});
+        let (before_hash, after_hash, staging_path, backup_path) =
+            prepare_incomplete_mod_library_update(&trusted_root, &save_path, "1-40", true);
+        let plan = state_aware_registry_plan(
+            &trusted_root,
+            before_hash,
+            after_hash,
+            app_state::stable_json_value_hash(&before_config).unwrap(),
+            app_state::stable_json_value_hash(&after_config).unwrap(),
+        );
+        mod_mutation::with_global_lock(&control, |registry| {
+            registry.begin(&serde_json::to_vec(&plan).expect("plan"))?;
+            Ok(())
+        })
+        .expect("central prepared");
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            recover_generic_mod_mutation_registry(&runtime, registry)?;
+            assert!(registry.incomplete_transaction()?.is_none());
+            Ok(())
+        })
+        .expect("outer rollback");
+
+        assert_eq!(fs::read(save_path.join("payload.ini")).unwrap(), b"before");
+        assert!(!staging_path.exists());
+        assert!(!backup_path.exists());
+        mod_mutation::with_library_lock(&trusted_root, |journal| {
+            assert!(journal.incomplete_transaction()?.is_none());
+            Ok(())
+        })
+        .expect("library cleanup complete");
+    }
+
+    #[test]
+    fn state_aware_registry_rolls_filesystem_forward_when_config_is_after() {
+        let temp = tempdir().expect("tempdir");
+        let (runtime, control, trusted_root, save_path) = generic_registry_fixture(temp.path());
+        fs::write(save_path.join("payload.ini"), b"before").expect("before payload");
+        let before_config: serde_json::Value =
+            serde_json::from_slice(&fs::read(runtime.join("configWW.json")).unwrap()).unwrap();
+        let mut after_config = before_config.clone();
+        after_config["data"] =
+            serde_json::json!({"Characters/Demo": {"source": "https://gamebanana.com/mods/42"}});
+        let (before_hash, after_hash, staging_path, backup_path) =
+            prepare_incomplete_mod_library_update(&trusted_root, &save_path, "1-41", false);
+        let plan = state_aware_registry_plan(
+            &trusted_root,
+            before_hash,
+            after_hash,
+            app_state::stable_json_value_hash(&before_config).unwrap(),
+            app_state::stable_json_value_hash(&after_config).unwrap(),
+        );
+        fs::write(
+            runtime.join("configWW.json"),
+            serde_json::to_vec(&after_config).unwrap(),
+        )
+        .expect("publish after config projection");
+        mod_mutation::with_global_lock(&control, |registry| {
+            registry.begin(&serde_json::to_vec(&plan).expect("plan"))?;
+            Ok(())
+        })
+        .expect("central prepared");
+
+        mod_mutation::with_global_lock(&control, |registry| {
+            recover_generic_mod_mutation_registry(&runtime, registry)?;
+            assert!(registry.incomplete_transaction()?.is_none());
+            Ok(())
+        })
+        .expect("outer roll-forward");
+
+        assert_eq!(fs::read(save_path.join("payload.ini")).unwrap(), b"after");
+        assert!(!staging_path.exists());
+        assert!(!backup_path.exists());
+        mod_mutation::with_library_lock(&trusted_root, |journal| {
+            assert!(journal.incomplete_transaction()?.is_none());
+            Ok(())
+        })
+        .expect("library cleanup complete");
+    }
+
+    #[test]
+    fn gamebanana_binding_commits_preview_and_metadata_together() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let save_path = source
+            .join(MANAGED_SOURCE_DIR)
+            .join("Characters")
+            .join("Demo");
+        fs::create_dir_all(&save_path).expect("save path");
+        fs::create_dir_all(&target).expect("target");
+        fs::write(save_path.join("payload.ini"), b"keep").expect("payload");
+        fs::write(save_path.join("preview.png"), b"old").expect("old preview");
+        let downloaded = temp.path().join("downloaded-preview.jpg");
+        let jpeg = remote_media::decode_and_reencode_preview_jpeg(&image_bytes(
+            ImageFormat::Png,
+            [30, 60, 90],
+        ))
+        .expect("normalized jpeg");
+        fs::write(&downloaded, &jpeg).expect("downloaded preview");
+
+        let repository = app_state::AppStateRepository::new(
+            temp.path().join("control"),
+            temp.path().join("legacy"),
+            true,
+        );
+        assert!(matches!(
+            repository.bootstrap(),
+            app_state::BootstrapStatus::Ready { .. }
+        ));
+        let loaded = repository.load_config(Some("WW")).expect("load WW");
+        let mut configured_game = loaded.game.expect("WW game");
+        configured_game["sourceDir"] =
+            serde_json::Value::String(source.to_string_lossy().into_owned());
+        configured_game["targetDir"] =
+            serde_json::Value::String(target.to_string_lossy().into_owned());
+        let configured = repository
+            .save_config(None, Some(configured_game), None, loaded.game_revision)
+            .expect("configure WW");
+        let expected_revision = configured.game_revision.expect("configured revision");
+        let mut next_game = configured.game.expect("configured WW");
+        next_game["data"] = serde_json::json!({
+            "Characters/Demo": {
+                "source": "https://gamebanana.com/mods/42",
+                "gameBanana": {
+                    "provider": "gamebanana",
+                    "modId": 42,
+                    "profileUrl": "https://gamebanana.com/mods/42",
+                    "variant": "primary",
+                    "boundAt": 1000,
+                    "selectedFile": {
+                        "id": "7",
+                        "name": "demo.zip",
+                        "size": 1200,
+                        "updatedAt": 100
+                    }
+                }
+            }
+        });
+
+        let control_root = repository.control_root().to_path_buf();
+        let runtime_root = repository.runtime_root().to_path_buf();
+        let committed = mod_mutation::with_global_lock(&control_root, |registry| {
+            recover_generic_mod_mutation_registry(&runtime_root, registry)?;
+            let preflight =
+                repository.preflight_game_config_update("WW", &next_game, expected_revision)?;
+            let state_plan = GenericModMutationStatePlan {
+                before_game_config_hash: preflight.before_game_config_hash,
+                after_game_config_hash: preflight.after_game_config_hash,
+            };
+            let trusted_root = persisted_managed_source_root(&runtime_root, "WW")?;
+            let mut committed_snapshot = None;
+            {
+                let snapshot_slot = &mut committed_snapshot;
+                let commit_plan = state_plan.clone();
+                let commit_config = next_game.clone();
+                stage_and_deploy_generic_preview(
+                    &downloaded,
+                    &save_path,
+                    Some(GenericModMutationContext {
+                        operation: "gamebanana_binding",
+                        game: "WW",
+                        trusted_root: &trusted_root,
+                        registry,
+                        state: Some(GenericStateMutation {
+                            plan: state_plan,
+                            commit: Box::new(|| {
+                                *snapshot_slot = Some(commit_game_config_for_mod_mutation(
+                                    &repository,
+                                    "WW",
+                                    commit_config,
+                                    expected_revision,
+                                    &commit_plan,
+                                )?);
+                                Ok(())
+                            }),
+                        }),
+                    }),
+                )?;
+            }
+            assert!(registry.incomplete_transaction()?.is_none());
+            committed_snapshot.ok_or_else(|| "missing committed snapshot".to_string())
+        })
+        .expect("binding transaction");
+
+        assert_eq!(fs::read(save_path.join("payload.ini")).unwrap(), b"keep");
+        assert!(!save_path.join("preview.png").exists());
+        assert_eq!(fs::read(save_path.join("preview.jpg")).unwrap(), jpeg);
+        assert_eq!(
+            committed.game.as_ref().unwrap()["data"]["Characters/Demo"]["gameBanana"]["modId"],
+            42
+        );
+        assert_eq!(committed.game_revision, Some(expected_revision + 1));
+        let trusted_root = persisted_managed_source_root(&runtime_root, "WW").unwrap();
+        mod_mutation::with_library_lock(&trusted_root, |journal| {
+            assert!(journal.incomplete_transaction()?.is_none());
+            Ok(())
+        })
+        .expect("library cleanup complete");
+    }
+
+    fn gamebanana_download_request(
+        expected_data_entry: Option<serde_json::Value>,
+    ) -> GameBananaDownloadState {
+        GameBananaDownloadState {
+            relative_path: "Characters/Demo".to_string(),
+            source: "https://gamebanana.com/mods/42".to_string(),
+            updated_at: 123_000,
+            viewed_at: 456_000,
+            config_updated_at: "2026-08-04T00:00:00.000Z".to_string(),
+            completed_download: serde_json::json!({
+                "status": "extracting",
+                "addon": false,
+                "preview": "https://images.gamebanana.com/img/ss/mods/demo.png",
+                "category": "Characters",
+                "source": "https://gamebanana.com/mods/42",
+                "file": "https://gamebanana.com/dl/7",
+                "updated": 123,
+                "name": "Demo",
+                "fname": "demo.zip",
+                "key": "download-42-7",
+                "path": "Characters\\Demo",
+                "gameBananaModId": 42,
+                "gameBananaFileId": "7",
+                "expectedSize": 1200
+            }),
+            expected_data_entry,
+        }
+    }
+
+    #[test]
+    fn gamebanana_download_commits_payload_preview_metadata_and_history_together() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let managed_root = source.join(MANAGED_SOURCE_DIR);
+        let category_root = managed_root.join("Characters");
+        let save_path = category_root.join("Demo");
+        fs::create_dir_all(&category_root).expect("category root");
+        fs::create_dir_all(&target).expect("target");
+
+        let repository = app_state::AppStateRepository::new(
+            temp.path().join("control"),
+            temp.path().join("legacy"),
+            true,
+        );
+        assert!(matches!(
+            repository.bootstrap(),
+            app_state::BootstrapStatus::Ready { .. }
+        ));
+        let loaded = repository.load_config(Some("WW")).expect("load WW");
+        let mut configured_game = loaded.game.expect("WW game");
+        configured_game["sourceDir"] =
+            serde_json::Value::String(source.to_string_lossy().into_owned());
+        configured_game["targetDir"] =
+            serde_json::Value::String(target.to_string_lossy().into_owned());
+        configured_game["downloads"]["downloading"] = serde_json::json!([{
+            "status": "downloading",
+            "addon": false,
+            "preview": "https://images.gamebanana.com/img/ss/mods/demo.png",
+            "category": "Characters",
+            "source": "https://gamebanana.com/mods/42",
+            "file": "https://gamebanana.com/dl/7",
+            "updated": 123,
+            "name": "Demo",
+            "fname": "demo.zip",
+            "key": "download-42-7"
+        }]);
+        let configured = repository
+            .save_config(None, Some(configured_game), None, loaded.game_revision)
+            .expect("configure WW");
+        let configured_revision = configured.game_revision.expect("configured revision");
+
+        let archive_path = temp.path().join("download.zip");
+        let file = fs::File::create(&archive_path).expect("archive");
+        let mut writer = ZipWriter::new(file);
+        writer
+            .start_file("new.pak", FileOptions::<()>::default())
+            .expect("payload entry");
+        writer.write_all(b"new payload").expect("payload");
+        writer
+            .start_file("preview.png", FileOptions::<()>::default())
+            .expect("preview entry");
+        writer
+            .write_all(&image_bytes(ImageFormat::Png, [70, 80, 90]))
+            .expect("preview");
+        writer.finish().expect("finish archive");
+
+        let request = gamebanana_download_request(None);
+        let control_root = repository.control_root().to_path_buf();
+        let runtime_root = repository.runtime_root().to_path_buf();
+        let fallback = PreparedInstallPreview::Unavailable("fallback unavailable".to_string());
+        let trusted_root = persisted_managed_source_root(&runtime_root, "WW").unwrap();
+        let mut prepared_archive = prepare_bound_archive_staging(
+            &archive_path,
+            &save_path,
+            true,
+            false,
+            Some(&fallback),
+            &trusted_root,
+        )
+        .expect("prepare archive outside global lock");
+        let committed = mod_mutation::with_global_lock(&control_root, |registry| {
+            recover_generic_mod_mutation_registry(&runtime_root, registry)?;
+            let prepared =
+                prepare_gamebanana_download_state(&repository, "WW", &request, &save_path)?;
+            let state_plan = prepared.plan.clone();
+            let mut committed_snapshot = None;
+            {
+                let snapshot_slot = &mut committed_snapshot;
+                deploy_prepared_generic_archive(
+                    &mut prepared_archive,
+                    &save_path,
+                    GenericModMutationContext {
+                        operation: "gamebanana_download",
+                        game: "WW",
+                        trusted_root: &trusted_root,
+                        registry,
+                        state: Some(GenericStateMutation {
+                            plan: state_plan,
+                            commit: Box::new(|| {
+                                *snapshot_slot = Some(commit_game_config_for_mod_mutation(
+                                    &repository,
+                                    "WW",
+                                    prepared.next_game,
+                                    prepared.expected_game_revision,
+                                    &prepared.plan,
+                                )?);
+                                Ok(())
+                            }),
+                        }),
+                    },
+                )?;
+            }
+            committed_snapshot.ok_or_else(|| "missing committed snapshot".to_string())
+        })
+        .expect("download transaction");
+
+        assert_eq!(fs::read(save_path.join("new.pak")).unwrap(), b"new payload");
+        assert!(save_path.join("preview.jpg").is_file());
+        assert!(!save_path.join("preview.png").exists());
+        let game = committed.game.as_ref().expect("committed game");
+        assert_eq!(game["data"]["Characters\\Demo"]["gameBanana"]["modId"], 42);
+        assert_eq!(
+            game["data"]["Characters\\Demo"]["gameBanana"]["selectedFile"]["id"],
+            "7"
+        );
+        assert!(game["downloads"]["downloading"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(game["downloads"]["completed"].as_array().unwrap().len(), 1);
+        assert_eq!(committed.game_revision, Some(configured_revision + 1));
+    }
+
+    #[test]
+    fn stale_gamebanana_download_metadata_is_rejected_without_publishing_files() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("source");
+        let target = temp.path().join("target");
+        let save_path = source
+            .join(MANAGED_SOURCE_DIR)
+            .join("Characters")
+            .join("Demo");
+        fs::create_dir_all(&save_path).expect("existing mod");
+        fs::create_dir_all(&target).expect("target");
+        fs::write(save_path.join("old.pak"), b"old").expect("old payload");
+        let repository = app_state::AppStateRepository::new(
+            temp.path().join("control"),
+            temp.path().join("legacy"),
+            true,
+        );
+        assert!(matches!(
+            repository.bootstrap(),
+            app_state::BootstrapStatus::Ready { .. }
+        ));
+        let loaded = repository.load_config(Some("WW")).expect("load WW");
+        let mut configured_game = loaded.game.expect("WW game");
+        configured_game["sourceDir"] =
+            serde_json::Value::String(source.to_string_lossy().into_owned());
+        configured_game["targetDir"] =
+            serde_json::Value::String(target.to_string_lossy().into_owned());
+        configured_game["data"] = serde_json::json!({
+            "Characters\\Demo": {"source": "https://gamebanana.com/mods/99"}
+        });
+        repository
+            .save_config(None, Some(configured_game), None, loaded.game_revision)
+            .expect("configure WW");
+
+        let error = prepare_gamebanana_download_state(
+            &repository,
+            "WW",
+            &gamebanana_download_request(None),
+            &save_path,
+        )
+        .expect_err("stale target metadata must reject the download commit");
+        assert!(error.contains("metadata changed"));
+        assert_eq!(fs::read(save_path.join("old.pak")).unwrap(), b"old");
+        let visible = repository.load_config(Some("WW")).expect("visible config");
+        assert_eq!(
+            visible.game.as_ref().unwrap()["data"]["Characters\\Demo"]["source"],
+            "https://gamebanana.com/mods/99"
+        );
+        assert!(visible.game.as_ref().unwrap()["downloads"]["completed"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1432,6 +2341,49 @@ mod zip_extraction_tests {
             fs::read(save_path.join("old.pak")).expect("restored"),
             b"old"
         );
+    }
+
+    #[test]
+    fn post_filesystem_commit_failure_restores_existing_mod() {
+        let temp = tempdir().expect("tempdir");
+        let save_path = temp.path().join("managed-mod");
+        let staging_path = deployment_sibling_path(&save_path, "staging").expect("staging path");
+        fs::create_dir_all(&save_path).expect("save dir");
+        fs::write(save_path.join("old.pak"), b"old").expect("old payload");
+
+        let error = mod_mutation::with_library_lock(temp.path(), |journal| {
+            nte::with_bound_nte_library_destination(
+                temp.path(),
+                &save_path,
+                |destination_parent, destination_name| {
+                    let staging =
+                        create_bound_staging_directory(destination_parent, &staging_path)?;
+                    fs::write(staging_path.join("new.pak"), b"new")
+                        .map_err(|err| err.to_string())?;
+                    deploy_staged_directory_with_commit(
+                        &save_path,
+                        &staging_path,
+                        Some(temp.path()),
+                        Some(journal),
+                        Some(BoundNteDeployment {
+                            parent: destination_parent,
+                            destination_name,
+                            staging,
+                        }),
+                        || Err("state commit rejected".to_string()),
+                    )
+                },
+            )
+        })
+        .expect_err("state failure must roll back the directory");
+
+        assert!(error.contains("state commit rejected"));
+        assert_eq!(fs::read(save_path.join("old.pak")).unwrap(), b"old");
+        assert!(!save_path.join("new.pak").exists());
+        assert!(!staging_path.exists());
+        assert!(!deployment_sibling_path(&save_path, "backup")
+            .expect("backup path")
+            .exists());
     }
 
     #[test]
@@ -1758,6 +2710,99 @@ mod zip_extraction_tests {
             recover_nte_library_transaction(temp.path(), journal)
         })
         .expect("roll-forward recovery");
+
+        assert_eq!(fs::read(save_path.join("new.pak")).unwrap(), b"new");
+        assert!(!staging_path.exists());
+        assert!(!backup_path.exists());
+    }
+
+    #[test]
+    fn outer_state_forces_library_rollback_after_filesystem_apply() {
+        let temp = tempdir().expect("tempdir");
+        let save_path = temp.path().join("managed-mod");
+        let staging_path = temp.path().join(".managed-mod.imm-staging-1-30");
+        let backup_path = temp.path().join(".managed-mod.imm-backup-1-30");
+        let wal_path = temp.path().join(".imm-nte-library.wal");
+        fs::create_dir_all(&save_path).expect("save dir");
+        fs::create_dir_all(&staging_path).expect("staging dir");
+        fs::write(save_path.join("old.pak"), b"old").expect("old payload");
+        fs::write(staging_path.join("new.pak"), b"new").expect("new payload");
+        let plan = NteLibraryWalPlan {
+            operation: "library_update".to_string(),
+            destination_relative_path: "managed-mod".to_string(),
+            staging_name: ".managed-mod.imm-staging-1-30".to_string(),
+            backup_name: ".managed-mod.imm-backup-1-30".to_string(),
+            before_hash: optional_deployment_tree_hash(&save_path).expect("before hash"),
+            after_hash: deployment_tree_hash(&staging_path).expect("after hash"),
+        };
+        let mut journal = nte_wal::WalJournal::open(&wal_path).expect("journal");
+        let transaction_id = journal
+            .begin(&serde_json::to_vec(&plan).expect("plan"))
+            .expect("prepared");
+        journal
+            .append(transaction_id, nte_wal::WalState::Committing, b"{}")
+            .expect("committing");
+        fs::rename(&save_path, &backup_path).expect("backup rename");
+        fs::rename(&staging_path, &save_path).expect("deploy rename");
+        journal
+            .append(transaction_id, nte_wal::WalState::StepReceipt, b"applied")
+            .expect("receipt");
+        drop(journal);
+
+        nte::with_nte_library_operation_lock(temp.path(), None, |journal| {
+            recover_nte_library_transaction_from_parent_with_preference(
+                temp.path(),
+                journal,
+                LibraryRecoveryPreference::Before,
+            )
+        })
+        .expect("forced rollback");
+
+        assert_eq!(fs::read(save_path.join("old.pak")).unwrap(), b"old");
+        assert!(!staging_path.exists());
+        assert!(!backup_path.exists());
+    }
+
+    #[test]
+    fn outer_state_forces_library_roll_forward_from_staging() {
+        let temp = tempdir().expect("tempdir");
+        let save_path = temp.path().join("managed-mod");
+        let staging_path = temp.path().join(".managed-mod.imm-staging-1-31");
+        let backup_path = temp.path().join(".managed-mod.imm-backup-1-31");
+        let wal_path = temp.path().join(".imm-nte-library.wal");
+        fs::create_dir_all(&save_path).expect("save dir");
+        fs::create_dir_all(&staging_path).expect("staging dir");
+        fs::write(save_path.join("old.pak"), b"old").expect("old payload");
+        fs::write(staging_path.join("new.pak"), b"new").expect("new payload");
+        let plan = NteLibraryWalPlan {
+            operation: "library_update".to_string(),
+            destination_relative_path: "managed-mod".to_string(),
+            staging_name: ".managed-mod.imm-staging-1-31".to_string(),
+            backup_name: ".managed-mod.imm-backup-1-31".to_string(),
+            before_hash: optional_deployment_tree_hash(&save_path).expect("before hash"),
+            after_hash: deployment_tree_hash(&staging_path).expect("after hash"),
+        };
+        let mut journal = nte_wal::WalJournal::open(&wal_path).expect("journal");
+        let transaction_id = journal
+            .begin(&serde_json::to_vec(&plan).expect("plan"))
+            .expect("prepared");
+        journal
+            .append(transaction_id, nte_wal::WalState::Committing, b"{}")
+            .expect("committing");
+        fs::rename(&save_path, &backup_path).expect("backup rename");
+        journal
+            .append(transaction_id, nte_wal::WalState::StepReceipt, b"backed-up")
+            .expect("receipt");
+        drop(journal);
+
+        nte::with_nte_library_operation_lock(temp.path(), None, |journal| {
+            recover_nte_library_transaction_from_parent_with_preference(
+                temp.path(),
+                journal,
+                LibraryRecoveryPreference::After,
+            )
+        })
+        .expect("forced roll-forward");
 
         assert_eq!(fs::read(save_path.join("new.pak")).unwrap(), b"new");
         assert!(!staging_path.exists());
@@ -2331,6 +3376,67 @@ trait DownloadAppContext: Clone {
     fn app_local_data_dir(&self) -> Result<PathBuf, String>;
 
     fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String>;
+
+    fn prepare_download_state_mutation(
+        &self,
+        _game: &str,
+        _request: &GameBananaDownloadState,
+        _destination: &Path,
+    ) -> Result<PreparedDownloadStateMutation, String> {
+        Err("Application state is unavailable for this download context.".to_string())
+    }
+
+    fn commit_download_state_mutation(
+        &self,
+        _game: &str,
+        _prepared: PreparedDownloadStateMutation,
+    ) -> Result<app_state::AppConfigSnapshot, String> {
+        Err("Application state is unavailable for this download context.".to_string())
+    }
+}
+
+#[derive(Debug)]
+enum PreparedInstallPreview {
+    Ready(PathBuf),
+    Unavailable(String),
+}
+
+async fn prepare_install_preview<A: DownloadAppContext>(
+    app_handle: &A,
+    preview_url: Option<&str>,
+    key: &str,
+) -> PreparedInstallPreview {
+    let Some(preview_url) = preview_url.map(str::trim).filter(|url| !url.is_empty()) else {
+        return PreparedInstallPreview::Unavailable(
+            "GameBanana did not provide a fallback preview URL.".to_string(),
+        );
+    };
+    if let Err(error) = remote_media::validate_remote_media_url(preview_url) {
+        return PreparedInstallPreview::Unavailable(error);
+    }
+    let app_local_data = match app_handle.app_local_data_dir() {
+        Ok(path) => path,
+        Err(error) => return PreparedInstallPreview::Unavailable(error),
+    };
+    let mut last_error = "Preview preparation failed.".to_string();
+    for attempt in 1u64..=3 {
+        match remote_media::resolve_remote_media_in_app_data(&app_local_data, preview_url).await {
+            Ok(path) => return PreparedInstallPreview::Ready(path),
+            Err(error) => last_error = error,
+        }
+        if attempt < 3 {
+            let jitter = key.bytes().fold(attempt * 97, |acc, byte| {
+                acc.wrapping_mul(31).wrapping_add(u64::from(byte))
+            }) % 250;
+            sleep(Duration::from_millis(
+                400 * 2u64.pow((attempt - 1) as u32) + jitter,
+            ))
+            .await;
+        }
+    }
+    PreparedInstallPreview::Unavailable(format!(
+        "GameBanana preview failed after 3 attempts: {last_error}"
+    ))
 }
 
 impl<R: tauri::Runtime> DownloadAppContext for tauri::AppHandle<R> {
@@ -2342,6 +3448,35 @@ impl<R: tauri::Runtime> DownloadAppContext for tauri::AppHandle<R> {
 
     fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String> {
         self.emit(event, payload).map_err(|err| err.to_string())
+    }
+
+    fn prepare_download_state_mutation(
+        &self,
+        game: &str,
+        request: &GameBananaDownloadState,
+        destination: &Path,
+    ) -> Result<PreparedDownloadStateMutation, String> {
+        prepare_gamebanana_download_state(
+            &self.state::<app_state::AppStateRepository>(),
+            game,
+            request,
+            destination,
+        )
+    }
+
+    fn commit_download_state_mutation(
+        &self,
+        game: &str,
+        prepared: PreparedDownloadStateMutation,
+    ) -> Result<app_state::AppConfigSnapshot, String> {
+        let repository = self.state::<app_state::AppStateRepository>();
+        commit_game_config_for_mod_mutation(
+            &repository,
+            game,
+            prepared.next_game,
+            prepared.expected_game_revision,
+            &prepared.plan,
+        )
     }
 }
 
@@ -2855,9 +3990,28 @@ fn trusted_transaction_sibling(
     trusted_sibling(parent, candidate_name)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LibraryRecoveryPreference {
+    Infer,
+    Before,
+    After,
+}
+
 pub(crate) fn recover_nte_library_transaction_from_parent(
     parent: &Path,
     journal: &mut nte_wal::WalJournal,
+) -> Result<(), String> {
+    recover_nte_library_transaction_from_parent_with_preference(
+        parent,
+        journal,
+        LibraryRecoveryPreference::Infer,
+    )
+}
+
+fn recover_nte_library_transaction_from_parent_with_preference(
+    parent: &Path,
+    journal: &mut nte_wal::WalJournal,
+    preference: LibraryRecoveryPreference,
 ) -> Result<(), String> {
     let Some(incomplete) = journal.incomplete_transaction()? else {
         return Ok(());
@@ -2900,6 +4054,16 @@ pub(crate) fn recover_nte_library_transaction_from_parent(
     let destination_hash = captured_deployment_tree_hash(&destination, destination_bound.as_ref())?;
     let staging_hash = captured_deployment_tree_hash(&staging, staging_bound.as_ref())?;
     let backup_hash = captured_deployment_tree_hash(&backup, backup_bound.as_ref())?;
+
+    if (incomplete.state == nte_wal::WalState::AbortedBefore
+        && preference == LibraryRecoveryPreference::After)
+        || (incomplete.state == nte_wal::WalState::CommittedAfter
+            && preference == LibraryRecoveryPreference::Before)
+    {
+        return Err(
+            "The outer Mod transaction conflicts with the terminal library WAL state.".to_string(),
+        );
+    }
 
     if incomplete.state == nte_wal::WalState::AbortedBefore {
         if destination_hash != plan.before_hash {
@@ -2973,6 +4137,166 @@ pub(crate) fn recover_nte_library_transaction_from_parent(
             br#"{"recovery":"begin"}"#,
         )?;
     }
+
+    if preference != LibraryRecoveryPreference::Infer {
+        if staging_hash
+            .as_deref()
+            .is_some_and(|hash| hash != plan.after_hash)
+            || backup_hash
+                .as_ref()
+                .is_some_and(|hash| Some(hash) != plan.before_hash.as_ref())
+            || destination_hash.as_ref().is_some_and(|hash| {
+                Some(hash) != plan.before_hash.as_ref() && hash != &plan.after_hash
+            })
+        {
+            return Err(
+                "The library transaction artifacts do not match their recorded hashes.".to_string(),
+            );
+        }
+
+        match preference {
+            LibraryRecoveryPreference::Before => {
+                if destination_hash == plan.before_hash {
+                    if backup_hash.is_some() {
+                        return Err("The library transaction has duplicate before-state copies."
+                            .to_string());
+                    }
+                } else if destination_hash.as_deref() == Some(plan.after_hash.as_str()) {
+                    if staging_hash.is_some() {
+                        return Err(
+                            "The library transaction has duplicate after-state copies.".to_string()
+                        );
+                    }
+                    if backup_hash != plan.before_hash {
+                        return Err(
+                            "The library transaction cannot restore its recorded before state."
+                                .to_string(),
+                        );
+                    }
+                    let destination_leaf = destination_bound.take().ok_or_else(|| {
+                        "The library after-state handle disappeared during rollback.".to_string()
+                    })?;
+                    staging_bound = Some(
+                        destination_leaf
+                            .rename_to(&staging, "rolled-back Mod library after-state")?,
+                    );
+                    if let Some(backup_leaf) = backup_bound.take() {
+                        destination_bound = Some(
+                            backup_leaf
+                                .rename_to(&destination, "restored Mod library before-state")?,
+                        );
+                    }
+                } else if destination_hash.is_none()
+                    && plan.before_hash.is_some()
+                    && backup_hash == plan.before_hash
+                {
+                    let backup_leaf = backup_bound.take().ok_or_else(|| {
+                        "The library before-state handle disappeared during rollback.".to_string()
+                    })?;
+                    destination_bound = Some(
+                        backup_leaf.rename_to(&destination, "restored Mod library before-state")?,
+                    );
+                } else {
+                    return Err(
+                        "The library transaction cannot prove its requested before state."
+                            .to_string(),
+                    );
+                }
+                if captured_deployment_tree_hash(&destination, destination_bound.as_ref())?
+                    != plan.before_hash
+                {
+                    return Err(
+                        "The library transaction could not reach its requested before state."
+                            .to_string(),
+                    );
+                }
+                journal.append(
+                    incomplete.transaction_id,
+                    nte_wal::WalState::StepReceipt,
+                    br#"{"step":"outer_recovery","outcome":"before"}"#,
+                )?;
+                journal.append(
+                    incomplete.transaction_id,
+                    nte_wal::WalState::AbortedBefore,
+                    b"{}",
+                )?;
+            }
+            LibraryRecoveryPreference::After => {
+                if destination_hash.as_deref() == Some(plan.after_hash.as_str()) {
+                    if staging_hash.is_some() {
+                        return Err(
+                            "The library transaction has duplicate after-state copies.".to_string()
+                        );
+                    }
+                } else {
+                    if staging_hash.as_deref() != Some(plan.after_hash.as_str()) {
+                        return Err(
+                            "The library transaction has no verified after-state payload."
+                                .to_string(),
+                        );
+                    }
+                    if destination_hash == plan.before_hash {
+                        if plan.before_hash.is_some() {
+                            if backup_hash.is_some() {
+                                return Err(
+                                    "The library transaction has duplicate before-state copies."
+                                        .to_string(),
+                                );
+                            }
+                            let destination_leaf = destination_bound.take().ok_or_else(|| {
+                                "The library before-state handle disappeared during roll-forward."
+                                    .to_string()
+                            })?;
+                            backup_bound = Some(
+                                destination_leaf
+                                    .rename_to(&backup, "preserved Mod library before-state")?,
+                            );
+                        }
+                    } else if !(destination_hash.is_none() && backup_hash == plan.before_hash) {
+                        return Err(
+                            "The library transaction cannot prove its requested after state."
+                                .to_string(),
+                        );
+                    }
+                    let staging_leaf = staging_bound.take().ok_or_else(|| {
+                        "The library after-state handle disappeared during roll-forward."
+                            .to_string()
+                    })?;
+                    destination_bound = Some(
+                        staging_leaf.rename_to(&destination, "restored Mod library after-state")?,
+                    );
+                }
+                if captured_deployment_tree_hash(&destination, destination_bound.as_ref())?
+                    .as_deref()
+                    != Some(plan.after_hash.as_str())
+                {
+                    return Err(
+                        "The library transaction could not reach its requested after state."
+                            .to_string(),
+                    );
+                }
+                journal.append(
+                    incomplete.transaction_id,
+                    nte_wal::WalState::StepReceipt,
+                    br#"{"step":"outer_recovery","outcome":"after"}"#,
+                )?;
+                journal.append(
+                    incomplete.transaction_id,
+                    nte_wal::WalState::CommittedAfter,
+                    b"{}",
+                )?;
+            }
+            LibraryRecoveryPreference::Infer => unreachable!(),
+        }
+        drop(destination_bound);
+        cleanup_captured_nte_library_artifacts(staging_bound, backup_bound)?;
+        return journal.append(
+            incomplete.transaction_id,
+            nte_wal::WalState::CleanupComplete,
+            br#"{"cleanup":"outer_recovery_complete"}"#,
+        );
+    }
+
     let outcome = if destination_hash.as_deref() == Some(plan.after_hash.as_str())
         && staging_hash.is_none()
         && (backup_hash.is_none() || backup_hash == plan.before_hash)
@@ -3051,6 +4375,216 @@ fn preserve_existing_preview_files(save_path: &Path, staging_path: &Path) -> Res
         }
     }
     Ok(())
+}
+
+fn is_preview_file_name(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with("preview.")
+}
+
+fn normalize_staged_mod_root(staging_path: &Path) -> Result<(), String> {
+    let entries = std::fs::read_dir(staging_path)
+        .map_err(|err| format!("Unable to inspect extracted Mod root: {err}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("Unable to inspect extracted Mod root: {err}"))?;
+    let mut wrapper: Option<PathBuf> = None;
+    for entry in &entries {
+        let metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|err| format!("Unable to inspect extracted root entry: {err}"))?;
+        if deployment_metadata_is_reparse(&metadata) {
+            return Err(format!(
+                "Extracted Mod root contains a reparse point: {}",
+                entry.path().display()
+            ));
+        }
+        if metadata.is_dir() {
+            if wrapper.is_some() {
+                return Ok(());
+            }
+            wrapper = Some(entry.path());
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(format!(
+                "Extracted Mod root contains an unsupported entry: {}",
+                entry.path().display()
+            ));
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let extension = entry
+            .path()
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if extension != "txt" && !is_preview_file_name(&name) {
+            return Ok(());
+        }
+    }
+    let Some(wrapper) = wrapper else {
+        return Ok(());
+    };
+    for entry in std::fs::read_dir(&wrapper)
+        .map_err(|err| format!("Unable to inspect Mod wrapper directory: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("Unable to inspect Mod wrapper entry: {err}"))?;
+        let metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|err| format!("Unable to inspect Mod wrapper entry: {err}"))?;
+        if deployment_metadata_is_reparse(&metadata) || (!metadata.is_file() && !metadata.is_dir())
+        {
+            return Err(format!(
+                "Mod wrapper contains an unsupported entry: {}",
+                entry.path().display()
+            ));
+        }
+        let destination = staging_path.join(entry.file_name());
+        if destination.exists() {
+            return Err(format!(
+                "Mod wrapper conflicts with a root entry: {}",
+                destination.display()
+            ));
+        }
+        std::fs::rename(entry.path(), &destination).map_err(|err| {
+            format!(
+                "Unable to normalize Mod wrapper '{}' to '{}': {err}",
+                entry.path().display(),
+                destination.display()
+            )
+        })?;
+    }
+    std::fs::remove_dir(&wrapper)
+        .map_err(|err| format!("Unable to remove empty Mod wrapper directory: {err}"))
+}
+
+fn read_preview_candidate(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|err| format!("Unable to inspect preview '{}': {err}", path.display()))?;
+    if !metadata.is_file() || deployment_metadata_is_reparse(&metadata) {
+        return Err(format!(
+            "Preview '{}' is not a safe regular file.",
+            path.display()
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > INSTALL_PREVIEW_MAX_BYTES {
+        return Err(format!(
+            "Preview '{}' must be between 1 byte and 20 MiB.",
+            path.display()
+        ));
+    }
+    std::fs::read(path).map_err(|err| format!("Unable to read preview '{}': {err}", path.display()))
+}
+
+fn decode_preview_candidate(path: &Path) -> Result<Vec<u8>, String> {
+    let bytes = read_preview_candidate(path)?;
+    let expected = match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => image::ImageFormat::Png,
+        Some("jpg" | "jpeg") => image::ImageFormat::Jpeg,
+        Some("webp") => image::ImageFormat::WebP,
+        _ => {
+            return Err(format!(
+                "Preview '{}' has an unsupported extension.",
+                path.display()
+            ))
+        }
+    };
+    let detected = image::guess_format(&bytes)
+        .map_err(|err| format!("Unable to identify preview '{}': {err}", path.display()))?;
+    if detected != expected {
+        return Err(format!(
+            "Preview '{}' extension does not match its file signature.",
+            path.display()
+        ));
+    }
+    remote_media::decode_and_reencode_preview_jpeg(&bytes)
+}
+
+fn install_required_preview(
+    staging_path: &Path,
+    fallback: &PreparedInstallPreview,
+) -> Result<(), String> {
+    let mut package_errors = Vec::new();
+    let mut normalized_jpeg = None;
+    for extension in INSTALL_PREVIEW_EXTENSIONS {
+        let candidate = std::fs::read_dir(staging_path)
+            .map_err(|err| format!("Unable to inspect extracted Mod previews: {err}"))?
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&format!("preview.{extension}")))
+            })
+            .map(|entry| entry.path());
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        match decode_preview_candidate(&candidate) {
+            Ok(jpeg) => {
+                normalized_jpeg = Some(jpeg);
+                break;
+            }
+            Err(error) => package_errors.push(error),
+        }
+    }
+
+    if normalized_jpeg.is_none() {
+        normalized_jpeg = match fallback {
+            PreparedInstallPreview::Ready(path) => Some(decode_preview_candidate(path)?),
+            PreparedInstallPreview::Unavailable(error) => {
+                let package_context = if package_errors.is_empty() {
+                    "The archive has no valid root preview.".to_string()
+                } else {
+                    package_errors.join(" ")
+                };
+                return Err(format!("{package_context} {error}"));
+            }
+        };
+    }
+
+    for entry in std::fs::read_dir(staging_path)
+        .map_err(|err| format!("Unable to inspect extracted Mod previews: {err}"))?
+    {
+        let entry =
+            entry.map_err(|err| format!("Unable to inspect extracted Mod preview: {err}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !is_preview_file_name(&name) {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(entry.path())
+            .map_err(|err| format!("Unable to inspect extracted Mod preview: {err}"))?;
+        if !metadata.is_file() || deployment_metadata_is_reparse(&metadata) {
+            return Err(format!(
+                "Extracted preview entry '{}' is not a safe regular file.",
+                entry.path().display()
+            ));
+        }
+        std::fs::remove_file(entry.path()).map_err(|err| {
+            format!(
+                "Unable to remove superseded preview '{}': {err}",
+                entry.path().display()
+            )
+        })?;
+    }
+
+    let preview_path = staging_path.join("preview.jpg");
+    let mut output = atomic_write_file::AtomicWriteFile::open(&preview_path)
+        .map_err(|err| format!("Unable to stage preview.jpg: {err}"))?;
+    output
+        .write_all(normalized_jpeg.as_deref().unwrap_or_default())
+        .map_err(|err| format!("Unable to write preview.jpg: {err}"))?;
+    output
+        .commit()
+        .map_err(|err| format!("Unable to publish staged preview.jpg: {err}"))?;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&preview_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|err| format!("Unable to flush staged preview.jpg: {err}"))
 }
 
 fn copy_nte_library_tree(source: &Path, destination: &Path) -> Result<(), String> {
@@ -3192,109 +4726,1119 @@ fn deploy_downloaded_nte_preview(
     })
 }
 
-fn normalize_nte_preview_extension(extension: &str) -> Result<String, String> {
-    let extension = extension
-        .trim()
-        .trim_start_matches('.')
-        .to_ascii_lowercase();
-    if PREVIEW_EXTENSIONS.contains(&extension.as_str()) {
-        Ok(extension)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenericModMutationStatePlan {
+    before_game_config_hash: String,
+    after_game_config_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenericModMutationRegistryPlan {
+    schema_version: u32,
+    operation: String,
+    game: String,
+    trusted_root: String,
+    destination_relative_path: String,
+    before_hash: Option<String>,
+    after_hash: String,
+    #[serde(default)]
+    state: Option<GenericModMutationStatePlan>,
+}
+
+struct GenericStateMutation<'a> {
+    plan: GenericModMutationStatePlan,
+    commit: Box<dyn FnOnce() -> Result<(), String> + 'a>,
+}
+
+struct GenericModMutationContext<'a> {
+    operation: &'a str,
+    game: &'a str,
+    trusted_root: &'a Path,
+    registry: &'a mut nte_wal::WalJournal,
+    state: Option<GenericStateMutation<'a>>,
+}
+
+fn persisted_game_config_hash(config_dir: &Path, game: &str) -> Result<String, String> {
+    validate_registered_game_key(game)?;
+    let path = config_dir.join(format!("config{game}.json"));
+    let metadata = std::fs::metadata(&path)
+        .map_err(|err| format!("Unable to inspect persisted {game} configuration: {err}"))?;
+    if !metadata.is_file() || metadata.len() > 16 * 1024 * 1024 {
+        return Err(format!(
+            "Persisted {game} configuration is missing or exceeds the 16 MiB safety limit."
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&path)
+            .map_err(|err| format!("Unable to read persisted {game} configuration: {err}"))?,
+    )
+    .map_err(|err| format!("Unable to parse persisted {game} configuration: {err}"))?;
+    if value.get("game").and_then(serde_json::Value::as_str) != Some(game) {
+        return Err(format!(
+            "Persisted {game} configuration has a mismatched game identity."
+        ));
+    }
+    app_state::stable_json_value_hash(&value)
+}
+
+fn persisted_managed_source_root(config_dir: &Path, game: &str) -> Result<PathBuf, String> {
+    resolve_managed_folder_from_config_dir(
+        config_dir,
+        game,
+        ManagedPathRoot::Source,
+        MANAGED_SOURCE_DIR,
+    )
+}
+
+fn generic_registry_destination(
+    config_dir: &Path,
+    plan: &GenericModMutationRegistryPlan,
+) -> Result<(PathBuf, PathBuf), String> {
+    let valid_schema = (plan.schema_version == 1 && plan.state.is_none())
+        || (plan.schema_version == 2 && plan.state.is_some());
+    if !valid_schema
+        || !matches!(
+            plan.operation.as_str(),
+            "preview_backfill" | "archive_install" | "gamebanana_binding" | "gamebanana_download"
+        )
+    {
+        return Err("The Mod mutation registry plan has an unsupported operation.".to_string());
+    }
+    validate_registered_game_key(&plan.game)?;
+    let trusted_root = if plan.game == "NTE" {
+        nte::persisted_nte_library_root(config_dir)?
     } else {
-        Err("NTE preview has an unsupported file type.".to_string())
+        persisted_managed_source_root(config_dir, &plan.game)?
+    };
+    let recorded_root = PathBuf::from(&plan.trusted_root)
+        .canonicalize()
+        .map_err(|err| format!("Unable to resolve the recorded Mod mutation root: {err}"))?;
+    if nte::normalized_path_for_comparison(&trusted_root)
+        != nte::normalized_path_for_comparison(&recorded_root)
+    {
+        return Err("The persisted Mod root changed during mutation recovery.".to_string());
+    }
+    let destination =
+        nte::trusted_nte_library_destination(&trusted_root, &plan.destination_relative_path)?;
+    Ok((trusted_root, destination))
+}
+
+fn recover_generic_mod_mutation_registry(
+    config_dir: &Path,
+    registry: &mut nte_wal::WalJournal,
+) -> Result<(), String> {
+    let Some(incomplete) = registry.incomplete_transaction()? else {
+        return Ok(());
+    };
+    let plan: GenericModMutationRegistryPlan = serde_json::from_slice(&incomplete.prepared_payload)
+        .map_err(|err| format!("Unable to read the Mod mutation registry plan: {err}"))?;
+    let (trusted_root, destination) = generic_registry_destination(config_dir, &plan)?;
+    let state_preference = if let Some(state) = &plan.state {
+        let current_hash = persisted_game_config_hash(config_dir, &plan.game)?;
+        if current_hash == state.before_game_config_hash {
+            LibraryRecoveryPreference::Before
+        } else if current_hash == state.after_game_config_hash {
+            LibraryRecoveryPreference::After
+        } else {
+            return Err(
+                "The current game configuration matches neither the Mod mutation before nor after state."
+                    .to_string(),
+            );
+        }
+    } else {
+        LibraryRecoveryPreference::Infer
+    };
+    mod_mutation::with_library_lock(&trusted_root, |library_journal| {
+        recover_nte_library_transaction_from_parent_with_preference(
+            &trusted_root,
+            library_journal,
+            state_preference,
+        )
+    })?;
+    let destination_hash = optional_deployment_tree_hash(&destination)?;
+
+    if (incomplete.state == nte_wal::WalState::AbortedBefore
+        && state_preference == LibraryRecoveryPreference::After)
+        || (incomplete.state == nte_wal::WalState::CommittedAfter
+            && state_preference == LibraryRecoveryPreference::Before)
+    {
+        return Err(
+            "The central Mod mutation WAL conflicts with the visible game configuration."
+                .to_string(),
+        );
+    }
+
+    if incomplete.state == nte_wal::WalState::CommittedAfter {
+        if destination_hash.as_deref() != Some(plan.after_hash.as_str()) {
+            return Err(
+                "A committed Mod mutation does not match its recorded after-state hash."
+                    .to_string(),
+            );
+        }
+        return registry.append(
+            incomplete.transaction_id,
+            nte_wal::WalState::CleanupComplete,
+            br#"{"recovery":"cleanup_after"}"#,
+        );
+    }
+    if incomplete.state == nte_wal::WalState::AbortedBefore {
+        if destination_hash != plan.before_hash {
+            return Err(
+                "An aborted Mod mutation does not match its recorded before-state hash."
+                    .to_string(),
+            );
+        }
+        return registry.append(
+            incomplete.transaction_id,
+            nte_wal::WalState::CleanupComplete,
+            br#"{"recovery":"cleanup_before"}"#,
+        );
+    }
+    if incomplete.state == nte_wal::WalState::Prepared {
+        registry.append(
+            incomplete.transaction_id,
+            nte_wal::WalState::Committing,
+            br#"{"recovery":"begin"}"#,
+        )?;
+    }
+    let terminal = match state_preference {
+        LibraryRecoveryPreference::After
+            if destination_hash.as_deref() == Some(plan.after_hash.as_str()) =>
+        {
+            nte_wal::WalState::CommittedAfter
+        }
+        LibraryRecoveryPreference::Before if destination_hash == plan.before_hash => {
+            nte_wal::WalState::AbortedBefore
+        }
+        LibraryRecoveryPreference::Infer
+            if destination_hash.as_deref() == Some(plan.after_hash.as_str()) =>
+        {
+            nte_wal::WalState::CommittedAfter
+        }
+        LibraryRecoveryPreference::Infer if destination_hash == plan.before_hash => {
+            nte_wal::WalState::AbortedBefore
+        }
+        _ => {
+            return Err(if state_preference == LibraryRecoveryPreference::Infer {
+                "The Mod mutation target matches neither its before nor after state; recovery is required."
+                    .to_string()
+            } else {
+                "The Mod mutation target does not match the state-selected recovery direction."
+                    .to_string()
+            });
+        }
+    };
+    registry.append(
+        incomplete.transaction_id,
+        nte_wal::WalState::StepReceipt,
+        br#"{"recovery":"verified_target"}"#,
+    )?;
+    registry.append(incomplete.transaction_id, terminal, b"{}")?;
+    registry.append(
+        incomplete.transaction_id,
+        nte_wal::WalState::CleanupComplete,
+        br#"{"recovery":"complete"}"#,
+    )
+}
+
+fn deploy_generic_staged_directory(
+    save_path: &Path,
+    staging_path: &Path,
+    bound: BoundNteDeployment<'_>,
+    context: GenericModMutationContext<'_>,
+) -> Result<(), String> {
+    let GenericModMutationContext {
+        operation,
+        game,
+        trusted_root,
+        registry,
+        state: state_mutation,
+    } = context;
+    let destination = nte::canonical_nte_library_destination(trusted_root, save_path)?;
+    let destination_relative_path = destination
+        .strip_prefix(trusted_root)
+        .map_err(|_| "The generic Mod destination escaped its persisted root.".to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let state_plan = state_mutation
+        .as_ref()
+        .map(|mutation| mutation.plan.clone());
+    let plan = GenericModMutationRegistryPlan {
+        schema_version: if state_plan.is_some() { 2 } else { 1 },
+        operation: operation.to_string(),
+        game: game.to_string(),
+        trusted_root: trusted_root.to_string_lossy().into_owned(),
+        destination_relative_path,
+        before_hash: optional_deployment_tree_hash(save_path)?,
+        after_hash: deployment_tree_hash(staging_path)?,
+        state: state_plan,
+    };
+    let payload = serde_json::to_vec(&plan)
+        .map_err(|err| format!("Unable to serialize the Mod mutation registry plan: {err}"))?;
+    let transaction_id = registry.begin(&payload)?;
+    registry.append(transaction_id, nte_wal::WalState::Committing, b"{}")?;
+
+    let deploy_result = mod_mutation::with_library_lock(trusted_root, |library_journal| {
+        recover_nte_library_transaction(trusted_root, library_journal)?;
+        deploy_staged_directory_with_commit(
+            save_path,
+            staging_path,
+            Some(trusted_root),
+            Some(library_journal),
+            Some(bound),
+            || {
+                registry.append(
+                    transaction_id,
+                    nte_wal::WalState::StepReceipt,
+                    br#"{"step":"filesystem","outcome":"applied"}"#,
+                )?;
+                if let Some(state_mutation) = state_mutation {
+                    (state_mutation.commit)()?;
+                    registry.append(
+                        transaction_id,
+                        nte_wal::WalState::StepReceipt,
+                        br#"{"step":"state","outcome":"applied"}"#,
+                    )?;
+                }
+                Ok(())
+            },
+        )
+    });
+    if let Err(error) = deploy_result {
+        let current = optional_deployment_tree_hash(save_path)?;
+        if current == plan.before_hash {
+            registry.append(
+                transaction_id,
+                nte_wal::WalState::StepReceipt,
+                br#"{"step":"filesystem","outcome":"rolled_back"}"#,
+            )?;
+            registry.append(transaction_id, nte_wal::WalState::AbortedBefore, b"{}")?;
+            registry.append(
+                transaction_id,
+                nte_wal::WalState::CleanupComplete,
+                br#"{"cleanup":"complete"}"#,
+            )?;
+        }
+        return Err(error);
+    }
+    if optional_deployment_tree_hash(save_path)?.as_deref() != Some(plan.after_hash.as_str()) {
+        return Err(
+            "The generic Mod deployment does not match its recorded after state.".to_string(),
+        );
+    }
+    registry.append(transaction_id, nte_wal::WalState::CommittedAfter, b"{}")?;
+    registry.append(
+        transaction_id,
+        nte_wal::WalState::CleanupComplete,
+        br#"{"cleanup":"complete"}"#,
+    )
+}
+
+fn stage_and_deploy_generic_preview(
+    downloaded_preview: &Path,
+    save_path: &Path,
+    mutation: Option<GenericModMutationContext<'_>>,
+) -> Result<(), String> {
+    let Some(context) = mutation else {
+        return stage_and_deploy_generic_preview_inner(downloaded_preview, save_path, None, None);
+    };
+    let trusted_root = context.trusted_root;
+    nte::with_bound_nte_library_destination(
+        trusted_root,
+        save_path,
+        move |destination_parent, destination_name| {
+            stage_and_deploy_generic_preview_inner(
+                downloaded_preview,
+                save_path,
+                Some(context),
+                Some((destination_parent, destination_name)),
+            )
+        },
+    )
+}
+
+fn stage_and_deploy_generic_preview_inner(
+    downloaded_preview: &Path,
+    save_path: &Path,
+    mutation: Option<GenericModMutationContext<'_>>,
+    bound_destination: Option<(&CapDir, &std::ffi::OsStr)>,
+) -> Result<(), String> {
+    let staging_path = deployment_sibling_path(save_path, "preview-staging")?;
+    let mut staging_directory = if let Some((parent, _)) = bound_destination {
+        Some(create_bound_staging_directory(parent, &staging_path)?)
+    } else {
+        remove_directory_if_exists(&staging_path)?;
+        None
+    };
+    let result = (|| {
+        copy_nte_library_tree(save_path, &staging_path)?;
+        for entry in std::fs::read_dir(&staging_path)
+            .map_err(|err| format!("Unable to inspect generic preview staging: {err}"))?
+        {
+            let entry =
+                entry.map_err(|err| format!("Unable to inspect generic preview staging: {err}"))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !is_preview_file_name(&name) {
+                continue;
+            }
+            let metadata = std::fs::symlink_metadata(entry.path())
+                .map_err(|err| format!("Unable to inspect generic preview entry: {err}"))?;
+            if !metadata.is_file() || deployment_metadata_is_reparse(&metadata) {
+                return Err(format!(
+                    "Generic preview entry '{}' is not a safe regular file.",
+                    entry.path().display()
+                ));
+            }
+            std::fs::remove_file(entry.path()).map_err(|err| {
+                format!(
+                    "Unable to remove superseded generic preview '{}': {err}",
+                    entry.path().display()
+                )
+            })?;
+        }
+        std::fs::copy(downloaded_preview, staging_path.join("preview.jpg"))
+            .map_err(|err| format!("Unable to stage generic preview.jpg: {err}"))?;
+        let bound = match (bound_destination, staging_directory.take()) {
+            (Some((parent, destination_name)), Some(staging)) => Some(BoundNteDeployment {
+                parent,
+                destination_name,
+                staging,
+            }),
+            (None, None) => None,
+            _ => return Err("Generic preview staging binding is incomplete.".to_string()),
+        };
+        match mutation {
+            Some(context) => deploy_generic_staged_directory(
+                save_path,
+                &staging_path,
+                bound.ok_or_else(|| {
+                    "Generic preview mutation requires bound staging.".to_string()
+                })?,
+                context,
+            ),
+            None => deploy_staged_directory(save_path, &staging_path, None, None, bound),
+        }
+    })();
+    if let Err(error) = result {
+        let cleanup_result = if let Some((parent, _)) = bound_destination {
+            let name = staging_path
+                .file_name()
+                .ok_or_else(|| "Generic preview staging directory has no name.".to_string())?;
+            cleanup_untransferred_bound_staging(
+                staging_directory.take(),
+                parent,
+                name,
+                "failed generic preview staging",
+            )
+        } else {
+            remove_directory_if_exists(&staging_path)
+        };
+        return match cleanup_result {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; unable to clean failed generic preview staging: {cleanup_error}"
+            )),
+        };
+    }
+    drop(staging_directory.take());
+    Ok(())
+}
+
+async fn prepare_normalized_preview_staging<A: DownloadAppContext>(
+    app_handle: &A,
+    key: &str,
+    preview_url: &str,
+) -> Result<(BoundNteDownloadStaging, PathBuf), String> {
+    let cached_preview = match prepare_install_preview(app_handle, Some(preview_url), key).await {
+        PreparedInstallPreview::Ready(path) => path,
+        PreparedInstallPreview::Unavailable(error) => return Err(error),
+    };
+    let normalized_jpeg = decode_preview_candidate(&cached_preview)?;
+    let app_local_data = app_handle
+        .app_local_data_dir()
+        .map_err(|err| format!("Unable to resolve preview staging: {err}"))?;
+    let staging = nte_download_staging_directory(
+        app_handle,
+        key,
+        &app_local_data.join("preview-backfill-placeholder"),
+    )?;
+    let staged_preview = staging.join("preview.jpg");
+    let stage_result = (|| {
+        std::fs::write(&staged_preview, normalized_jpeg)
+            .map_err(|err| format!("Unable to write backfill preview staging: {err}"))?;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&staged_preview)
+            .and_then(|file| file.sync_all())
+            .map_err(|err| format!("Unable to flush backfill preview staging: {err}"))
+    })();
+    match stage_result {
+        Ok(()) => Ok((staging, staged_preview)),
+        Err(error) => match staging.cleanup() {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; unable to clean preview staging: {cleanup_error}"
+            )),
+        },
     }
 }
 
-fn deploy_local_nte_preview<F>(
-    app_handle: &tauri::AppHandle,
-    relative_path: &str,
-    extension: &str,
-    write_preview: F,
-) -> Result<(), String>
-where
-    F: FnOnce(&Path) -> Result<(), String>,
-{
-    let extension = normalize_nte_preview_extension(extension)?;
+fn commit_game_config_for_mod_mutation(
+    repository: &app_state::AppStateRepository,
+    game: &str,
+    next_game: serde_json::Value,
+    expected_game_revision: u64,
+    state_plan: &GenericModMutationStatePlan,
+) -> Result<app_state::AppConfigSnapshot, String> {
+    let save_result = repository.save_config_for_mod_mutation(
+        None,
+        Some(next_game),
+        None,
+        Some(expected_game_revision),
+    );
+    let snapshot = match save_result {
+        Ok(snapshot) => snapshot,
+        Err(save_error) => {
+            let visible = repository.load_config(Some(game)).map_err(|read_error| {
+                format!(
+                    "Unable to determine whether the game configuration committed ({save_error}); state recovery also failed ({read_error})"
+                )
+            })?;
+            let visible_game = visible.game.as_ref().ok_or_else(|| {
+                format!("Application state is missing {game} after a Mod mutation commit.")
+            })?;
+            let visible_hash = app_state::stable_json_value_hash(visible_game)?;
+            if visible_hash == state_plan.after_game_config_hash {
+                visible
+            } else if visible_hash == state_plan.before_game_config_hash {
+                return Err(save_error);
+            } else {
+                return Err(format!(
+                    "Game configuration commit is ambiguous after an error: {save_error}"
+                ));
+            }
+        }
+    };
+    let committed_game = snapshot
+        .game
+        .as_ref()
+        .ok_or_else(|| format!("Application state is missing committed {game} configuration."))?;
+    if app_state::stable_json_value_hash(committed_game)? != state_plan.after_game_config_hash {
+        return Err(
+            "Committed game configuration does not match the prepared Mod mutation state."
+                .to_string(),
+        );
+    }
+    Ok(snapshot)
+}
+
+fn download_history_item_matches(
+    candidate: &serde_json::Value,
+    completed: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let Some(candidate) = candidate.as_object() else {
+        return false;
+    };
+    let completed_key = completed.get("key").and_then(serde_json::Value::as_str);
+    let candidate_key = candidate.get("key").and_then(serde_json::Value::as_str);
+    if completed_key.is_some() && completed_key == candidate_key {
+        return true;
+    }
+    ["source", "file", "fname"].into_iter().all(|field| {
+        candidate.get(field).and_then(serde_json::Value::as_str)
+            == completed.get(field).and_then(serde_json::Value::as_str)
+    })
+}
+
+fn prepare_gamebanana_download_state(
+    repository: &app_state::AppStateRepository,
+    game: &str,
+    request: &GameBananaDownloadState,
+    destination: &Path,
+) -> Result<PreparedDownloadStateMutation, String> {
+    validate_registered_game_key(game)?;
+    let relative = validate_managed_relative_path(&request.relative_path)?;
+    if relative.as_os_str().is_empty() {
+        return Err("GameBanana download requires a Mod-relative path.".to_string());
+    }
+    if request.config_updated_at.trim().is_empty() || request.config_updated_at.len() > 128 {
+        return Err("GameBanana download has an invalid configuration timestamp.".to_string());
+    }
+    let completed_bytes = serde_json::to_vec(&request.completed_download)
+        .map_err(|err| format!("Unable to validate completed download metadata: {err}"))?;
+    if completed_bytes.len() > 128 * 1024 {
+        return Err("Completed download metadata exceeds the 128 KiB safety limit.".to_string());
+    }
+    let completed_input = request
+        .completed_download
+        .as_object()
+        .ok_or_else(|| "Completed download metadata is not an object.".to_string())?;
+    for field in ["key", "file", "fname"] {
+        if completed_input
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty() && value.len() <= 4_096)
+            .is_none()
+        {
+            return Err(format!(
+                "Completed download metadata has an invalid {field}."
+            ));
+        }
+    }
+    if completed_input
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        != Some(request.source.as_str())
+    {
+        return Err(
+            "Completed download source does not match the Mod metadata source.".to_string(),
+        );
+    }
+    let mod_id = completed_input
+        .get("gameBananaModId")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "Completed download has no valid GameBanana Mod ID.".to_string())?;
+    if app_state::gamebanana_mod_id_from_profile_url(&request.source) != Some(mod_id) {
+        return Err("Completed download source does not match its GameBanana Mod ID.".to_string());
+    }
+    let file_id = completed_input
+        .get("gameBananaFileId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 2_048)
+        .ok_or_else(|| "Completed download has no valid GameBanana file ID.".to_string())?;
+    let selected_file_size = completed_input
+        .get("expectedSize")
+        .and_then(serde_json::Value::as_u64);
+    let selected_file_updated_at = completed_input
+        .get("updated")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let selected_file_name = completed_input
+        .get("fname")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Completed download has no file name.".to_string())?;
+
+    let snapshot = repository.load_config(Some(game))?;
+    let expected_game_revision = snapshot
+        .game_revision
+        .ok_or_else(|| format!("Application state is missing the {game} revision."))?;
+    let mut next_game = snapshot
+        .game
+        .ok_or_else(|| format!("Application state is missing {game}."))?;
+    let normalized_relative = relative.to_string_lossy().replace('/', "\\");
+    let data = next_game
+        .get_mut("data")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| format!("{game} Mod metadata is invalid."))?;
+    let current_entry = data.get(&normalized_relative).cloned();
+    if current_entry != request.expected_data_entry {
+        return Err(
+            "The target Mod metadata changed while the GameBanana download was pending."
+                .to_string(),
+        );
+    }
+    let mut next_entry = match current_entry {
+        Some(serde_json::Value::Object(entry)) => entry,
+        Some(_) => return Err("The target Mod metadata entry is not an object.".to_string()),
+        None => serde_json::Map::new(),
+    };
+    let existing_binding = next_entry
+        .get("gameBanana")
+        .and_then(serde_json::Value::as_object)
+        .filter(|binding| binding.get("modId").and_then(serde_json::Value::as_u64) == Some(mod_id));
+    let variant = existing_binding
+        .and_then(|binding| binding.get("variant"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|variant| matches!(*variant, "primary" | "independent"))
+        .unwrap_or_else(|| {
+            if completed_input
+                .get("addon")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                "independent"
+            } else {
+                "primary"
+            }
+        });
+    let bound_at = existing_binding
+        .and_then(|binding| binding.get("boundAt"))
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value > 0)
+        .unwrap_or(request.viewed_at.max(1));
+    let mut binding = serde_json::json!({
+        "provider": "gamebanana",
+        "modId": mod_id,
+        "profileUrl": request.source,
+        "variant": variant,
+        "boundAt": bound_at,
+    });
+    if let Some(size) = selected_file_size {
+        binding["selectedFile"] = serde_json::json!({
+            "id": file_id,
+            "name": selected_file_name,
+            "size": size,
+            "updatedAt": selected_file_updated_at,
+        });
+    }
+    next_entry.insert(
+        "source".to_string(),
+        serde_json::Value::String(request.source.clone()),
+    );
+    next_entry.insert(
+        "updatedAt".to_string(),
+        serde_json::Value::Number(request.updated_at.into()),
+    );
+    next_entry.insert(
+        "viewedAt".to_string(),
+        serde_json::Value::Number(request.viewed_at.into()),
+    );
+    next_entry.insert("gameBanana".to_string(), binding);
+    data.insert(
+        normalized_relative.clone(),
+        serde_json::Value::Object(next_entry),
+    );
+
+    let downloads = next_game
+        .get_mut("downloads")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| format!("{game} download history is invalid."))?;
+    let mut completed = completed_input.clone();
+    completed.insert(
+        "status".to_string(),
+        serde_json::Value::String("completed".to_string()),
+    );
+    completed.insert(
+        "path".to_string(),
+        serde_json::Value::String(normalized_relative),
+    );
+    completed.insert(
+        "dlPath".to_string(),
+        serde_json::Value::String(destination.to_string_lossy().into_owned()),
+    );
+    for queue in ["queue", "downloading", "extracting", "failed", "completed"] {
+        let entries = downloads
+            .get_mut(queue)
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or_else(|| format!("{game} download queue '{queue}' is invalid."))?;
+        entries.retain(|candidate| !download_history_item_matches(candidate, &completed));
+    }
+    downloads
+        .get_mut("completed")
+        .and_then(serde_json::Value::as_array_mut)
+        .expect("validated completed download array")
+        .push(serde_json::Value::Object(completed));
+    next_game["updatedAt"] = serde_json::Value::String(request.config_updated_at.clone());
+
+    let preflight =
+        repository.preflight_game_config_update(game, &next_game, expected_game_revision)?;
+    Ok(PreparedDownloadStateMutation {
+        next_game,
+        expected_game_revision,
+        plan: GenericModMutationStatePlan {
+            before_game_config_hash: preflight.before_game_config_hash,
+            after_game_config_hash: preflight.after_game_config_hash,
+        },
+    })
+}
+
+#[tauri::command]
+async fn bind_gamebanana_mod(
+    app_handle: tauri::AppHandle,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
+    game: String,
+    relative_path: String,
+    preview_url: String,
+    game_config: serde_json::Value,
+    expected_game_revision: u64,
+) -> Result<app_state::AppConfigSnapshot, String> {
+    validate_registered_game_key(&game)?;
+    let relative = validate_managed_relative_path(&relative_path)?;
+    if relative.as_os_str().is_empty() {
+        return Err("GameBanana binding requires a Mod-relative path.".to_string());
+    }
+    repository.preflight_game_config_update(&game, &game_config, expected_game_revision)?;
+    let key = format!("binding-{game}-{}", relative.to_string_lossy());
+    let (staging, staged_preview) =
+        prepare_normalized_preview_staging(&app_handle, &key, &preview_url).await?;
     let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
-    let library_root = nte::persisted_nte_library_root(&config_dir)?;
-    let destination = nte::trusted_nte_library_destination(&library_root, relative_path)?;
-    let staging = nte_download_staging_directory(
-        app_handle,
-        &format!("local-preview-{relative_path}"),
-        &destination,
-    )?;
-    let preview_path = staging.join(format!("preview.{extension}"));
-    let result = (|| {
-        write_preview(&preview_path)?;
-        let metadata = std::fs::symlink_metadata(&preview_path)
-            .map_err(|err| format!("Unable to inspect the staged NTE preview: {err}"))?;
-        if !metadata.is_file() || deployment_metadata_is_reparse(&metadata) {
-            return Err("The staged NTE preview is not a safe regular file.".to_string());
-        }
-        if metadata.len() == 0 || metadata.len() > 20 * 1024 * 1024 {
-            return Err("NTE preview must be between 1 byte and 20 MiB.".to_string());
-        }
-        std::fs::File::open(&preview_path)
-            .and_then(|file| file.sync_all())
-            .map_err(|err| format!("Unable to flush the staged NTE preview: {err}"))?;
-        deploy_downloaded_nte_preview(&config_dir, &library_root, &destination, &preview_path)
-    })();
+    let control_root = repository.control_root().to_path_buf();
+    let managed_relative = PathBuf::from(MANAGED_SOURCE_DIR).join(&relative);
+    let task_app = app_handle.clone();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let repository = task_app.state::<app_state::AppStateRepository>();
+        mod_mutation::with_global_lock(&control_root, |registry| {
+            recover_generic_mod_mutation_registry(&config_dir, registry)?;
+            let preflight = repository.preflight_game_config_update(
+                &game,
+                &game_config,
+                expected_game_revision,
+            )?;
+            let state_plan = GenericModMutationStatePlan {
+                before_game_config_hash: preflight.before_game_config_hash,
+                after_game_config_hash: preflight.after_game_config_hash,
+            };
+            let save_path = resolve_managed_folder_from_config_dir(
+                &config_dir,
+                &game,
+                ManagedPathRoot::Source,
+                &managed_relative.to_string_lossy(),
+            )?;
+            let trusted_root = if game == "NTE" {
+                nte::persisted_nte_library_root(&config_dir)?
+            } else {
+                persisted_managed_source_root(&config_dir, &game)?
+            };
+            let trusted_destination =
+                nte::trusted_nte_library_destination(&trusted_root, &relative_path)?;
+            if nte::normalized_path_for_comparison(&trusted_destination)
+                != nte::normalized_path_for_comparison(&save_path)
+            {
+                return Err("GameBanana binding destination changed before deployment.".to_string());
+            }
+
+            let mut committed_snapshot = None;
+            {
+                let snapshot_slot = &mut committed_snapshot;
+                let commit_plan = state_plan.clone();
+                let commit_game = game.clone();
+                let commit_config = game_config.clone();
+                stage_and_deploy_generic_preview(
+                    &staged_preview,
+                    &save_path,
+                    Some(GenericModMutationContext {
+                        operation: "gamebanana_binding",
+                        game: &game,
+                        trusted_root: &trusted_root,
+                        registry,
+                        state: Some(GenericStateMutation {
+                            plan: state_plan,
+                            commit: Box::new(move || {
+                                let snapshot = commit_game_config_for_mod_mutation(
+                                    &repository,
+                                    &commit_game,
+                                    commit_config,
+                                    expected_game_revision,
+                                    &commit_plan,
+                                )?;
+                                *snapshot_slot = Some(snapshot);
+                                Ok(())
+                            }),
+                        }),
+                    }),
+                )?;
+            }
+            committed_snapshot.ok_or_else(|| {
+                "GameBanana binding completed without a committed state snapshot.".to_string()
+            })
+        })
+    })
+    .await;
+    let result = match worker {
+        Ok(result) => result,
+        Err(error) => Err(format!("GameBanana binding worker failed: {error}")),
+    };
     let cleanup = staging.cleanup();
     match (result, cleanup) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(err), _) => Err(err),
-        (Ok(()), Err(err)) => Err(err),
+        (Ok(snapshot), Ok(())) => Ok(snapshot),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; unable to clean GameBanana binding staging: {cleanup_error}"
+        )),
     }
 }
 
 #[tauri::command]
-async fn save_nte_preview_data(
+async fn backfill_mod_preview(
     app_handle: tauri::AppHandle,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
+    game: String,
+    relative_path: String,
+    preview_url: String,
+) -> Result<(), String> {
+    validate_registered_game_key(&game)?;
+    let relative = validate_managed_relative_path(&relative_path)?;
+    if relative.as_os_str().is_empty() {
+        return Err("Preview backfill requires a Mod-relative path.".to_string());
+    }
+    let key = format!("backfill-{game}-{}", relative.to_string_lossy());
+    let (staging, staged_preview) =
+        prepare_normalized_preview_staging(&app_handle, &key, &preview_url).await?;
+
+    let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
+    let control_root = repository.control_root().to_path_buf();
+    let managed_relative = PathBuf::from(MANAGED_SOURCE_DIR).join(&relative);
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        mod_mutation::with_global_lock(&control_root, |registry| {
+            recover_generic_mod_mutation_registry(&config_dir, registry)?;
+            let save_path = resolve_managed_folder_from_config_dir(
+                &config_dir,
+                &game,
+                ManagedPathRoot::Source,
+                &managed_relative.to_string_lossy(),
+            )?;
+            if game == "NTE" {
+                let library_root = nte::persisted_nte_library_root(&config_dir)?;
+                let trusted = nte::trusted_nte_library_destination(&library_root, &relative_path)?;
+                if nte::normalized_path_for_comparison(&trusted)
+                    != nte::normalized_path_for_comparison(&save_path)
+                {
+                    return Err("NTE preview destination changed before deployment.".to_string());
+                }
+                deploy_downloaded_nte_preview(&config_dir, &library_root, &trusted, &staged_preview)
+            } else {
+                let trusted_root = persisted_managed_source_root(&config_dir, &game)?;
+                stage_and_deploy_generic_preview(
+                    &staged_preview,
+                    &save_path,
+                    Some(GenericModMutationContext {
+                        operation: "preview_backfill",
+                        game: &game,
+                        trusted_root: &trusted_root,
+                        registry,
+                        state: None,
+                    }),
+                )
+            }
+        })
+    })
+    .await;
+    let result = match worker {
+        Ok(result) => result,
+        Err(error) => Err(format!("Preview backfill worker failed: {error}")),
+    };
+    let cleanup = staging.cleanup();
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(cleanup_error)) => Err(format!(
+            "{error}; unable to clean preview backfill staging: {cleanup_error}"
+        )),
+    }
+}
+
+fn prepare_normalized_preview_data_staging<A: DownloadAppContext>(
+    app_handle: &A,
+    key: &str,
+    extension: &str,
+    data: &[u8],
+) -> Result<(BoundNteDownloadStaging, PathBuf), String> {
+    if data.is_empty() || data.len() > INSTALL_PREVIEW_MAX_BYTES as usize {
+        return Err(format!(
+            "Preview data must be between 1 byte and {INSTALL_PREVIEW_MAX_BYTES} bytes."
+        ));
+    }
+    let expected = match extension.to_ascii_lowercase().as_str() {
+        "png" => image::ImageFormat::Png,
+        "jpg" | "jpeg" => image::ImageFormat::Jpeg,
+        "webp" => image::ImageFormat::WebP,
+        _ => return Err("Preview data has an unsupported file extension.".to_string()),
+    };
+    let detected = image::guess_format(data)
+        .map_err(|error| format!("Unable to identify preview data: {error}"))?;
+    if detected != expected {
+        return Err("Preview data does not match its file extension.".to_string());
+    }
+    let normalized_jpeg = remote_media::decode_and_reencode_preview_jpeg(data)?;
+    let app_local_data = app_handle
+        .app_local_data_dir()
+        .map_err(|error| format!("Unable to resolve preview staging: {error}"))?;
+    let staging = nte_download_staging_directory(
+        app_handle,
+        key,
+        &app_local_data.join("local-preview-placeholder"),
+    )?;
+    let staged_preview = staging.join("preview.jpg");
+    let stage_result = (|| {
+        std::fs::write(&staged_preview, normalized_jpeg)
+            .map_err(|error| format!("Unable to write local preview staging: {error}"))?;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&staged_preview)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| format!("Unable to flush local preview staging: {error}"))
+    })();
+    match stage_result {
+        Ok(()) => Ok((staging, staged_preview)),
+        Err(error) => match staging.cleanup() {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; unable to clean local preview staging: {cleanup_error}"
+            )),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn bound_preview_metadata_is_reparse(metadata: &cap_std::fs::Metadata) -> bool {
+    use cap_std::fs::MetadataExt;
+    metadata.file_attributes() & 0x0400 != 0
+}
+
+#[cfg(not(windows))]
+fn bound_preview_metadata_is_reparse(metadata: &cap_std::fs::Metadata) -> bool {
+    metadata.is_symlink()
+}
+
+fn read_selected_preview_file(source: &Path) -> Result<(String, Vec<u8>), String> {
+    let parent = source
+        .parent()
+        .ok_or_else(|| "Selected preview has no parent directory.".to_string())?;
+    let name = source
+        .file_name()
+        .ok_or_else(|| "Selected preview has no file name.".to_string())?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Selected preview has no file extension.".to_string())?
+        .to_string();
+    let directory = CapDir::open_ambient_dir(parent, ambient_authority())
+        .map_err(|error| format!("Unable to bind the selected preview directory: {error}"))?;
+    let mut options = CapOpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let input = directory
+        .open_with(Path::new(name), &options)
+        .map_err(|error| format!("Unable to open the selected preview safely: {error}"))?;
+    let metadata = input
+        .metadata()
+        .map_err(|error| format!("Unable to inspect the selected preview: {error}"))?;
+    if !metadata.is_file() || bound_preview_metadata_is_reparse(&metadata) {
+        return Err("Selected preview is not a safe regular file.".to_string());
+    }
+    if metadata.len() == 0 || metadata.len() > INSTALL_PREVIEW_MAX_BYTES {
+        return Err(format!(
+            "Selected preview must be between 1 byte and {INSTALL_PREVIEW_MAX_BYTES} bytes."
+        ));
+    }
+    let expected_len = metadata.len() as usize;
+    let mut data = Vec::with_capacity(expected_len);
+    input
+        .take(INSTALL_PREVIEW_MAX_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|error| format!("Unable to read the selected preview: {error}"))?;
+    if data.len() != expected_len {
+        return Err("Selected preview changed while it was being read.".to_string());
+    }
+    Ok((extension, data))
+}
+
+enum ManagedPreviewInput {
+    Data { extension: String, data: Vec<u8> },
+    File(PathBuf),
+}
+
+async fn replace_managed_preview(
+    app_handle: tauri::AppHandle,
+    control_root: PathBuf,
+    game: String,
+    relative_path: String,
+    input: ManagedPreviewInput,
+) -> Result<(), String> {
+    validate_registered_game_key(&game)?;
+    let relative = validate_managed_relative_path(&relative_path)?;
+    if relative.as_os_str().is_empty() {
+        return Err("A Mod-relative path is required for preview replacement.".to_string());
+    }
+    let config_dir = std::env::current_dir().map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (extension, data) = match input {
+            ManagedPreviewInput::Data { extension, data } => (extension, data),
+            ManagedPreviewInput::File(source) => read_selected_preview_file(&source)?,
+        };
+        let key = format!("local-preview-{game}-{}", relative.to_string_lossy());
+        let (staging, staged_preview) =
+            prepare_normalized_preview_data_staging(&app_handle, &key, &extension, &data)?;
+        let managed_relative = PathBuf::from(MANAGED_SOURCE_DIR).join(&relative);
+        let result = mod_mutation::with_global_lock(&control_root, |registry| {
+            recover_generic_mod_mutation_registry(&config_dir, registry)?;
+            let save_path = resolve_managed_folder_from_config_dir(
+                &config_dir,
+                &game,
+                ManagedPathRoot::Source,
+                &managed_relative.to_string_lossy(),
+            )?;
+            if game == "NTE" {
+                let library_root = nte::persisted_nte_library_root(&config_dir)?;
+                let trusted = nte::trusted_nte_library_destination(&library_root, &relative_path)?;
+                if nte::normalized_path_for_comparison(&trusted)
+                    != nte::normalized_path_for_comparison(&save_path)
+                {
+                    return Err("NTE preview destination changed before deployment.".to_string());
+                }
+                deploy_downloaded_nte_preview(&config_dir, &library_root, &trusted, &staged_preview)
+            } else {
+                let trusted_root = persisted_managed_source_root(&config_dir, &game)?;
+                stage_and_deploy_generic_preview(
+                    &staged_preview,
+                    &save_path,
+                    Some(GenericModMutationContext {
+                        operation: "local_preview_replacement",
+                        game: &game,
+                        trusted_root: &trusted_root,
+                        registry,
+                        state: None,
+                    }),
+                )
+            }
+        });
+        let cleanup = staging.cleanup();
+        match (result, cleanup) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(cleanup_error)) => Err(format!(
+                "{error}; unable to clean local preview staging: {cleanup_error}"
+            )),
+        }
+    })
+    .await
+    .map_err(|error| format!("Local preview worker failed: {error}"))?
+}
+
+#[tauri::command]
+async fn save_managed_preview_data(
+    app_handle: tauri::AppHandle,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
+    game: String,
     relative_path: String,
     extension: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    if data.is_empty() || data.len() > 20 * 1024 * 1024 {
-        return Err("NTE preview must be between 1 byte and 20 MiB.".to_string());
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        deploy_local_nte_preview(&app_handle, &relative_path, &extension, |preview_path| {
-            std::fs::write(preview_path, &data)
-                .map_err(|err| format!("Unable to write the staged NTE preview: {err}"))
-        })
-    })
+    let control_root = repository.control_root().to_path_buf();
+    replace_managed_preview(
+        app_handle,
+        control_root,
+        game,
+        relative_path,
+        ManagedPreviewInput::Data { extension, data },
+    )
     .await
-    .map_err(|err| format!("NTE preview worker failed: {err}"))?
 }
 
 #[tauri::command]
-async fn import_nte_preview_file(
+async fn import_managed_preview_file(
     app_handle: tauri::AppHandle,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
+    game: String,
     relative_path: String,
     source_path: String,
 ) -> Result<(), String> {
-    let source = PathBuf::from(source_path);
-    let extension = source
-        .extension()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Selected NTE preview has no file extension.".to_string())?
-        .to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        deploy_local_nte_preview(&app_handle, &relative_path, &extension, |preview_path| {
-            let metadata = std::fs::symlink_metadata(&source)
-                .map_err(|err| format!("Unable to inspect the selected NTE preview: {err}"))?;
-            if !metadata.is_file() || deployment_metadata_is_reparse(&metadata) {
-                return Err("Selected NTE preview is not a safe regular file.".to_string());
-            }
-            if metadata.len() == 0 || metadata.len() > 20 * 1024 * 1024 {
-                return Err("NTE preview must be between 1 byte and 20 MiB.".to_string());
-            }
-            std::fs::copy(&source, preview_path)
-                .map(|_| ())
-                .map_err(|err| format!("Unable to copy the selected NTE preview: {err}"))
-        })
-    })
+    let control_root = repository.control_root().to_path_buf();
+    replace_managed_preview(
+        app_handle,
+        control_root,
+        game,
+        relative_path,
+        ManagedPreviewInput::File(PathBuf::from(source_path)),
+    )
     .await
-    .map_err(|err| format!("NTE preview import worker failed: {err}"))?
 }
 
 fn validate_nte_staged_content(root: &Path) -> Result<(), String> {
@@ -3317,6 +5861,9 @@ fn validate_nte_staged_content(root: &Path) -> Result<(), String> {
                 ));
             }
             file_count += 1;
+            if entry.path() == root.join("preview.jpg") {
+                continue;
+            }
             let extension = entry
                 .path()
                 .extension()
@@ -3430,9 +5977,30 @@ fn deploy_staged_directory(
     save_path: &Path,
     staging_path: &Path,
     trusted_library_root: Option<&Path>,
+    journal: Option<&mut nte_wal::WalJournal>,
+    bound: Option<BoundNteDeployment<'_>>,
+) -> Result<(), String> {
+    deploy_staged_directory_with_commit(
+        save_path,
+        staging_path,
+        trusted_library_root,
+        journal,
+        bound,
+        || Ok(()),
+    )
+}
+
+fn deploy_staged_directory_with_commit<F>(
+    save_path: &Path,
+    staging_path: &Path,
+    trusted_library_root: Option<&Path>,
     mut journal: Option<&mut nte_wal::WalJournal>,
     mut bound: Option<BoundNteDeployment<'_>>,
-) -> Result<(), String> {
+    commit_after_filesystem: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
     if journal.is_some() && bound.is_none() {
         return Err("NTE library WAL deployment requires a bound destination.".to_string());
     }
@@ -3647,6 +6215,67 @@ fn deploy_staged_directory(
             br#"{"step":"deploy_staging","outcome":"applied"}"#,
         )?;
     }
+    if let Err(commit_error) = commit_after_filesystem() {
+        let deployed = bound.take().ok_or_else(|| {
+            format!(
+                "Post-deployment commit failed ({commit_error}) without bound rollback handles."
+            )
+        })?;
+        let cleanup_parent = deployed.parent;
+        if let Err(rollback_error) = nte::durable_rename_bound_directory(
+            &deployed.staging,
+            deployed.parent,
+            deployed.destination_name,
+            deployed.parent,
+            staging_name,
+        ) {
+            return Err(format!(
+                "Post-deployment commit failed ({commit_error}); unable to quarantine the after state for rollback ({rollback_error})"
+            ));
+        }
+        if had_existing {
+            let previous = existing_handle.as_ref().ok_or_else(|| {
+                "Post-deployment rollback lost the bound before-state handle.".to_string()
+            })?;
+            if let Err(rollback_error) = nte::durable_rename_bound_directory(
+                previous,
+                deployed.parent,
+                backup_name,
+                deployed.parent,
+                deployed.destination_name,
+            ) {
+                return Err(format!(
+                    "Post-deployment commit failed ({commit_error}); unable to restore the before state ({rollback_error})"
+                ));
+            }
+        }
+        drop(existing_handle.take());
+        let journal = journal.as_deref_mut().ok_or_else(|| {
+            "Post-deployment rollback requires a durable library journal.".to_string()
+        })?;
+        let transaction_id = transaction_id.ok_or_else(|| {
+            "Post-deployment rollback requires a library transaction id.".to_string()
+        })?;
+        journal.append(
+            transaction_id,
+            nte_wal::WalState::StepReceipt,
+            br#"{"step":"post_filesystem_commit","outcome":"rolled_back"}"#,
+        )?;
+        journal.append(transaction_id, nte_wal::WalState::AbortedBefore, b"{}")?;
+        cleanup_open_nte_library_artifacts(
+            cleanup_parent,
+            staging_name,
+            Some(deployed.staging),
+            backup_name,
+            None,
+        )?;
+        journal.append(
+            transaction_id,
+            nte_wal::WalState::CleanupComplete,
+            br#"{"cleanup":"complete"}"#,
+        )?;
+        return Err(commit_error);
+    }
     if let (Some(journal), Some(transaction_id)) = (journal, transaction_id) {
         let deployed = bound.take().ok_or_else(|| {
             "NTE library commit cleanup lost the bound deployment handles.".to_string()
@@ -3662,21 +6291,207 @@ fn deploy_staged_directory(
             backup_name,
             existing_handle.take(),
         )?;
+    } else if let Err(error) = remove_directory_if_exists(&backup_path) {
+        tracing::warn!(
+            "Unable to remove committed generic Mod backup '{}': {}",
+            backup_path.display(),
+            error
+        );
     }
     drop(existing_handle.take());
     drop(bound.take());
     Ok(())
 }
 
+struct ArchiveDeploymentContext<'a> {
+    is_nte_archive: bool,
+    trusted_library_root: Option<&'a Path>,
+    journal: Option<&'a mut nte_wal::WalJournal>,
+    bound_destination: Option<(&'a CapDir, &'a std::ffi::OsStr)>,
+    generic_mutation: Option<GenericModMutationContext<'a>>,
+}
+
 fn stage_and_deploy_zip_archive(
     file_path: &Path,
     save_path: &Path,
     del: bool,
-    is_nte_archive: bool,
-    trusted_library_root: Option<&Path>,
-    journal: Option<&mut nte_wal::WalJournal>,
-    bound_destination: Option<(&CapDir, &std::ffi::OsStr)>,
+    required_preview: Option<&PreparedInstallPreview>,
+    context: ArchiveDeploymentContext<'_>,
 ) -> Result<(), String> {
+    if context.generic_mutation.is_some()
+        && (context.trusted_library_root.is_some()
+            || context.journal.is_some()
+            || context.bound_destination.is_some())
+    {
+        return Err("Generic and NTE archive mutation contexts cannot be combined.".to_string());
+    }
+    let ArchiveDeploymentContext {
+        is_nte_archive,
+        trusted_library_root,
+        journal,
+        bound_destination,
+        generic_mutation,
+    } = context;
+    let Some(generic_mutation) = generic_mutation else {
+        return stage_and_deploy_zip_archive_inner(
+            file_path,
+            save_path,
+            del,
+            required_preview,
+            ArchiveDeploymentContext {
+                is_nte_archive,
+                trusted_library_root,
+                journal,
+                bound_destination,
+                generic_mutation: None,
+            },
+        );
+    };
+    let trusted_root = generic_mutation.trusted_root;
+    nte::with_bound_nte_library_destination(
+        trusted_root,
+        save_path,
+        move |destination_parent, destination_name| {
+            stage_and_deploy_zip_archive_inner(
+                file_path,
+                save_path,
+                del,
+                required_preview,
+                ArchiveDeploymentContext {
+                    is_nte_archive,
+                    trusted_library_root: None,
+                    journal: None,
+                    bound_destination: Some((destination_parent, destination_name)),
+                    generic_mutation: Some(generic_mutation),
+                },
+            )
+        },
+    )
+}
+
+fn populate_archive_staging(
+    file_path: &Path,
+    save_path: &Path,
+    staging_path: &Path,
+    del: bool,
+    is_nte_archive: bool,
+    required_preview: Option<&PreparedInstallPreview>,
+) -> Result<(), String> {
+    extract_zip_archive(file_path, staging_path)
+        .map_err(|err| format!("Extraction failed: {err}"))?;
+    if let Some(required_preview) = required_preview {
+        normalize_staged_mod_root(staging_path)?;
+        install_required_preview(staging_path, required_preview)?;
+    }
+    if is_nte_archive {
+        validate_nte_staged_content(staging_path)?;
+    }
+    if required_preview.is_none() {
+        preserve_existing_preview_files(save_path, staging_path)?;
+    }
+    if !del && file_path.parent() == Some(save_path) {
+        if let Some(archive_name) = file_path.file_name() {
+            let staged_archive = staging_path.join(archive_name);
+            if !staged_archive.exists() {
+                std::fs::copy(file_path, &staged_archive)
+                    .map_err(|err| format!("Unable to preserve the source archive: {err}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+struct PreparedBoundArchiveStaging {
+    parent: nte::BoundDirectoryChain,
+    destination_name: std::ffi::OsString,
+    staging_path: PathBuf,
+    staging: Option<CapDir>,
+}
+
+impl PreparedBoundArchiveStaging {
+    fn cleanup(mut self) -> Result<(), String> {
+        let Some(staging) = self.staging.take() else {
+            return Ok(());
+        };
+        let staging_name = self
+            .staging_path
+            .file_name()
+            .ok_or_else(|| "Archive staging directory has no name.".to_string())?;
+        nte::remove_open_bound_directory_tree(
+            staging,
+            self.parent.leaf(),
+            staging_name,
+            "uncommitted archive staging",
+        )
+    }
+}
+
+fn prepare_bound_archive_staging(
+    file_path: &Path,
+    save_path: &Path,
+    del: bool,
+    is_nte_archive: bool,
+    required_preview: Option<&PreparedInstallPreview>,
+    trusted_root: &Path,
+) -> Result<PreparedBoundArchiveStaging, String> {
+    let (parent, destination_name) = nte::bind_nte_library_destination(trusted_root, save_path)?;
+    let staging_path = deployment_sibling_path(save_path, "staging")?;
+    let staging = create_bound_staging_directory(parent.leaf(), &staging_path)?;
+    let prepared = PreparedBoundArchiveStaging {
+        parent,
+        destination_name,
+        staging_path,
+        staging: Some(staging),
+    };
+    if let Err(error) = populate_archive_staging(
+        file_path,
+        save_path,
+        &prepared.staging_path,
+        del,
+        is_nte_archive,
+        required_preview,
+    ) {
+        return match prepared.cleanup() {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; unable to clean failed archive staging: {cleanup_error}"
+            )),
+        };
+    }
+    Ok(prepared)
+}
+
+fn deploy_prepared_generic_archive(
+    prepared: &mut PreparedBoundArchiveStaging,
+    save_path: &Path,
+    context: GenericModMutationContext<'_>,
+) -> Result<(), String> {
+    let staging = prepared
+        .staging
+        .take()
+        .ok_or_else(|| "Prepared archive staging was already consumed.".to_string())?;
+    let bound = BoundNteDeployment {
+        parent: prepared.parent.leaf(),
+        destination_name: &prepared.destination_name,
+        staging,
+    };
+    deploy_generic_staged_directory(save_path, &prepared.staging_path, bound, context)
+}
+
+fn stage_and_deploy_zip_archive_inner(
+    file_path: &Path,
+    save_path: &Path,
+    del: bool,
+    required_preview: Option<&PreparedInstallPreview>,
+    context: ArchiveDeploymentContext<'_>,
+) -> Result<(), String> {
+    let ArchiveDeploymentContext {
+        is_nte_archive,
+        trusted_library_root,
+        journal,
+        bound_destination,
+        generic_mutation,
+    } = context;
     let staging_path = deployment_sibling_path(save_path, "staging")?;
     let mut staging_directory = if let Some((parent, _)) = bound_destination {
         Some(create_bound_staging_directory(parent, &staging_path)?)
@@ -3687,21 +6502,14 @@ fn stage_and_deploy_zip_archive(
         None
     };
     let result = (|| {
-        extract_zip_archive(file_path, &staging_path)
-            .map_err(|err| format!("Extraction failed: {err}"))?;
-        if is_nte_archive {
-            validate_nte_staged_content(&staging_path)?;
-        }
-        preserve_existing_preview_files(save_path, &staging_path)?;
-        if !del && file_path.parent() == Some(save_path) {
-            if let Some(archive_name) = file_path.file_name() {
-                let staged_archive = staging_path.join(archive_name);
-                if !staged_archive.exists() {
-                    std::fs::copy(file_path, &staged_archive)
-                        .map_err(|err| format!("Unable to preserve the source archive: {err}"))?;
-                }
-            }
-        }
+        populate_archive_staging(
+            file_path,
+            save_path,
+            &staging_path,
+            del,
+            is_nte_archive,
+            required_preview,
+        )?;
         let bound = match (bound_destination, staging_directory.take()) {
             (Some((parent, destination_name)), Some(staging)) => Some(BoundNteDeployment {
                 parent,
@@ -3709,32 +6517,50 @@ fn stage_and_deploy_zip_archive(
                 staging,
             }),
             (None, None) => None,
-            _ => return Err("NTE archive staging binding is incomplete.".to_string()),
+            _ => return Err("Archive staging binding is incomplete.".to_string()),
         };
-        deploy_staged_directory(
-            save_path,
-            &staging_path,
-            trusted_library_root,
-            journal,
-            bound,
-        )
+        match generic_mutation {
+            Some(context) => deploy_generic_staged_directory(
+                save_path,
+                &staging_path,
+                bound.ok_or_else(|| {
+                    "Generic archive mutation requires bound staging.".to_string()
+                })?,
+                context,
+            ),
+            None => deploy_staged_directory(
+                save_path,
+                &staging_path,
+                trusted_library_root,
+                journal,
+                bound,
+            ),
+        }
     })();
-    if result.is_err() {
-        if let Some((parent, _)) = bound_destination {
+    if let Err(error) = result {
+        let cleanup_result = if let Some((parent, _)) = bound_destination {
             if let Some(name) = staging_path.file_name() {
-                let _ = cleanup_untransferred_bound_staging(
+                cleanup_untransferred_bound_staging(
                     staging_directory.take(),
                     parent,
                     name,
-                    "failed NTE archive staging",
-                );
+                    "failed archive staging",
+                )
+            } else {
+                Err("Archive staging cleanup path has no name.".to_string())
             }
         } else {
-            let _ = remove_directory_if_exists(&staging_path);
-        }
+            remove_directory_if_exists(&staging_path)
+        };
+        return match cleanup_result {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; unable to clean failed archive staging: {cleanup_error}"
+            )),
+        };
     }
     drop(staging_directory.take());
-    result
+    Ok(())
 }
 
 /// Extract a ZIP archive to the specified path. RAR and 7z are intentionally unsupported.
@@ -3765,6 +6591,7 @@ mod archive_game_boundary_tests {
 #[tauri::command]
 async fn extract_archive(
     app_handle: tauri::AppHandle,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
     file_path: String,
     save_path: String,
     file_name: String,
@@ -3786,8 +6613,12 @@ async fn extract_archive(
         del,
         max_concurrent_extracts,
         game,
+        None,
+        None,
+        Some(repository.control_root().to_path_buf()),
     )
     .await
+    .map(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3802,7 +6633,10 @@ async fn extract_archive_impl<A: DownloadAppContext>(
     del: bool,
     max_concurrent_extracts: Option<usize>,
     game: Option<String>,
-) -> Result<(), String> {
+    required_preview: Option<PreparedInstallPreview>,
+    install_state: Option<GameBananaDownloadState>,
+    mutation_control_root: Option<PathBuf>,
+) -> Result<Option<app_state::AppConfigSnapshot>, String> {
     let file_path = Path::new(&file_path);
     let save_path = Path::new(&save_path);
     let file_name = file_name.as_str();
@@ -3825,85 +6659,238 @@ async fn extract_archive_impl<A: DownloadAppContext>(
     let nte_library_root = nte::persisted_nte_library_root_for_destination(&config_dir, save_path)?;
     let is_nte_archive = nte_library_root.is_some();
     enforce_archive_game_boundary(game.as_deref(), is_nte_archive)?;
-    let deploy_result = if is_nte_archive {
-        let library_root = nte_library_root
-            .as_deref()
-            .ok_or_else(|| "NTE library root disappeared during archive staging.".to_string())?;
-        nte::with_nte_library_operation_lock(library_root, Some(&config_dir), |journal| {
-            let current_library_root = nte::persisted_nte_library_root(&config_dir)?;
-            if nte::normalized_path_for_comparison(&current_library_root)
-                != nte::normalized_path_for_comparison(library_root)
+    let mut install_state = install_state;
+    let mut prepared_install_archive = if let Some(request) = install_state.as_ref() {
+        if mutation_control_root.is_none() {
+            return Err(
+                "Transactional GameBanana download requires the central mutation registry."
+                    .to_string(),
+            );
+        }
+        if is_download_cancelled(&key) || SESSION_ID.load(Ordering::SeqCst) != current_sid {
+            return Err(format!(
+                "Download cancelled before archive preparation (file: {file_name})"
+            ));
+        }
+        let game = game.as_deref().ok_or_else(|| {
+            "Transactional GameBanana download requires a game identity.".to_string()
+        })?;
+        let trusted_root = if is_nte_archive {
+            nte_library_root
+                .clone()
+                .ok_or_else(|| "NTE library root disappeared during archive staging.".to_string())?
+        } else {
+            persisted_managed_source_root(&config_dir, game)?
+        };
+        let trusted_destination =
+            nte::trusted_nte_library_destination(&trusted_root, &request.relative_path)?;
+        if nte::normalized_path_for_comparison(&trusted_destination)
+            != nte::normalized_path_for_comparison(save_path)
+        {
+            return Err("GameBanana download destination is outside its managed root.".to_string());
+        }
+        Some((
+            trusted_root.clone(),
+            prepare_bound_archive_staging(
+                file_path,
+                save_path,
+                del,
+                is_nte_archive,
+                required_preview.as_ref(),
+                &trusted_root,
+            )?,
+        ))
+    } else {
+        None
+    };
+    let mut committed_snapshot = None;
+    let mut deploy = |registry: Option<&mut nte_wal::WalJournal>| -> Result<(), String> {
+        if let Some(request) = install_state.take() {
+            if is_download_cancelled(&key) || SESSION_ID.load(Ordering::SeqCst) != current_sid {
+                return Err(format!(
+                    "Download cancelled before deployment (file: {file_name})"
+                ));
+            }
+            let registry = registry.ok_or_else(|| {
+                "Transactional GameBanana download requires the central mutation registry."
+                    .to_string()
+            })?;
+            let game = game.as_deref().ok_or_else(|| {
+                "Transactional GameBanana download requires a game identity.".to_string()
+            })?;
+            let trusted_root = if is_nte_archive {
+                nte_library_root.clone().ok_or_else(|| {
+                    "NTE library root disappeared during archive staging.".to_string()
+                })?
+            } else {
+                persisted_managed_source_root(&config_dir, game)?
+            };
+            let (prepared_root, prepared_archive) = prepared_install_archive
+                .as_mut()
+                .ok_or_else(|| "GameBanana archive staging is missing.".to_string())?;
+            if nte::normalized_path_for_comparison(prepared_root)
+                != nte::normalized_path_for_comparison(&trusted_root)
             {
                 return Err(
-                    "NTE library configuration changed before archive deployment.".to_string(),
+                    "The managed Mod root changed while the archive was being prepared."
+                        .to_string(),
                 );
             }
-            recover_nte_library_transaction(library_root, journal)?;
-            nte::with_bound_nte_library_destination(
-                library_root,
+            let trusted_destination =
+                nte::trusted_nte_library_destination(&trusted_root, &request.relative_path)?;
+            if nte::normalized_path_for_comparison(&trusted_destination)
+                != nte::normalized_path_for_comparison(save_path)
+            {
+                return Err(
+                    "GameBanana download destination changed before deployment.".to_string()
+                );
+            }
+            let prepared = app_handle.prepare_download_state_mutation(game, &request, save_path)?;
+            let state_plan = prepared.plan.clone();
+            let snapshot_slot = &mut committed_snapshot;
+            let commit_app = app_handle.clone();
+            let commit_game = game.to_string();
+            deploy_prepared_generic_archive(
+                prepared_archive,
                 save_path,
-                |destination_parent, destination_name| {
-                    stage_and_deploy_zip_archive(
-                        file_path,
-                        save_path,
-                        del,
-                        true,
-                        Some(library_root),
-                        Some(journal),
-                        Some((destination_parent, destination_name)),
-                    )
+                GenericModMutationContext {
+                    operation: "gamebanana_download",
+                    game,
+                    trusted_root: &trusted_root,
+                    registry,
+                    state: Some(GenericStateMutation {
+                        plan: state_plan,
+                        commit: Box::new(move || {
+                            *snapshot_slot = Some(
+                                commit_app
+                                    .commit_download_state_mutation(&commit_game, prepared)?,
+                            );
+                            Ok(())
+                        }),
+                    }),
                 },
             )
+        } else if is_nte_archive {
+            let library_root = nte_library_root.as_deref().ok_or_else(|| {
+                "NTE library root disappeared during archive staging.".to_string()
+            })?;
+            nte::with_nte_library_operation_lock(library_root, Some(&config_dir), |journal| {
+                let current_library_root = nte::persisted_nte_library_root(&config_dir)?;
+                if nte::normalized_path_for_comparison(&current_library_root)
+                    != nte::normalized_path_for_comparison(library_root)
+                {
+                    return Err(
+                        "NTE library configuration changed before archive deployment.".to_string(),
+                    );
+                }
+                recover_nte_library_transaction(library_root, journal)?;
+                nte::with_bound_nte_library_destination(
+                    library_root,
+                    save_path,
+                    |destination_parent, destination_name| {
+                        stage_and_deploy_zip_archive(
+                            file_path,
+                            save_path,
+                            del,
+                            required_preview.as_ref(),
+                            ArchiveDeploymentContext {
+                                is_nte_archive: true,
+                                trusted_library_root: Some(library_root),
+                                journal: Some(journal),
+                                bound_destination: Some((destination_parent, destination_name)),
+                                generic_mutation: None,
+                            },
+                        )
+                    },
+                )
+            })
+        } else if let Some(registry) = registry {
+            let game = game.as_deref().ok_or_else(|| {
+                "A generic archive mutation requires a game identity.".to_string()
+            })?;
+            let trusted_root = persisted_managed_source_root(&config_dir, game)?;
+            stage_and_deploy_zip_archive(
+                file_path,
+                save_path,
+                del,
+                required_preview.as_ref(),
+                ArchiveDeploymentContext {
+                    is_nte_archive: false,
+                    trusted_library_root: None,
+                    journal: None,
+                    bound_destination: None,
+                    generic_mutation: Some(GenericModMutationContext {
+                        operation: "archive_install",
+                        game,
+                        trusted_root: &trusted_root,
+                        registry,
+                        state: None,
+                    }),
+                },
+            )
+        } else {
+            stage_and_deploy_zip_archive(
+                file_path,
+                save_path,
+                del,
+                required_preview.as_ref(),
+                ArchiveDeploymentContext {
+                    is_nte_archive: false,
+                    trusted_library_root: None,
+                    journal: None,
+                    bound_destination: None,
+                    generic_mutation: None,
+                },
+            )
+        }
+    };
+    let deploy_result = if let Some(control_root) = mutation_control_root {
+        mod_mutation::with_global_lock(&control_root, |registry| {
+            recover_generic_mod_mutation_registry(&config_dir, registry)?;
+            deploy(Some(registry))
         })
     } else {
-        stage_and_deploy_zip_archive(file_path, save_path, del, false, None, None, None)
+        let _mutation_guard = MOD_MUTATION_PROCESS_LOCK
+            .lock()
+            .map_err(|_| "Mod mutation process lock is poisoned.".to_string())?;
+        deploy(None)
     };
-    deploy_result?;
+    if let Err(error) = deploy_result {
+        let cleanup = prepared_install_archive
+            .take()
+            .map(|(_, prepared)| prepared.cleanup())
+            .unwrap_or(Ok(()));
+        return match cleanup {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(format!(
+                "{error}; unable to clean uncommitted archive staging: {cleanup_error}"
+            )),
+        };
+    }
     let duration = before.elapsed();
     tracing::info!("Staged extraction deployed in {:.2?}", duration);
 
     if !del {
         app_handle.emit_event("fin", serde_json::json!({ "key": key, "type": "manual" }))?;
-        return Ok(());
+        return Ok(None);
     }
     if emit {
-        // let global_sid = SESSION_ID.load(Ordering::SeqCst);
-        let mut valid = false;
-        {
-            let counts = DOWNLOAD_COUNTS.lock().unwrap();
-            if let Some(&count) = counts.get(&key) {
-                if count >= 1 {
-                    valid = true;
-                }
-            }
-        }
-        if valid {
-            decrement_download_count(&key);
-        }
+        decrement_download_count(&key);
         tracing::info!(
             "Emitting completion event for session {}: {}",
             current_sid,
             file_name
         );
-        if !valid {
-            println!(
-                "Session {} invalid after extraction for key '{}'",
-                valid, key
-            );
-            return Err(format!(
-                "Session changed during processing, operation cancelled (file: {})",
-                file_name
-            ));
-        }
-        app_handle.emit_event("fin", serde_json::json!({ "key": key , "type": "auto" }))?;
+        let _ = app_handle.emit_event("fin", serde_json::json!({ "key": key , "type": "auto" }));
     }
-    Ok(())
+    Ok(committed_snapshot)
 }
 // These named arguments are the stable renderer IPC contract; bundling them would break callers.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn download_and_unzip(
     app_handle: tauri::AppHandle,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
     file_name: String,
     download_url: String,
     save_path: String,
@@ -3911,9 +6898,11 @@ async fn download_and_unzip(
     emit: bool,
     download_options: Option<DownloadOptions>,
     game: Option<String>,
+    preview_url: Option<String>,
     expected_size: Option<u64>,
     expected_hash: Option<ExpectedDownloadHash>,
-) -> Result<(), String> {
+    install_state: GameBananaDownloadState,
+) -> Result<app_state::AppConfigSnapshot, String> {
     download_and_unzip_impl(
         app_handle,
         file_name,
@@ -3923,10 +6912,95 @@ async fn download_and_unzip(
         emit,
         download_options,
         game,
+        preview_url,
         expected_size,
         expected_hash,
+        Some(install_state),
+        Some(repository.control_root().to_path_buf()),
     )
-    .await
+    .await?
+    .ok_or_else(|| "GameBanana download completed without a committed state snapshot.".to_string())
+}
+
+async fn send_download_request(
+    request: reqwest::RequestBuilder,
+    response_timeout: Duration,
+) -> Result<reqwest::Response, String> {
+    match timeout(response_timeout, request.send()).await {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err(format!(
+            "No response headers received within {:.1} seconds",
+            response_timeout.as_secs_f64()
+        )),
+    }
+}
+
+#[cfg(test)]
+mod download_request_timeout_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn response_headers_are_bounded_per_attempt() {
+        ensure_rustls_crypto_provider();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accepted connection");
+            sleep(Duration::from_millis(500)).await;
+        });
+        let client = Client::builder().build().expect("client");
+
+        let result = timeout(
+            Duration::from_secs(1),
+            send_download_request(
+                client.get(format!("http://{address}/slow-headers")),
+                Duration::from_millis(50),
+            ),
+        )
+        .await
+        .expect("header timeout must be bounded")
+        .expect_err("missing response headers must fail");
+
+        assert!(result.contains("No response headers received"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn response_header_timeout_does_not_limit_the_body() {
+        ensure_rustls_crypto_provider();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accepted connection");
+            let mut request = [0_u8; 1024];
+            let request_bytes = stream.read(&mut request).await.expect("request bytes");
+            assert!(request_bytes > 0, "non-empty request");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n")
+                .await
+                .expect("response headers");
+            sleep(Duration::from_millis(500)).await;
+            stream.write_all(b"x").await.expect("response body");
+        });
+        let client = Client::builder().build().expect("client");
+
+        let response = send_download_request(
+            client.get(format!("http://{address}/slow-body")),
+            Duration::from_millis(250),
+        )
+        .await
+        .expect("prompt response headers");
+        let body = timeout(Duration::from_secs(2), response.bytes())
+            .await
+            .expect("body read timeout")
+            .expect("body bytes");
+
+        assert_eq!(&body[..], b"x");
+        server.await.expect("server task");
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3939,19 +7013,78 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
     emit: bool,
     download_options: Option<DownloadOptions>,
     game: Option<String>,
+    preview_url: Option<String>,
     expected_size: Option<u64>,
     expected_hash: Option<ExpectedDownloadHash>,
-) -> Result<(), String> {
+    install_state: Option<GameBananaDownloadState>,
+    mutation_control_root: Option<PathBuf>,
+) -> Result<Option<app_state::AppConfigSnapshot>, String> {
     validate_download_file_name(&file_name)?;
+    let mut install_state = install_state;
     let (validated_url, url_class) = classify_download_url(&download_url, !emit)?;
     let download_url = validated_url.to_string();
-    let expected_md5 = normalized_expected_md5(expected_hash.as_ref())?;
-    if expected_size.is_some_and(|size| size > DOWNLOAD_MAX_BYTES) {
-        return Err("Expected download size exceeds the 16 GiB safety limit".to_string());
+    let expected_md5 = if url_class == DownloadUrlClass::GameBananaFile {
+        Some(validate_required_gamebanana_integrity(
+            expected_size,
+            expected_hash.as_ref(),
+        )?)
+    } else {
+        normalized_expected_md5(expected_hash.as_ref())?
+    };
+    if let Some(request) = install_state.as_ref() {
+        validate_gamebanana_completed_download(
+            &request.completed_download,
+            &request.source,
+            expected_size,
+            expected_hash.as_ref(),
+        )?;
     }
     let mut requested_save_path = PathBuf::from(&save_path);
     let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
     let nte_library_root = if game.as_deref() == Some("NTE") {
+        if let Some(request) = install_state.as_ref() {
+            let library_root = nte::persisted_nte_library_root(&config_dir)?;
+            let expected_destination =
+                nte::trusted_nte_library_destination(&library_root, &request.relative_path)?;
+            if nte::normalized_path_for_comparison(&expected_destination)
+                != nte::normalized_path_for_comparison(&requested_save_path)
+            {
+                return Err(
+                    "NTE download destination does not match its persisted relative path."
+                        .to_string(),
+                );
+            }
+            let control_root = mutation_control_root.as_deref().ok_or_else(|| {
+                "Transactional NTE download has no global mutation coordinator.".to_string()
+            })?;
+            mod_mutation::with_global_lock(control_root, |registry| {
+                recover_generic_mod_mutation_registry(&config_dir, registry)?;
+                let current_library_root = nte::persisted_nte_library_root(&config_dir)?;
+                if nte::normalized_path_for_comparison(&current_library_root)
+                    != nte::normalized_path_for_comparison(&library_root)
+                {
+                    return Err(
+                        "NTE library configuration changed before download preparation."
+                            .to_string(),
+                    );
+                }
+                mod_mutation::with_library_lock(&current_library_root, |_journal| {
+                    let current_destination = nte::ensure_nte_library_destination_parent(
+                        &current_library_root,
+                        &request.relative_path,
+                    )?;
+                    if nte::normalized_path_for_comparison(&current_destination)
+                        != nte::normalized_path_for_comparison(&requested_save_path)
+                    {
+                        return Err(
+                            "NTE download destination changed while preparing its category."
+                                .to_string(),
+                        );
+                    }
+                    Ok(())
+                })
+            })?;
+        }
         let library_root =
             nte::persisted_nte_library_root_for_destination(&config_dir, &requested_save_path)?
                 .ok_or_else(|| {
@@ -3963,10 +7096,15 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
     } else {
         None
     };
-    let mut nte_download_staging = nte_library_root
-        .as_ref()
-        .map(|_| nte_download_staging_directory(&app_handle, &key, &requested_save_path))
-        .transpose()?;
+    let mut nte_download_staging = if emit || nte_library_root.is_some() {
+        Some(nte_download_staging_directory(
+            &app_handle,
+            &key,
+            &requested_save_path,
+        )?)
+    } else {
+        None
+    };
 
     if emit {
         let mut counts = DOWNLOAD_COUNTS.lock().unwrap();
@@ -4080,7 +7218,6 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
 
         let client = match Client::builder()
             .connect_timeout(connect_timeout)
-            .timeout(stall_timeout.saturating_add(Duration::from_secs(30)))
             .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                 if attempt.previous().len() >= 5 {
                     return attempt.error("too many redirects");
@@ -4124,9 +7261,19 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
             resume_from = 0;
         }
 
-        let mut request = client.get(validated_url.clone());
-        if resume_from > 0 {
-            request = request.header(RANGE, format!("bytes={}-", resume_from));
+        // GameBanana's `/dl/` redirect chain serves an empty stream to the
+        // default reqwest client identity. Keep the request recognizable as
+        // IMM and send a browser-like accept header for the CDN hop.
+        let mut request = client
+            .get(validated_url.clone())
+            .header(USER_AGENT, DOWNLOAD_USER_AGENT)
+            .header(ACCEPT, "*/*");
+        if url_class == DownloadUrlClass::GameBananaFile {
+            request = request.header(REFERER, "https://gamebanana.com/");
+        }
+        let requested_range_start = request_range_start(url_class, resume_from);
+        if let Some(range_start) = requested_range_start {
+            request = request.header(RANGE, format!("bytes={range_start}-"));
             if let Some(metadata) = &resume_metadata {
                 if let Some(etag) = &metadata.etag {
                     request = request.header(IF_RANGE, etag);
@@ -4134,10 +7281,10 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
             }
         }
 
-        let response = match request.send().await {
-            Ok(res) => res,
-            Err(e) => {
-                last_error = e.to_string();
+        let response = match send_download_request(request, stall_timeout).await {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = error;
                 if attempt < retries {
                     let backoff = compute_backoff_ms(attempt, false);
                     sleep(Duration::from_millis(backoff)).await;
@@ -4193,56 +7340,62 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
             }
         }
 
-        if resume_from > 0 && status == StatusCode::PARTIAL_CONTENT {
-            let range_start = response
-                .headers()
-                .get(CONTENT_RANGE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(parse_content_range_start);
-            let range_total = response
-                .headers()
-                .get(CONTENT_RANGE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(parse_total_from_content_range);
-            let etag_changed = resume_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.etag.as_deref())
-                .is_some_and(|expected| {
-                    response
-                        .headers()
-                        .get(ETAG)
-                        .and_then(|value| value.to_str().ok())
-                        != Some(expected)
-                });
-            let modified_changed = resume_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.last_modified.as_deref())
-                .is_some_and(|expected| {
-                    response
-                        .headers()
-                        .get(LAST_MODIFIED)
-                        .and_then(|value| value.to_str().ok())
-                        != Some(expected)
-                });
-            let total_changed = resume_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.total_size)
-                .is_some_and(|expected| range_total != Some(expected));
-            if range_start != Some(resume_from) || etag_changed || modified_changed || total_changed
-            {
-                tracing::warn!(
-                    "Rejecting stale or mismatched partial response for key {}",
-                    key
-                );
-                let _ = remove_file(&temp_file_path);
-                let _ = remove_file(&resume_meta_path);
-                if attempt < retries {
-                    sleep(Duration::from_millis(compute_backoff_ms(attempt, true))).await;
-                    continue;
+        if status == StatusCode::PARTIAL_CONTENT {
+            if let Some(requested_range_start) = requested_range_start {
+                let range_start = response
+                    .headers()
+                    .get(CONTENT_RANGE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(parse_content_range_start);
+                let range_total = response
+                    .headers()
+                    .get(CONTENT_RANGE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(parse_total_from_content_range);
+                let validators_mismatch = if resume_from > 0 {
+                    let etag_changed = resume_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.etag.as_deref())
+                        .is_some_and(|expected| {
+                            response
+                                .headers()
+                                .get(ETAG)
+                                .and_then(|value| value.to_str().ok())
+                                != Some(expected)
+                        });
+                    let modified_changed = resume_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.last_modified.as_deref())
+                        .is_some_and(|expected| {
+                            response
+                                .headers()
+                                .get(LAST_MODIFIED)
+                                .and_then(|value| value.to_str().ok())
+                                != Some(expected)
+                        });
+                    let total_changed = resume_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.total_size)
+                        .is_some_and(|expected| range_total != Some(expected));
+                    etag_changed || modified_changed || total_changed
+                } else {
+                    false
+                };
+                if range_start != Some(requested_range_start) || validators_mismatch {
+                    tracing::warn!(
+                        "Rejecting stale or mismatched partial response for key {}",
+                        key
+                    );
+                    let _ = remove_file(&temp_file_path);
+                    let _ = remove_file(&resume_meta_path);
+                    if attempt < retries {
+                        sleep(Duration::from_millis(compute_backoff_ms(attempt, true))).await;
+                        continue;
+                    }
+                    last_error =
+                        "Partial response did not match the saved download validator".to_string();
+                    break;
                 }
-                last_error =
-                    "Partial response did not match the saved download validator".to_string();
-                break;
             }
         }
 
@@ -4360,12 +7513,10 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
         let mut speed_window_start = Instant::now();
         let mut speed_window_bytes: u64 = 0;
         let mut rolling_speed_bps = 0.0f64;
-        let mut low_speed_since: Option<Instant> = None;
         let mut emit_window_start = Instant::now();
         let mut emit_window_bytes: u64 = 0;
         let mut attempt_error: Option<String> = None;
         let mut attempt_error_stage = "download".to_string();
-        let mut resume_retry_requested = false;
 
         loop {
             if is_download_cancelled(&key) {
@@ -4437,26 +7588,6 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
                 };
                 speed_window_start = Instant::now();
                 speed_window_bytes = 0;
-
-                let transferred_since_resume = downloaded.saturating_sub(effective_resume_from);
-                if transferred_since_resume > 128 * 1024 && rolling_speed_bps > 0.0 {
-                    if rolling_speed_bps < LOW_SPEED_THRESHOLD_BPS {
-                        if let Some(since) = low_speed_since {
-                            if since.elapsed() >= Duration::from_secs(LOW_SPEED_GRACE_SECS) {
-                                attempt_error = Some(format!(
-                                    "Low speed persisted below {:.0} KB/s, reconnecting",
-                                    LOW_SPEED_THRESHOLD_BPS / 1024.0
-                                ));
-                                resume_retry_requested = true;
-                                break;
-                            }
-                        } else {
-                            low_speed_since = Some(Instant::now());
-                        }
-                    } else {
-                        low_speed_since = None;
-                    }
-                }
             }
 
             if emit
@@ -4524,7 +7655,7 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
             }
 
             if attempt < retries && last_error_stage == "download" {
-                let backoff = compute_backoff_ms(attempt, resume_retry_requested);
+                let backoff = compute_backoff_ms(attempt, false);
                 sleep(Duration::from_millis(backoff)).await;
                 continue;
             }
@@ -4618,7 +7749,7 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
                 preview_result?;
             }
             clear_cancelled_download(&key);
-            return Ok(());
+            return Ok(None);
         }
 
         if emit {
@@ -4639,7 +7770,23 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
             );
         }
 
-        if let Err(e) = extract_archive_impl(
+        let required_preview = if emit {
+            Some(prepare_install_preview(&app_handle, preview_url.as_deref(), &key).await)
+        } else {
+            None
+        };
+        if is_download_cancelled(&key) {
+            if let Some(staging) = nte_download_staging.take() {
+                let _ = staging.cleanup();
+            }
+            decrement_download_count(&key);
+            clear_cancelled_download(&key);
+            return Err(format!(
+                "Download cancelled by user (file: {resolved_file_name})"
+            ));
+        }
+
+        let extraction_snapshot = match extract_archive_impl(
             app_handle.clone(),
             final_file_path.to_string_lossy().to_string(),
             save_path.clone(),
@@ -4650,35 +7797,53 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
             true,
             Some(max_extracts),
             game.clone(),
+            required_preview,
+            install_state.take(),
+            mutation_control_root.clone(),
         )
         .await
         {
-            last_error = e;
-            if let Some(staging) = nte_download_staging.take() {
-                let _ = staging.cleanup();
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                last_error = e;
+                if let Some(staging) = nte_download_staging.take() {
+                    let _ = staging.cleanup();
+                }
+                if emit {
+                    let _ = app_handle.emit_event(
+                        "download-error",
+                        DownloadErrorEvent {
+                            key: key.clone(),
+                            message: last_error.clone(),
+                            stage: if last_error.to_ascii_lowercase().contains("preview") {
+                                "preview"
+                            } else {
+                                "extract"
+                            }
+                            .to_string(),
+                            attempt,
+                            max_attempts: retries,
+                        },
+                    );
+                }
+                decrement_download_count(&key);
+                clear_cancelled_download(&key);
+                return Err(last_error);
             }
-            if emit {
-                let _ = app_handle.emit_event(
-                    "download-error",
-                    DownloadErrorEvent {
-                        key: key.clone(),
-                        message: last_error.clone(),
-                        stage: "extract".to_string(),
-                        attempt,
-                        max_attempts: retries,
-                    },
-                );
-            }
-            decrement_download_count(&key);
-            clear_cancelled_download(&key);
-            return Err(last_error);
-        }
+        };
 
-        if let Some(staging) = nte_download_staging.take() {
-            staging.cleanup()?;
-        }
+        let cleanup_result = nte_download_staging
+            .take()
+            .map(BoundNteDownloadStaging::cleanup)
+            .unwrap_or(Ok(()));
+        let cleanup_result = resolve_post_install_staging_cleanup(
+            &key,
+            extraction_snapshot.is_some(),
+            cleanup_result,
+        );
         clear_cancelled_download(&key);
-        return Ok(());
+        cleanup_result?;
+        return Ok(extraction_snapshot);
     }
 
     if emit {
@@ -4703,6 +7868,55 @@ async fn download_and_unzip_impl<A: DownloadAppContext>(
     decrement_download_count(&key);
     clear_cancelled_download(&key);
     Err(last_error)
+}
+
+fn resolve_post_install_staging_cleanup(
+    key: &str,
+    committed_snapshot_exists: bool,
+    cleanup_result: Result<(), String>,
+) -> Result<(), String> {
+    match cleanup_result {
+        Ok(()) => Ok(()),
+        Err(error) if committed_snapshot_exists => {
+            tracing::warn!(
+                "Download '{}' was committed, but hidden staging cleanup failed: {}",
+                key,
+                error
+            );
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "Archive deployment completed, but hidden download staging cleanup failed: {error}"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod post_install_staging_cleanup_tests {
+    use super::resolve_post_install_staging_cleanup;
+
+    #[test]
+    fn committed_download_is_not_reported_as_failed_when_cleanup_fails() {
+        assert!(resolve_post_install_staging_cleanup(
+            "committed-download",
+            true,
+            Err("sharing violation".to_string()),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn cleanup_failure_without_a_committed_snapshot_remains_visible() {
+        let error = resolve_post_install_staging_cleanup(
+            "uncommitted-download",
+            false,
+            Err("sharing violation".to_string()),
+        )
+        .expect_err("cleanup failure must remain visible before state commit");
+
+        assert!(error.contains("hidden download staging cleanup failed"));
+        assert!(error.contains("sharing violation"));
+    }
 }
 
 #[cfg(test)]
@@ -4778,6 +7992,7 @@ mod live_gamebanana_download_tests {
             .parse::<u64>()
             .expect("numeric IMM_LIVE_NTE_SIZE");
         let md5 = std::env::var("IMM_LIVE_NTE_MD5").expect("IMM_LIVE_NTE_MD5");
+        let preview_url = std::env::var("IMM_LIVE_NTE_PREVIEW_URL").ok();
 
         let temp = tempdir().expect("tempdir");
         let runtime_dir = temp.path().join("runtime");
@@ -4827,22 +8042,35 @@ mod live_gamebanana_download_tests {
                 wait_for_primary_idle: Some(false),
             }),
             Some("NTE".to_string()),
+            preview_url,
             Some(expected_size),
             Some(ExpectedDownloadHash {
                 algorithm: "md5".to_string(),
                 value: md5.clone(),
             }),
+            None,
+            None,
         )
         .await
         .expect("live NTE download and extraction");
 
         let payload_count = count_nte_payloads(&destination);
         assert!(payload_count > 0, "deployed NTE payloads");
+        let preview_path = destination.join("preview.jpg");
+        let preview_bytes = fs::read(&preview_path).expect("deployed preview.jpg");
+        assert!(!preview_bytes.is_empty(), "non-empty preview.jpg");
+        let preview = image::load_from_memory(&preview_bytes).expect("decodable preview.jpg");
+        assert!(
+            preview.width() > 0 && preview.height() > 0,
+            "non-zero preview dimensions"
+        );
         let wal_path = managed_root.join(".imm-nte-library.wal");
         let wal = nte_wal::validate_or_repair(&wal_path).expect("valid NTE library WAL");
         assert!(wal.valid_records >= 5, "complete library WAL transaction");
         println!(
-            "LIVE_NTE_DOWNLOAD_OK bytes={expected_size} md5={md5} payloads={payload_count} wal_records={} elapsed_ms={}",
+            "LIVE_NTE_DOWNLOAD_OK bytes={expected_size} md5={md5} payloads={payload_count} preview={}x{} wal_records={} elapsed_ms={}",
+            preview.width(),
+            preview.height(),
             wal.valid_records,
             started.elapsed().as_millis()
         );
@@ -4878,8 +8106,27 @@ fn cancel_download(key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn fetch_gamebanana_json(url: String) -> Result<serde_json::Value, String> {
-    fetch_gamebanana_json_value(url).await
+async fn fetch_gamebanana_json(
+    url: String,
+    request_id: String,
+    state: tauri::State<'_, GameBananaHttpState>,
+) -> Result<serde_json::Value, String> {
+    let client = state.client()?;
+    let receiver = state.register(&request_id)?;
+    let result = tokio::select! {
+        _ = receiver => Err(GAMEBANANA_CANCELLED_MESSAGE.to_string()),
+        result = fetch_gamebanana_json_value(client, url) => result,
+    };
+    state.finish(&request_id);
+    result
+}
+
+#[tauri::command]
+fn cancel_gamebanana_request(
+    request_id: String,
+    state: tauri::State<'_, GameBananaHttpState>,
+) -> Result<(), String> {
+    state.cancel(&request_id)
 }
 
 #[tauri::command]
@@ -4989,6 +8236,120 @@ fn resolve_managed_folder_from_config_dir(
     Ok(candidate)
 }
 
+fn is_ignored_mod_payload_entry(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    normalized.starts_with("preview.")
+        || normalized.starts_with(".imm-")
+        || normalized.contains(".imm-staging")
+        || normalized.contains(".imm-backup")
+}
+
+fn measure_mod_payload_size(root: &Path) -> Result<u64, String> {
+    let root_metadata = std::fs::symlink_metadata(root)
+        .map_err(|err| format!("Unable to inspect the Mod directory: {err}"))?;
+    if !root_metadata.is_dir() || deployment_metadata_is_reparse(&root_metadata) {
+        return Err("The Mod payload root is not a safe regular directory.".to_string());
+    }
+
+    let mut total = 0_u64;
+    let mut entry_count = 0_usize;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)
+            .map_err(|err| format!("Unable to enumerate the Mod payload: {err}"))?
+        {
+            let entry =
+                entry.map_err(|err| format!("Unable to enumerate the Mod payload: {err}"))?;
+            entry_count = entry_count.saturating_add(1);
+            if entry_count > MAX_MOD_PAYLOAD_SCAN_ENTRIES {
+                return Err(format!(
+                    "The Mod payload exceeds the {MAX_MOD_PAYLOAD_SCAN_ENTRIES} entry scan limit."
+                ));
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if is_ignored_mod_payload_entry(&name) {
+                continue;
+            }
+            let metadata = std::fs::symlink_metadata(entry.path())
+                .map_err(|err| format!("Unable to inspect the Mod payload entry: {err}"))?;
+            if deployment_metadata_is_reparse(&metadata) {
+                return Err(format!(
+                    "The Mod payload contains an unsafe reparse entry: {}",
+                    entry.path().display()
+                ));
+            }
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                total = total
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| "The Mod payload size overflowed u64.".to_string())?;
+            } else {
+                return Err(format!(
+                    "The Mod payload contains an unsupported entry: {}",
+                    entry.path().display()
+                ));
+            }
+        }
+    }
+    Ok(total)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModPayloadSizeResult {
+    bytes: Option<u64>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn measure_mod_payload_sizes(
+    game: String,
+    relative_paths: Vec<String>,
+) -> Result<HashMap<String, ModPayloadSizeResult>, String> {
+    validate_registered_game_key(&game)?;
+    if relative_paths.len() > MAX_MOD_PAYLOAD_SCAN_PATHS {
+        return Err(format!(
+            "A payload-size request can include at most {MAX_MOD_PAYLOAD_SCAN_PATHS} Mod paths."
+        ));
+    }
+    let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        relative_paths
+            .into_iter()
+            .map(|relative_path| {
+                let result = (|| {
+                    let relative = validate_managed_relative_path(&relative_path)?;
+                    if relative.as_os_str().is_empty() {
+                        return Err("A Mod-relative path is required.".to_string());
+                    }
+                    let managed_relative = PathBuf::from(MANAGED_SOURCE_DIR).join(relative);
+                    let directory = resolve_managed_folder_from_config_dir(
+                        &config_dir,
+                        &game,
+                        ManagedPathRoot::Source,
+                        &managed_relative.to_string_lossy(),
+                    )?;
+                    measure_mod_payload_size(&directory)
+                })();
+                let value = match result {
+                    Ok(bytes) => ModPayloadSizeResult {
+                        bytes: Some(bytes),
+                        error: None,
+                    },
+                    Err(error) => ModPayloadSizeResult {
+                        bytes: None,
+                        error: Some(error),
+                    },
+                };
+                (relative_path, value)
+            })
+            .collect()
+    })
+    .await
+    .map_err(|err| format!("Mod payload size worker failed: {err}"))
+}
+
 #[cfg(test)]
 mod managed_folder_tests {
     use super::*;
@@ -5053,6 +8414,27 @@ mod managed_folder_tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn payload_size_excludes_previews_and_imm_transaction_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("mod");
+        fs::create_dir_all(root.join("payload")).expect("payload dir");
+        fs::create_dir_all(root.join(".imm-staging-orphan")).expect("staging dir");
+        fs::write(root.join("payload").join("main.pak"), vec![1_u8; 20]).expect("payload");
+        fs::write(root.join("preview.jpg"), vec![2_u8; 100]).expect("preview");
+        fs::write(root.join(".imm-metadata.json"), vec![3_u8; 200]).expect("metadata");
+        fs::write(
+            root.join(".imm-staging-orphan").join("partial.pak"),
+            vec![4_u8; 300],
+        )
+        .expect("staging payload");
+
+        assert_eq!(
+            measure_mod_payload_size(&root).expect("measure payload"),
+            20
+        );
+    }
 }
 
 #[tauri::command]
@@ -5072,6 +8454,17 @@ fn open_managed_folder(
 }
 
 #[tauri::command]
+fn open_app_state_folder(
+    app_handle: tauri::AppHandle,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
+) -> Result<(), String> {
+    app_handle
+        .opener()
+        .open_path(repository.control_root().to_string_lossy(), None::<&str>)
+        .map_err(|error| format!("Unable to open the application state folder: {error}"))
+}
+
+#[tauri::command]
 fn open_wuwa_mod_fixer_folder(app_handle: tauri::AppHandle) -> Result<(), String> {
     let path = std::env::current_dir()
         .map_err(|err| err.to_string())?
@@ -5088,7 +8481,8 @@ fn open_wuwa_mod_fixer_folder(app_handle: tauri::AppHandle) -> Result<(), String
 #[tauri::command]
 async fn resolve_preview_assets(
     app_handle: tauri::AppHandle,
-    source_root: String,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
+    game: String,
     requests: Vec<PreviewCacheRequest>,
 ) -> Result<Vec<ResolvedPreviewAsset>, String> {
     let cache_root = app_handle
@@ -5096,12 +8490,13 @@ async fn resolve_preview_assets(
         .app_local_data_dir()
         .map_err(|err| format!("Unable to resolve the preview cache root: {err}"))?
         .join(PREVIEW_CACHE_DIR);
-    let source_root = PathBuf::from(source_root);
+    validate_registered_game_key(&game)?;
+    let managed_root = persisted_managed_source_root(repository.runtime_root(), &game)?;
 
     tokio::task::spawn_blocking(move || {
         let mut assets = Vec::with_capacity(requests.len());
         for request in requests {
-            match resolve_managed_preview_file(&source_root, &request.relative_path) {
+            match resolve_managed_preview_file(&managed_root, &request.relative_path) {
                 Ok(Some(source)) => match copy_preview_to_cache(&source, &cache_root) {
                     Ok(path) => assets.push(ResolvedPreviewAsset {
                         key: request.key,
@@ -5125,78 +8520,6 @@ async fn resolve_preview_assets(
     })
     .await
     .map_err(|err| format!("Preview cache worker failed: {err}"))?
-}
-
-#[tauri::command]
-fn path_exists_native(path: String) -> Result<bool, String> {
-    Ok(Path::new(&to_windows_extended_path(&path)).exists())
-}
-
-#[tauri::command]
-fn read_text_file_native(path: String) -> Result<String, String> {
-    if Path::new(&path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("configNTE.json"))
-    {
-        return Err("configNTE.json must be read through load_nte_config.".to_string());
-    }
-    std::fs::read_to_string(to_windows_extended_path(&path)).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-fn write_text_file_native(path: String, contents: String) -> Result<(), String> {
-    if Path::new(&path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("configNTE.json"))
-    {
-        return Err("configNTE.json must be written through save_nte_config.".to_string());
-    }
-    std::fs::write(to_windows_extended_path(&path), contents).map_err(|err| err.to_string())
-}
-
-#[cfg(test)]
-mod native_text_io_tests {
-    use super::read_text_file_native;
-
-    #[test]
-    fn generic_native_reader_rejects_nte_configuration_paths() {
-        for path in [
-            "configNTE.json",
-            r"C:\\Program Files\\IMM\\configNTE.json",
-            r"C:\\Program Files\\IMM\\CONFIGnte.JSON",
-        ] {
-            let error = read_text_file_native(path.to_string()).unwrap_err();
-            assert!(error.contains("load_nte_config"));
-        }
-    }
-}
-
-#[tauri::command]
-fn read_dir_native(path: String) -> Result<Vec<NativeDirEntry>, String> {
-    let entries =
-        std::fs::read_dir(to_windows_extended_path(&path)).map_err(|err| err.to_string())?;
-    entries
-        .map(|entry| {
-            let entry = entry.map_err(|err| err.to_string())?;
-            let file_type = entry.file_type().map_err(|err| err.to_string())?;
-            Ok(NativeDirEntry {
-                name: entry.file_name().to_string_lossy().to_string(),
-                is_directory: file_type.is_dir(),
-            })
-        })
-        .collect()
-}
-
-#[tauri::command]
-fn mkdir_native(path: String, recursive: bool) -> Result<(), String> {
-    if recursive {
-        std::fs::create_dir_all(to_windows_extended_path(&path))
-    } else {
-        std::fs::create_dir(to_windows_extended_path(&path))
-    }
-    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -5278,66 +8601,169 @@ fn request_app_restart(app_handle: tauri::AppHandle) {
     app_handle.request_restart();
 }
 
-#[tauri::command]
-fn execute_with_args(exe_path: String, args: Vec<String>) -> Result<String, String> {
-    if !Path::new(&exe_path).exists() {
-        return Err(format!("Executable not found: {}", exe_path));
+fn validate_managed_executable(root: &Path, executable: &Path) -> Result<PathBuf, String> {
+    let root_metadata = std::fs::symlink_metadata(root)
+        .map_err(|err| format!("Unable to inspect the executable root: {err}"))?;
+    if !root_metadata.is_dir() || deployment_metadata_is_reparse(&root_metadata) {
+        return Err("The executable root must be a regular local directory.".to_string());
     }
 
-    let mut command = Command::new(&exe_path);
+    let canonical_root = std::fs::canonicalize(root)
+        .map_err(|err| format!("Unable to resolve the executable root: {err}"))?;
+    let canonical_executable = std::fs::canonicalize(executable)
+        .map_err(|err| format!("Unable to resolve the executable: {err}"))?;
+    let relative = canonical_executable
+        .strip_prefix(&canonical_root)
+        .map_err(|_| "The executable escaped its managed root.".to_string())?;
 
-    for arg in &args {
-        command.arg(arg);
+    let mut cursor = canonical_root.clone();
+    for component in relative.components() {
+        cursor.push(component.as_os_str());
+        let metadata = std::fs::symlink_metadata(&cursor)
+            .map_err(|err| format!("Unable to inspect the executable path: {err}"))?;
+        if deployment_metadata_is_reparse(&metadata) {
+            return Err("The executable path contains a reparse point.".to_string());
+        }
     }
+    let executable_metadata = std::fs::metadata(&canonical_executable)
+        .map_err(|err| format!("Unable to inspect the executable: {err}"))?;
+    if !executable_metadata.is_file()
+        || canonical_executable
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("exe"))
+    {
+        return Err("The managed executable is not a regular .exe file.".to_string());
+    }
+    Ok(canonical_executable)
+}
 
-    match command.spawn() {
-        Ok(child) => {
-            tracing::info!(
-                "Successfully started process: {} with args: {:?}",
-                exe_path,
-                args
-            );
-            Ok(format!(
-                "Process started successfully with PID: {}",
-                child.id()
-            ))
+fn file_sha256(path: &Path) -> Result<[u8; 32], String> {
+    let mut input = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(|err| format!("Unable to open the managed executable: {err}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|err| format!("Unable to hash the managed executable: {err}"))?;
+        if read == 0 {
+            break;
         }
-        Err(e) => {
-            tracing::error!("Failed to start process {}: {}", exe_path, e);
-            Err(format!("Failed to start process: {}", e))
-        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn spawn_managed_executable(executable: &Path, args: &[&str]) -> Result<String, String> {
+    let child = Command::new(executable)
+        .args(args)
+        .spawn()
+        .map_err(|err| format!("Failed to start the managed executable: {err}"))?;
+    tracing::info!(
+        "Started managed executable '{}' with PID {}",
+        executable.display(),
+        child.id()
+    );
+    Ok(format!(
+        "Process started successfully with PID: {}",
+        child.id()
+    ))
+}
+
+fn xxmi_profile_for_game(game: &str) -> Result<&'static str, String> {
+    match game {
+        "WW" => Ok("WWMI"),
+        "ZZ" => Ok("ZZMI"),
+        "GI" => Ok("GIMI"),
+        "SR" => Ok("SRMI"),
+        "EF" => Ok("EFMI"),
+        _ => Err("Only registered XXMI games can use the launcher.".to_string()),
     }
 }
 
 #[tauri::command]
-async fn create_symlink(link_path: String, target_path: String) -> Result<(), String> {
-    // First, check if the target path exists
-    let target_metadata = std::fs::metadata(&target_path).map_err(|e| e.to_string())?;
+fn launch_configured_xxmi(
+    game: String,
+    repository: tauri::State<'_, app_state::AppStateRepository>,
+) -> Result<String, String> {
+    let profile = xxmi_profile_for_game(&game)?;
+    let global = repository.load_global_value()?;
+    let root = global
+        .get("XXMI")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "The configured XXMI Launcher directory is missing.".to_string())?;
+    let executable = root.join("Resources").join("Bin").join("XXMI Launcher.exe");
+    let executable = validate_managed_executable(&root, &executable)?;
+    spawn_managed_executable(&executable, &["--nogui", "--xxmi", profile])
+}
 
-    // Use platform-specific functions
-    #[cfg(windows)]
-    {
-        if target_metadata.is_dir() {
-            // On Windows, use symlink_dir for directories
-            std::os::windows::fs::symlink_dir(&target_path, &link_path)
-                .map_err(|e| e.to_string())?;
-        } else {
-            // and symlink_file for files
-            std::os::windows::fs::symlink_file(&target_path, &link_path)
-                .map_err(|e| e.to_string())?;
-        }
+#[tauri::command]
+fn launch_bundled_wuwa_mod_fixer(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let tool = ensure_bundled_wuwa_mod_fixer(app_handle)?;
+    let source_root = PathBuf::from(&tool.source_path);
+    let runtime_root = std::env::current_dir()
+        .map_err(|err| err.to_string())?
+        .join("tools")
+        .join("Wuwa_Mod_Fixer");
+    let source_executable = find_fixer_exe(&source_root, 5)
+        .ok_or_else(|| "Bundled Wuwa Mod Fixer source executable is missing.".to_string())?;
+    let source_executable = validate_managed_executable(&source_root, &source_executable)?;
+    let runtime_executable = validate_managed_executable(&runtime_root, Path::new(&tool.exe_path))?;
+    if file_sha256(&source_executable)? != file_sha256(&runtime_executable)? {
+        return Err(
+            "The installed Wuwa Mod Fixer does not match the bundled executable.".to_string(),
+        );
     }
-    #[cfg(unix)]
-    {
-        // On Unix-like systems, symlink works for both files and directories
-        std::os::unix::fs::symlink(&target_path, &link_path).map_err(|e| e.to_string())?;
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        return Err("Symbolic links are not supported on this platform.".to_string());
+    spawn_managed_executable(&runtime_executable, &[])
+}
+
+#[cfg(test)]
+mod managed_process_launch_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn xxmi_profiles_are_fixed_to_registered_legacy_games() {
+        assert_eq!(xxmi_profile_for_game("WW"), Ok("WWMI"));
+        assert_eq!(xxmi_profile_for_game("ZZ"), Ok("ZZMI"));
+        assert_eq!(xxmi_profile_for_game("GI"), Ok("GIMI"));
+        assert_eq!(xxmi_profile_for_game("SR"), Ok("SRMI"));
+        assert_eq!(xxmi_profile_for_game("EF"), Ok("EFMI"));
+        assert!(xxmi_profile_for_game("NTE").is_err());
+        assert!(xxmi_profile_for_game("../../cmd").is_err());
     }
 
-    Ok(())
+    #[test]
+    fn managed_executable_must_remain_below_its_regular_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside.exe");
+        std::fs::create_dir_all(root.join("bin")).expect("managed root");
+        std::fs::write(root.join("bin").join("tool.exe"), b"managed").expect("managed exe");
+        std::fs::write(&outside, b"outside").expect("outside exe");
+
+        let managed = validate_managed_executable(&root, &root.join("bin").join("tool.exe"))
+            .expect("regular child executable");
+        assert!(managed.ends_with("tool.exe"));
+        assert!(validate_managed_executable(&root, &outside).is_err());
+        assert!(validate_managed_executable(&root, &root.join("missing.exe")).is_err());
+    }
+
+    #[test]
+    fn executable_hash_detects_same_size_content_changes() {
+        let temp = tempdir().expect("tempdir");
+        let first = temp.path().join("first.exe");
+        let second = temp.path().join("second.exe");
+        std::fs::write(&first, b"AAAA").expect("first");
+        std::fs::write(&second, b"BBBB").expect("second");
+
+        assert_ne!(file_sha256(&first).unwrap(), file_sha256(&second).unwrap());
+    }
 }
 
 #[tauri::command]
@@ -5363,26 +8789,48 @@ async fn set_window_icon(app_handle: tauri::AppHandle, game: String) -> Result<(
 }
 
 use tauri_plugin_window_state::{Builder, StateFlags};
+
+#[cfg(windows)]
+pub fn run_privileged_helper_if_requested() -> Option<i32> {
+    match privileged_helper::run_if_requested() {
+        Ok(privileged_helper::HelperRunStatus::NotRequested) => None,
+        Ok(privileged_helper::HelperRunStatus::Completed) => Some(0),
+        Err(error) => {
+            eprintln!("Privileged helper rejected the request: {error}");
+            Some(1)
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn run_privileged_helper_if_requested() -> Option<i32> {
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     ensure_rustls_crypto_provider();
+    let app_state_repository = app_state::AppStateRepository::from_environment()
+        .unwrap_or_else(app_state::AppStateRepository::unavailable);
+    let mut log_builder = LogBuilder::new()
+        .level(if cfg!(debug_assertions) {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Info
+        })
+        .rotation_strategy(RotationStrategy::KeepSome(10))
+        .max_file_size(25 * 1024 * 1024)
+        .clear_targets()
+        .target(Target::new(TargetKind::LogDir {
+            file_name: Some("app".into()),
+        }));
+    if cfg!(debug_assertions) {
+        log_builder = log_builder.target(Target::new(TargetKind::Stdout));
+    }
     if let Err(err) = tauri::Builder::default()
-        .plugin(
-            Tracing::new()
-                .with_max_level(
-                    if cfg!(debug_assertions) {
-                        LevelFilter::DEBUG
-                    } else {
-                        LevelFilter::INFO
-                    }
-                )
-                .with_file_logging()
-                .with_rotation(Rotation::Daily)
-                .with_rotation_strategy(RotationStrategy::KeepSome(10))
-                .with_max_file_size(MaxFileSize::mb(25))
-                .with_default_subscriber()
-                .build()
-        )
+        .manage(app_state_repository)
+        .manage(GameBananaHttpState::new())
+        .plugin(log_builder.build())
         .plugin(
             Builder::default()
                 // Persist practical window state while avoiding decoration flag churn.
@@ -5403,9 +8851,29 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            let (bootstrap_status, runtime_root) = {
+                let repository = app.state::<app_state::AppStateRepository>();
+                (repository.bootstrap(), repository.runtime_root().to_path_buf())
+            };
+            match bootstrap_status {
+                app_state::BootstrapStatus::Ready { .. } => {
+                    if let Err(err) = std::env::set_current_dir(&runtime_root) {
+                        tracing::error!(
+                            "Unable to activate the application state runtime projection '{}': {}",
+                            runtime_root.display(),
+                            err
+                        );
+                    }
+                }
+                app_state::BootstrapStatus::RecoveryRequired { ref error, .. } => {
+                    tracing::error!("Application state recovery is required: {}", error);
+                }
+                app_state::BootstrapStatus::Pending => {
+                    tracing::error!("Application state bootstrap did not reach a terminal status");
+                }
+            }
             match app.path().app_local_data_dir() {
                 Ok(app_local_data) => {
                     if let Err(err) = cleanup_stale_nte_download_staging(&app_local_data) {
@@ -5434,46 +8902,61 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             exit_app,
+            app_state::get_app_state_bootstrap_status,
+            app_state::retry_app_state_bootstrap,
+            app_state::load_app_config,
+            app_state::save_app_config,
+            app_state::reset_app_state_with_backup,
             get_username,
             download_and_unzip,
+            bind_gamebanana_mod,
+            backfill_mod_preview,
+            measure_mod_payload_sizes,
             cancel_extract,
             cancel_download,
             fetch_gamebanana_json,
+            cancel_gamebanana_request,
             remote_media::resolve_remote_media,
             remote_media::service_health_check,
             get_session_id,
             get_runtime_data_dir,
-            import_nte_preview_file,
+            managed_fs::managed_path_exists,
+            managed_fs::read_managed_dir,
+            managed_fs::read_managed_text_file,
+            managed_fs::create_managed_dir,
+            managed_fs::prepare_managed_source_dir,
+            managed_fs::remove_managed_path,
+            managed_fs::rename_managed_path,
+            managed_fs::copy_managed_file,
+            save_managed_preview_data,
+            import_managed_preview_file,
             open_managed_folder,
+            open_app_state_folder,
             open_wuwa_mod_fixer_folder,
             resolve_preview_assets,
             get_update_install_context,
-            path_exists_native,
-            read_text_file_native,
-            write_text_file_native,
-            read_dir_native,
-            mkdir_native,
-            guarded_remove_path,
-            guarded_rename_path,
-            guarded_copy_file_path,
-            guarded_import_file_path,
-            ww_bridge::list_unified_ww_cards,
-            ww_bridge::get_unified_ww_card_detail,
-            ww_bridge::refresh_unified_ww_sources,
-            ww_bridge::discover_afdian_candidates,
-            ww_bridge::write_unified_ww_cache_snapshot,
-            ww_bridge::attach_afdian_candidate_to_unified_card,
-            ww_bridge::detach_afdian_source_from_unified_card,
-            ww_bridge::run_temp_duplicate_compare,
+            managed_text::export_json_document,
+            managed_text::pick_json_import_document,
+            managed_text::read_d3dx_user_ini,
+            managed_text::ensure_d3dx_user_ini_backup,
+            managed_text::read_xxmi_launcher_config,
+            managed_text::read_xxmi_importer_d3dx,
+            managed_text::discover_xxmi_launcher_dir,
+            managed_text::set_d3dx_foreground_mode,
+            managed_text::write_managed_text_asset,
+            managed_text::write_xxmi_launcher_config,
             ensure_bundled_wuwa_mod_fixer,
             install_portable_update,
             request_app_restart,
-            save_nte_preview_data,
-            execute_with_args,
-            create_symlink,
+            launch_configured_xxmi,
+            launch_bundled_wuwa_mod_fixer,
+            managed_junction::set_managed_mod_enabled,
             extract_archive,
             set_window_icon,
             logger_utils::open_logs_folder,
+            privileged_helper::get_wer_local_dumps_status,
+            privileged_helper::configure_wer_local_dumps,
+            privileged_helper::remove_wer_local_dumps,
             nte::detect_nte_game_roots,
             nte::delete_nte_mod,
             nte::launch_nte_game,

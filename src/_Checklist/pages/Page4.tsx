@@ -13,12 +13,11 @@ import {
 	folderSelector,
 	verifyDirStruct,
 } from "@/utils/filesys";
-import { getCwd, getDataDir, readXXMIConfig, verifyGameDir } from "@/utils/init";
+import { completeRuntimeBootstrap, getCwd, getDataDir, readXXMIConfig, verifyGameDir } from "@/utils/init";
 import { join } from "@/utils/utils";
 import { CHANGES, GAME, NTE_REGION, SOURCE, TARGET, TEXT_DATA, XXMI_DIR, XXMI_MODE } from "@/utils/vars";
 import { NteRegion } from "@/utils/types";
 import { invoke } from "@tauri-apps/api/core";
-import { exists } from "@tauri-apps/plugin-fs";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { CheckIcon, FolderCog2Icon, HelpCircleIcon, InfoIcon, XIcon } from "lucide-react";
 import { useState } from "react";
@@ -135,19 +134,20 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 									) {
 										throw new Error(textData._Checklist.NTEManagedLibraryOutside);
 									}
-									await ensureManagedSourceDir(sourceRoot);
 									await flushRuntimeState("configure-nte", {
 										source: sourceRoot,
 										target: validation.modsRoot,
 										xxmiMode: 1,
 										nteRegion: validation.region,
 									});
+									await ensureManagedSourceDir("NTE");
 									setSource(sourceRoot);
 									setTarget(validation.modsRoot);
 									setChecked(1);
 									setNteRegion(validation.region);
 									setChanges({ before: [], after: [], map: {}, skip: true, title: "" });
 									setPage(4);
+									completeRuntimeBootstrap("NTE");
 								} catch (validationError) {
 									addToast({
 										message: errorMessage(validationError, textData._Checklist.NTEGameRootNotConfigured),
@@ -300,11 +300,6 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 										: path.endsWith(managedTGT)
 											? path.split(managedTGT)[0]
 											: path;
-									path = !path.endsWith("Mods")
-										? (await exists(join(path, "Mods")))
-											? join(path, "Mods")
-											: path
-										: path;
 									setTgt(path);
 									if (checked2) {
 										setSrc(path);
@@ -353,11 +348,6 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 										: path.endsWith(managedTGT)
 											? path.split(managedTGT)[0]
 											: path;
-									path = !path.endsWith("Mods")
-										? (await exists(join(path, "Mods")))
-											? join(path, "Mods")
-											: path
-										: path;
 									setSrc(path);
 								}}
 							>
@@ -385,18 +375,14 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 						<Button
 							className={"w-32 mt-2"}
 							onClick={async () => {
+								let nextSource = checked2 ? tgt : src;
+								let nextTarget = tgt;
 								if (checked) {
-									if (!(await exists(tgt)) || (!checked2 && !(await exists(src)))) {
-										addToast({
-											message: textData._Toasts.SrcOrTgt,
-											type: "error",
-										});
-										return;
-									}
-									setTarget(tgt);
-									setSource(checked2 ? tgt : src);
+									setTarget(nextTarget);
+									setSource(nextSource);
 								} else {
-									await readXXMIConfig(xxmiDir);
+									await flushRuntimeState("configure-xxmi-root", { xxmiDir });
+									await readXXMIConfig();
 									const dirs = await verifyGameDir(game);
 									info("verfiying game directories", { dirs });
 									if (!dirs.sourceDir || !dirs.targetDir) {
@@ -406,10 +392,18 @@ function Page4({ setPage }: { setPage: (page: number) => void }) {
 										});
 										return;
 									}
-									setSource(dirs.sourceDir);
-									setTarget(dirs.targetDir);
+									nextSource = dirs.sourceDir;
+									nextTarget = dirs.targetDir;
+									setSource(nextSource);
+									setTarget(nextTarget);
 								}
-								applyPreset([]);
+								await flushRuntimeState("configure-game-paths", {
+									source: nextSource,
+									target: nextTarget,
+									xxmiMode: checked,
+									xxmiDir,
+								});
+								await applyPreset([]);
 								setChanges(await verifyDirStruct());
 								setPage(4);
 							}}

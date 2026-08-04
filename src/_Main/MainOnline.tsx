@@ -1,10 +1,10 @@
-import { apiClient } from "@/utils/api";
+import { Button } from "@/components/ui/button";
+import { fetchGameBananaJson, getGameBananaProvider, isGameBananaAbortError } from "@/utils/api";
 import {
 	GAME,
 	INSTALLED_ITEMS,
 	ONLINE_DATA,
 	ONLINE_PATH,
-	ONLINE_SOURCE,
 	ONLINE_SELECTED,
 	ONLINE_SORT,
 	ONLINE_TYPE,
@@ -13,21 +13,16 @@ import {
 	TEXT_DATA,
 	TYPES,
 } from "@/utils/vars";
+import { isRouteBlacklisted, normalizeModRoute, preventContextMenu } from "@/utils/utils";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { LoaderIcon, RefreshCwIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+
+import type { OnlineMod } from "@/utils/types";
 import CardOnline from "./components/CardOnline";
-
 import Carousel from "./components/Carousel";
-import { isRouteBlacklisted, normalizeModRoute, preventContextMenu } from "@/utils/utils";
-import { LoaderIcon } from "lucide-react";
-import { OnlineListItem, OnlineMod } from "@/utils/types";
-import { info } from "@/lib/logger";
-import { buildUnifiedOnlineCacheKey, listUnifiedWwCards, shouldUseUnifiedWwOnline } from "@/utils/unifiedOnlineBridge";
-import { resolveUnifiedOnlineList, type UnifiedOnlineCard } from "@/utils/unifiedOnline";
 
-const pageCount: Record<string, number> = {};
 type OnlineListResponse = {
 	_aMetadata?: {
 		_nRecordCount?: number;
@@ -35,66 +30,51 @@ type OnlineListResponse = {
 	};
 	_aRecords?: OnlineMod[];
 };
-async function fetchGameBananaJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-	if (signal?.aborted) throw new DOMException("The request was aborted", "AbortError");
-	try {
-		const payload = await invoke<unknown>("fetch_gamebanana_json", { url });
-		if (signal?.aborted) throw new DOMException("The request was aborted", "AbortError");
-		return payload as T;
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err || "Failed to fetch");
-		if (/failed to fetch/i.test(message)) {
-			throw new Error("无法连接 GameBanana。可能是网络、代理或 Cloudflare 拦截，请稍后再试。");
-		}
-		throw new Error(`无法连接 GameBanana：${message}`);
-	}
-}
+
+type PageState = {
+	page: number;
+	maxPage: number;
+};
+
+const pageStates: Record<string, PageState> = {};
+const ONLINE_TIME_REFERENCE_SECONDS = Date.now() / 1000;
 
 export function resetPageCounts() {
-	Object.keys(pageCount).forEach((key) => {
-		delete pageCount[key];
+	Object.keys(pageStates).forEach((key) => {
+		delete pageStates[key];
 	});
 }
-let max = 0;
-let prevLoaded = 0;
 
-function extractLegacyOnlineCards(items: OnlineListItem[] | undefined): OnlineMod[] {
-	return (items || []).filter((item) => item._sModelName !== "UnifiedCard") as OnlineMod[];
-}
-
-function getUnifiedSearchTerm(path: string): string | undefined {
-	if (!path.startsWith("search/")) return undefined;
-	const term = path.replace("search/", "").split("&_type=")[0]?.trim();
-	return term || undefined;
+function onlineErrorMessage(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error || "在线列表请求失败");
+	if (/failed to fetch|connect|timed? out|dns|network/i.test(message)) {
+		return "无法连接 GameBanana。请检查网络或代理后重试。";
+	}
+	return `GameBanana 请求失败：${message}`;
 }
 
 function MainOnline() {
 	const [isLoading, setIsLoading] = useState(false);
 	const [onlineLoadError, setOnlineLoadError] = useState("");
+	const [reloadToken, setReloadToken] = useState(0);
+	const loadingRef = useRef(false);
+	const requestGenerationRef = useRef(0);
+	const routeControllerRef = useRef<AbortController | null>(null);
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const carouselRef = useRef<HTMLDivElement | null>(null);
-	const unifiedCardsRef = useRef<Record<string, UnifiedOnlineCard[]>>({});
-	const loadingCacheKeysRef = useRef(new Set<string>());
 	const settings = useAtomValue(SETTINGS);
 	const nsfw = settings.global.nsfw;
 	const textData = useAtomValue(TEXT_DATA);
 	const [onlineData, setOnlineData] = useAtom(ONLINE_DATA);
-	const onlineDataRef = useRef(onlineData);
-	const onlineSource = useAtomValue(ONLINE_SOURCE);
 	const onlineType = useAtomValue(ONLINE_TYPE);
 	const onlinePath = useAtomValue(ONLINE_PATH);
 	const onlineSort = useAtomValue(ONLINE_SORT);
 	const setRightSlideOverOpen = useSetAtom(RIGHT_SLIDEOVER_OPEN);
-	const [_, setSelected] = useAtom(ONLINE_SELECTED);
+	const setSelected = useSetAtom(ONLINE_SELECTED);
 	const types = useAtomValue(TYPES);
 	const [visibleRange, setVisibleRange] = useState({ start: -1, end: -1 });
 	const game = useAtomValue(GAME);
-	const onlineCacheKey = useMemo(
-		() => (shouldUseUnifiedWwOnline(game) ? buildUnifiedOnlineCacheKey(onlinePath, onlineSource) : onlinePath),
-		[game, onlinePath, onlineSource]
-	);
-	const shouldUseUnifiedList = shouldUseUnifiedWwOnline(game);
-	const appendLegacyOnlineCards = shouldUseUnifiedList && onlineSource === "all";
+	const provider = useMemo(() => (game ? getGameBananaProvider(game) : null), [game]);
 	const installedItems = useAtomValue(INSTALLED_ITEMS);
 	const cardCopy = useMemo(
 		() => ({
@@ -113,286 +93,208 @@ function MainOnline() {
 		});
 		return routeMap;
 	}, [installedItems]);
-	const blacklistedRoutes = useMemo(() => {
-		return new Set(
-			(settings.global.onlineBlacklist || [])
-				.filter((entry) => entry.game === game)
-				.map((entry) => normalizeModRoute(entry.route || entry.source))
-				.filter(Boolean)
-		);
-	}, [settings.global.onlineBlacklist, game]);
+	const blacklistedRoutes = useMemo(
+		() =>
+			new Set(
+				(settings.global.onlineBlacklist || [])
+					.filter((entry) => entry.game === game)
+					.map((entry) => normalizeModRoute(entry.route || entry.source))
+					.filter(Boolean)
+			),
+		[game, settings.global.onlineBlacklist]
+	);
+
 	const onModClick = useCallback(
-		(e: ReactMouseEvent<HTMLDivElement>, mod: OnlineListItem) => {
-			const targetTag = (e.target as HTMLElement).tagName.toLowerCase();
-			if (targetTag !== "button") {
-				const selectedRoute = mod ? `${mod._sModelName}/${mod._idRow}` : "";
-				if (mod?._sModelName === "UnifiedCard" && selectedRoute) {
-					setOnlineData((prev) => ({
-						...prev,
-						[selectedRoute]: mod,
-					}));
-				}
-				setSelected(selectedRoute);
-				setRightSlideOverOpen(true);
-			}
+		(event: ReactMouseEvent<HTMLDivElement>, mod: OnlineMod) => {
+			if ((event.target as HTMLElement).tagName.toLowerCase() === "button") return;
+			setSelected(`${mod._sModelName}/${mod._idRow}`);
+			setRightSlideOverOpen(true);
 		},
-		[setOnlineData, setRightSlideOverOpen, setSelected]
+		[setRightSlideOverOpen, setSelected]
 	);
-	const fetchUnifiedCards = useCallback(
-		async (cacheKey: string) => {
-			if (!shouldUseUnifiedWwOnline(game)) {
-				unifiedCardsRef.current[cacheKey] = [];
-				return [];
-			}
 
-			try {
-				const searchTerm = getUnifiedSearchTerm(onlinePath);
-				const unifiedCards = await listUnifiedWwCards({
-					path: onlinePath,
-					source: onlineSource,
-					...(searchTerm ? { searchTerm } : {}),
-					...(onlineSort ? { sort: onlineSort } : {}),
+	const clearCurrentCatalog = useCallback(() => {
+		setOnlineData((previous) => ({ ...previous, [onlinePath]: [] }));
+	}, [onlinePath, setOnlineData]);
+
+	const requestPage = useCallback(
+		async (page: number, signal: AbortSignal): Promise<OnlineListResponse> => {
+			if (!provider) throw new Error("GameBanana provider is unavailable");
+			let url: string;
+			if (onlinePath.startsWith("home")) {
+				url = provider.home({ page, type: onlineType, sort: onlineSort || "default" });
+			} else if (types.some((type) => onlinePath.startsWith(type._sName) || onlinePath.startsWith("Skins"))) {
+				url = provider.category({
+					cat: onlinePath.split("&_sort=")[0],
+					sort: onlineSort || "default",
+					page,
+					runtimeCategories: types,
 				});
-				unifiedCardsRef.current[cacheKey] = unifiedCards;
-				return unifiedCards;
-			} catch (err) {
-				info("unified ww list fallback to legacy", err);
-				unifiedCardsRef.current[cacheKey] = [];
-				return [];
+			} else if (onlinePath.startsWith("search/")) {
+				const term = onlinePath.replace("search/", "").split("&_type=")[0].trim();
+				if (!term) return { _aMetadata: { _nRecordCount: 0, _nPerPage: 15 }, _aRecords: [] };
+				url = provider.search({ term, type: onlineType, page });
+			} else {
+				throw new Error("Unsupported online catalog route");
 			}
+			return fetchGameBananaJson<OnlineListResponse>(url, signal);
 		},
-		[game, onlinePath, onlineSort, onlineSource]
-	);
-	const nextPage = useCallback(
-		async (url: string, cacheKey: string) => {
-			const data = await fetchGameBananaJson<OnlineListResponse>(url);
-			setOnlineData((prev) => {
-				const currentItems = (prev[cacheKey] as OnlineListItem[] | undefined) || [];
-				const legacyCards = shouldUseUnifiedWwOnline(game)
-					? extractLegacyOnlineCards(currentItems)
-					: (currentItems as OnlineMod[]) || [];
-				const nextLegacyCards = [...legacyCards, ...(data._aRecords || [])];
-				return {
-					...prev,
-					[cacheKey]: shouldUseUnifiedList
-						? resolveUnifiedOnlineList(unifiedCardsRef.current[cacheKey], nextLegacyCards, {
-								appendLegacy: appendLegacyOnlineCards,
-							})
-						: nextLegacyCards,
-				};
-			});
-		},
-		[appendLegacyOnlineCards, game, setOnlineData, shouldUseUnifiedList]
+		[onlinePath, onlineSort, onlineType, provider, types]
 	);
 
-	const checkLoadMore = useCallback(async () => {
-		if (!containerRef.current || isLoading) return;
+	const loadNextPage = useCallback(async () => {
+		const controller = routeControllerRef.current;
+		const state = pageStates[onlinePath];
+		if (!controller || controller.signal.aborted || loadingRef.current || !state || state.page >= state.maxPage) return;
 
-		const container = containerRef.current;
-		const { scrollTop, scrollHeight, clientHeight } = container;
-
-		// Check if we're near the bottom (within 100px)
-		if (scrollHeight - scrollTop - clientHeight < 100) {
-			pageCount[onlineCacheKey] = (pageCount[onlineCacheKey] || 0) + 1;
-			setIsLoading(true);
-
-			if (max > 0 && pageCount[onlineCacheKey] - 1 > max) {
-				setIsLoading(false);
-				return;
-			}
-			prevLoaded = (pageCount[onlineCacheKey] - 1) * 15;
-			try {
-				if (onlinePath.startsWith("home")) {
-					await nextPage(apiClient.home({ page: pageCount[onlineCacheKey], type: onlineType }), onlineCacheKey);
-				} else if (onlinePath.startsWith("Skins") || onlinePath.startsWith("Other") || onlinePath.startsWith("UI")) {
-					const cat = onlinePath.split("&_sort=")[0];
-					await nextPage(
-						apiClient.category({ cat, sort: onlineSort, page: pageCount[onlineCacheKey] }),
-						onlineCacheKey
-					);
-				} else if (onlinePath.startsWith("search/")) {
-					const term = onlinePath.replace("search/", "").split("&_type=")[0];
-					if (term.trim().length == 0) return;
-					await nextPage(apiClient.search({ term, type: onlineType, page: pageCount[onlineCacheKey] }), onlineCacheKey);
-				}
-			} finally {
+		const generation = requestGenerationRef.current;
+		const nextPage = state.page + 1;
+		loadingRef.current = true;
+		setIsLoading(true);
+		try {
+			const response = await requestPage(nextPage, controller.signal);
+			if (controller.signal.aborted || generation !== requestGenerationRef.current) return;
+			setOnlineData((previous) => ({
+				...previous,
+				[onlinePath]: [
+					...(((previous[onlinePath] as OnlineMod[] | undefined) || []) as OnlineMod[]),
+					...(response._aRecords || []),
+				],
+			}));
+			pageStates[onlinePath] = { ...state, page: nextPage };
+		} catch (error) {
+			if (controller.signal.aborted || isGameBananaAbortError(error)) return;
+			pageStates[onlinePath] = { page: 1, maxPage: 1 };
+			clearCurrentCatalog();
+			setOnlineLoadError(onlineErrorMessage(error));
+		} finally {
+			if (generation === requestGenerationRef.current) {
+				loadingRef.current = false;
 				setIsLoading(false);
 			}
 		}
-	}, [isLoading, nextPage, onlineCacheKey, onlinePath, onlineType, onlineSort]);
+	}, [clearCurrentCatalog, onlinePath, requestPage, setOnlineData]);
 
-	const scrollTimeoutRef = useRef<number | null>(null);
-	// const scrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+	const checkLoadMore = useCallback(() => {
+		const container = containerRef.current;
+		if (!container || container.scrollHeight - container.scrollTop - container.clientHeight >= 100) return;
+		void loadNextPage();
+	}, [loadNextPage]);
+
 	const updateVisibilityRange = useCallback(() => {
 		if (!containerRef.current) return;
-
 		const box = containerRef.current.getBoundingClientRect();
-		let diff = 0;
-		if (carouselRef.current) {
-			diff = carouselRef.current.getBoundingClientRect().height + 42;
-		}
-		const scrollTop = containerRef.current.scrollTop - diff;
-		const itemHeight = 304;
-		const itemWidth = 256;
-		const itemsPerRow = Math.floor(box.width / itemWidth);
-
-		const newStart = Math.floor(scrollTop / itemHeight) * itemsPerRow;
-		const newEnd = Math.ceil((scrollTop + box.height) / itemHeight) * itemsPerRow - 1;
-
-		// Only update if range actually changed
-		setVisibleRange((prev) => {
-			if (prev.start !== newStart || prev.end !== newEnd) {
-				return { start: newStart, end: newEnd };
-			}
-			return prev;
-		});
+		const carouselHeight = carouselRef.current ? carouselRef.current.getBoundingClientRect().height + 42 : 0;
+		const scrollTop = containerRef.current.scrollTop - carouselHeight;
+		const itemsPerRow = Math.max(1, Math.floor(box.width / 256));
+		const start = Math.floor(scrollTop / 304) * itemsPerRow;
+		const end = Math.ceil((scrollTop + box.height) / 304) * itemsPerRow - 1;
+		setVisibleRange((previous) => (previous.start === start && previous.end === end ? previous : { start, end }));
 	}, []);
 
+	const scrollTimeoutRef = useRef<number | null>(null);
 	const handleScroll = useCallback(() => {
-		// if (!scrollIntervalRef.current) {
-		// 	scrollIntervalRef.current = setInterval(() => {
-		// 		updateVisibilityRange();
-		// 		// Check for infinite scroll using optimized method
-		// 		checkLoadMore();
-		// 	}, 250); // Adjust interval as needed
-		// }
-		if (scrollTimeoutRef.current) {
-			clearTimeout(scrollTimeoutRef.current);
-		}
-
-		scrollTimeoutRef.current = setTimeout(() => {
-			// if (scrollIntervalRef.current) clearInterval(scrollIntervalRef.current);
-			// scrollIntervalRef.current = null;
+		if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current);
+		scrollTimeoutRef.current = window.setTimeout(() => {
 			updateVisibilityRange();
-			// Check for infinite scroll using optimized method
 			checkLoadMore();
-		}, 50); // ~60fps
+		}, 50);
 	}, [checkLoadMore, updateVisibilityRange]);
-	const initialLoad = useCallback(
-		async (url: string, cacheKey: string, controller: AbortController) => {
-			setIsLoading(true);
-			setOnlineLoadError("");
-			try {
-				const [data, unifiedCards] = await Promise.all([
-					fetchGameBananaJson<OnlineListResponse>(url, controller.signal).catch((err: unknown) => {
-						info("legacy online list unavailable", err);
-						setOnlineLoadError(err instanceof Error ? err.message : String(err || "在线列表请求失败"));
-						return null;
-					}),
-					fetchUnifiedCards(cacheKey),
-				]);
-				const legacyRecords = data?._aRecords || [];
-				max = data?._aMetadata?._nRecordCount ? data._aMetadata._nRecordCount / (data?._aMetadata?._nPerPage || 15) : 0;
-				setOnlineData((prev) => {
-					return {
-						...prev,
-						[cacheKey]: shouldUseUnifiedList
-							? resolveUnifiedOnlineList(unifiedCards, legacyRecords, {
-									appendLegacy: appendLegacyOnlineCards,
-								})
-							: legacyRecords,
-					};
-				});
-				setTimeout(() => {
-					void checkLoadMore();
-				}, 100);
-			} finally {
-				loadingCacheKeysRef.current.delete(cacheKey);
-				setIsLoading(false);
-			}
-		},
-		[appendLegacyOnlineCards, checkLoadMore, fetchUnifiedCards, game, setOnlineData, shouldUseUnifiedList]
-	);
-	const initialLoadRef = useRef(initialLoad);
+
 	useEffect(() => {
-		initialLoadRef.current = initialLoad;
-	}, [initialLoad]);
+		const refresh = () => setReloadToken((value) => value + 1);
+		window.addEventListener("imm:refresh-online", refresh);
+		return () => window.removeEventListener("imm:refresh-online", refresh);
+	}, []);
+
 	useEffect(() => {
 		const controller = new AbortController();
-		let initialLoadTimer: number | null = null;
-		if (containerRef.current) {
-			containerRef.current.scrollTo({ top: 0 });
-		}
-		const resetVisibleRangeTimer = window.setTimeout(() => {
+		routeControllerRef.current?.abort();
+		routeControllerRef.current = controller;
+		const generation = ++requestGenerationRef.current;
+
+		void Promise.resolve().then(() => {
+			if (controller.signal.aborted || generation !== requestGenerationRef.current) return;
+			loadingRef.current = true;
+			setIsLoading(true);
+			setOnlineLoadError("");
 			setVisibleRange({ start: -1, end: -1 });
-		}, 0);
-		max = 0;
-		prevLoaded = 0;
-		//info("fetching1", onlineData,onlinePath);
-		//info("fetching2");
-		//info("fetching3");
-		//info("fetching", onlinePath, types);
-		if (!onlineDataRef.current[onlineCacheKey] && !loadingCacheKeysRef.current.has(onlineCacheKey)) {
-			info("fetching", onlinePath);
-			loadingCacheKeysRef.current.add(onlineCacheKey);
-			pageCount[onlineCacheKey] = 1;
-			if (onlinePath.startsWith("home")) {
-				fetchGameBananaJson<OnlineMod[]>(apiClient.banner(), controller.signal)
-					.then((data) => {
-						setOnlineData((prev) => {
-							return {
-								...prev,
-								banner: data || [],
-							};
-						});
+			pageStates[onlinePath] = { page: 1, maxPage: 1 };
+			containerRef.current?.scrollTo({ top: 0 });
+			setOnlineData((previous) => ({
+				...previous,
+				[onlinePath]: [],
+				...(onlinePath.startsWith("home") ? { banner: [] } : {}),
+			}));
+
+			if (provider && onlinePath.startsWith("home")) {
+				void fetchGameBananaJson<OnlineMod[]>(provider.banner(), controller.signal)
+					.then((banner) => {
+						if (controller.signal.aborted || generation !== requestGenerationRef.current) return;
+						setOnlineData((previous) => ({ ...previous, banner: banner || [] }));
 					})
-					.catch((err) => info("legacy online banner unavailable", err));
-				initialLoadTimer = window.setTimeout(() => {
-					initialLoadRef.current(apiClient.home({ type: onlineType }), onlineCacheKey, controller);
-				}, 0);
-			} else if (types.some((t) => onlinePath.startsWith(t._sName) || onlinePath.startsWith("Skins"))) {
-				initialLoadTimer = window.setTimeout(() => {
-					initialLoadRef.current(
-						apiClient.category({ cat: onlinePath.split("&_sort=")[0], sort: onlineSort, page: 1 }),
-						onlineCacheKey,
-						controller
-					);
-				}, 0);
-			} else if (onlinePath.startsWith("search/")) {
-				const term = onlinePath.replace("search/", "").split("&_type=")[0];
-				if (term.trim().length > 0)
-					initialLoadTimer = window.setTimeout(() => {
-						initialLoadRef.current(apiClient.search({ term, type: onlineType, page: 1 }), onlineCacheKey, controller);
-					}, 0);
+					.catch((error) => {
+						if (!isGameBananaAbortError(error)) setOnlineData((previous) => ({ ...previous, banner: [] }));
+					});
 			}
-		}
+
+			void requestPage(1, controller.signal)
+				.then((response) => {
+					if (controller.signal.aborted || generation !== requestGenerationRef.current) return;
+					const records = response._aRecords || [];
+					const recordCount = response._aMetadata?._nRecordCount || records.length;
+					const perPage = response._aMetadata?._nPerPage || 15;
+					pageStates[onlinePath] = { page: 1, maxPage: Math.max(1, Math.ceil(recordCount / perPage)) };
+					setOnlineData((previous) => ({ ...previous, [onlinePath]: records }));
+					window.setTimeout(() => {
+						if (!controller.signal.aborted && generation === requestGenerationRef.current) checkLoadMore();
+					}, 100);
+				})
+				.catch((error) => {
+					if (controller.signal.aborted || isGameBananaAbortError(error)) return;
+					pageStates[onlinePath] = { page: 1, maxPage: 1 };
+					clearCurrentCatalog();
+					setOnlineLoadError(onlineErrorMessage(error));
+				})
+				.finally(() => {
+					if (generation === requestGenerationRef.current) {
+						loadingRef.current = false;
+						setIsLoading(false);
+					}
+				});
+		});
+
 		return () => {
-			clearTimeout(resetVisibleRangeTimer);
-			if (initialLoadTimer) clearTimeout(initialLoadTimer);
-			loadingCacheKeysRef.current.delete(onlineCacheKey);
 			controller.abort();
+			if (routeControllerRef.current === controller) routeControllerRef.current = null;
+			if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current);
 		};
-	}, [onlineCacheKey, onlinePath, onlineSort, onlineType, setOnlineData, types]);
+	}, [checkLoadMore, clearCurrentCatalog, onlinePath, provider, reloadToken, requestPage, setOnlineData]);
 
-	const [now] = useState(() => Date.now() / 1000);
+	const now = ONLINE_TIME_REFERENCE_SECONDS;
 	const filteredBannerData = ((onlineData.banner as OnlineMod[] | undefined) || []).filter(
-		(item) => (item._sModelName == "Mod" || onlineType == "") && (nsfw || item._sInitialVisibility != "hide")
+		(item) => (item._sModelName === "Mod" || onlineType === "") && (nsfw || item._sInitialVisibility !== "hide")
 	);
-
-	const filteredOnlineData = ((onlineData[onlineCacheKey] as OnlineListItem[] | undefined) || []).filter(
-		(item) => nsfw || item._sInitialVisibility != "hide"
+	const filteredOnlineData = ((onlineData[onlinePath] as OnlineMod[] | undefined) || []).filter(
+		(item) => nsfw || item._sInitialVisibility !== "hide"
 	);
+	const pageState = pageStates[onlinePath];
+	const hasMorePages = Boolean(pageState && pageState.page < pageState.maxPage);
 	const animationVariants = {
 		hidden: { opacity: 0, y: 20 },
 		visible: { opacity: 1, y: 0 },
 		exit: { opacity: 0, y: -20 },
 	};
-
 	const transitionConfig = (index: number) => ({
 		duration: 0.3,
 		ease: "easeOut" as const,
-		delay: Math.max(0, 0.05 * index),
+		delay: Math.min(0.3, Math.max(0, 0.05 * index)),
 	});
-
 	const isItemVisible = (index: number) => {
 		const { start, end } = visibleRange;
 		return start === -1 || (index >= start && index <= end) ? 0 : index < start ? 2 : 1;
 	};
-	const hasMorePages = (pageCount[onlineCacheKey] || 0) < max;
-	useEffect(() => {
-		onlineDataRef.current = onlineData;
-	}, [onlineData]);
-	//info(selected);
+
 	return (
 		<div
 			ref={containerRef}
@@ -404,14 +306,14 @@ function MainOnline() {
 					{onlinePath.startsWith("home") && filteredBannerData.length > 0 && (
 						<motion.div
 							layout
-							key={"banner"}
+							key="banner"
 							initial={{ opacity: 0, y: 20 }}
 							animate={{ opacity: 1, y: 0 }}
 							exit={{ opacity: 0, y: 0 }}
 							transition={transitionConfig(0)}
 							className="aspect-video w-full max-w-175 duration-300 transition-[max-width] xl:max-w-3xl mb-4"
 						>
-							<Carousel data={filteredBannerData || []} blur={nsfw == 1} onModClick={onModClick} />
+							<Carousel data={filteredBannerData} blur={nsfw === 1} onModClick={onModClick} />
 						</motion.div>
 					)}
 				</AnimatePresence>
@@ -420,51 +322,53 @@ function MainOnline() {
 			<AnimatePresence mode="popLayout">
 				{!isLoading && filteredOnlineData.length === 0 && onlineLoadError && (
 					<motion.div
-						className="mt-10 max-w-xl rounded-md border border-border bg-background/80 px-5 py-4 text-center text-sm text-muted-foreground"
+						className="mt-10 flex max-w-xl flex-col items-center gap-3 rounded-md border border-border bg-background/80 px-5 py-4 text-center text-sm text-muted-foreground"
 						initial={{ opacity: 0, y: 8 }}
 						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 0 }}
-						transition={transitionConfig(0)}
+						exit={{ opacity: 0 }}
 					>
-						{onlineLoadError}
+						<span>{onlineLoadError}</span>
+						<Button size="sm" variant="outline" onClick={() => setReloadToken((value) => value + 1)}>
+							<RefreshCwIcon className="h-4 w-4" />
+							重试
+						</Button>
 					</motion.div>
 				)}
 				<motion.div
 					className="min-h-fit card-grid card-grid-online grid justify-center w-full py-4"
 					layout
-					key={"content" + onlineCacheKey}
+					key={`content-${onlinePath}`}
 					initial={{ opacity: 0 }}
 					animate={{ opacity: 1 }}
 					exit={{ opacity: 0 }}
 					transition={transitionConfig(0)}
 				>
 					{filteredOnlineData.map((item, index) => {
-						const isVisible = isItemVisible(index);
 						const modRoute = `${item._sModelName}/${item._idRow}`;
 						const installedStatus = installedStatusByRoute.get(modRoute) || 0;
 						const isBlacklisted =
 							blacklistedRoutes.has(modRoute) || isRouteBlacklisted(settings.global.onlineBlacklist, game, modRoute);
 						return (
 							<motion.div
-								key={`${item._sModelName}-${item._idRow}`}
+								key={modRoute}
 								layout
 								variants={animationVariants}
 								initial="hidden"
 								animate="visible"
 								exit="exit"
-								transition={transitionConfig(index - prevLoaded || 0)}
-								onMouseUp={(e: ReactMouseEvent<HTMLDivElement>) => onModClick(e, item)}
+								transition={transitionConfig(index)}
+								onMouseUp={(event) => onModClick(event, item)}
 								onContextMenu={preventContextMenu}
 							>
-								{isVisible ? (
-									<div className="card-generic card-online"></div>
+								{isItemVisible(index) ? (
+									<div className="card-generic card-online" />
 								) : (
 									<CardOnline
 										{...item}
 										now={now}
-										blur={nsfw == 1}
+										blur={nsfw === 1}
 										show={textData._Main._components._Filter.Show}
-										isInstalled={installedStatus >= 0 && installedStatusByRoute.has(modRoute)}
+										isInstalled={installedStatusByRoute.has(modRoute)}
 										hasUpdate={installedStatus > 0}
 										isBlacklisted={isBlacklisted}
 										installedLabel={cardCopy.installed}
@@ -481,11 +385,8 @@ function MainOnline() {
 						className="min-w-8 min-h-8 flex justify-center my-2"
 						initial={{ opacity: 0 }}
 						animate={{ opacity: 1 }}
-						exit={{ opacity: 0 }}
-						key={"loader"}
-						transition={transitionConfig(0)}
 					>
-						<LoaderIcon className="min-w-8 min-h-8 animate-spin text-accent " />
+						<LoaderIcon className="min-w-8 min-h-8 animate-spin text-accent" />
 					</motion.div>
 				)}
 			</AnimatePresence>

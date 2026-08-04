@@ -7,44 +7,59 @@ import { Label } from "@/components/ui/label";
 import { UNCATEGORIZED } from "@/utils/consts";
 import { applyChanges, createManagedDir, createRestorePoint } from "@/utils/filesys";
 import { ChangeInfo } from "@/utils/types";
-import { CHANGES, FIRST_LOAD, HELP_OPEN, INIT_DONE, SOURCE, TEXT_DATA } from "@/utils/vars";
+import { CHANGES, FIRST_LOAD, HELP_OPEN, SOURCE, TEXT_DATA } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ChevronRightIcon, FileIcon, Folder, FolderCog2Icon, FolderCogIcon, HelpCircleIcon } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { error } from "@/lib/logger";
 
 let checked = false;
 function getChecked() {
 	return checked;
 }
 let onConfirm = () => {};
-function Changes({ afterInit }: { afterInit: () => Promise<void> }) {
+function Changes({ onComplete }: { onComplete: () => void | Promise<void> }) {
 	const textData = useAtomValue(TEXT_DATA);
 	const [changes, setChanges] = useAtom(CHANGES);
 	const [source, _] = useAtom(SOURCE);
-	const setInitDone = useSetAtom(INIT_DONE);
 	const firstLoad = useAtomValue(FIRST_LOAD);
 	const setHelpOpen = useSetAtom(HELP_OPEN);
 	const [alertOpen, setAlertOpen] = useState(false);
 	const [alertType, setAlertType] = useState<"info" | "warn">("warn");
 	const [loading, setLoading] = useState(false);
+	const completionRunning = useRef(false);
 	useEffect(() => {
-		if (!changes.skip) return;
-		afterInit().then(() => {
-			setTimeout(() => {
-				setInitDone(true);
+		if (!changes.skip || completionRunning.current) return;
+		let cancelled = false;
+		completionRunning.current = true;
+		void (async () => {
+			try {
+				await onComplete();
+				if (cancelled) return;
 				if (firstLoad && !getChecked()) setHelpOpen(true);
-				setChanges({
-					...changes,
+				setChanges((previous) => ({
+					...previous,
 					skip: false,
 					before: [],
 					after: [],
 					map: {},
 					title: "",
-				} as ChangeInfo);
-			}, 1000);
-		});
-	}, [afterInit, changes, changes.skip, firstLoad, setChanges, setHelpOpen, setInitDone]);
+				}));
+			} catch (completionError) {
+				error("[IMM] Unable to complete runtime bootstrap:", completionError);
+				if (!cancelled) {
+					setChanges((previous) => ({ ...previous, skip: false }));
+					addToast({ type: "error", message: textData._Toasts.ErrOcc });
+				}
+			} finally {
+				completionRunning.current = false;
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [changes.skip, firstLoad, onComplete, setChanges, setHelpOpen, textData._Toasts.ErrOcc]);
 	return changes.before.length ? (
 		<motion.div
 			key="changes"

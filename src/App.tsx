@@ -1,6 +1,7 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import "./App.css";
 import {
+	BOOTSTRAP_STATE,
 	CHANGES,
 	ERR,
 	GAME,
@@ -26,17 +27,21 @@ import LeftSidebar from "./_LeftSidebar/Left";
 import Main from "./_Main/Main";
 import RightLocal from "./_RightSidebar/RightLocal";
 import RightOnline from "./_RightSidebar/RightOnline";
-import { main } from "./utils/init";
+import { completeRuntimeBootstrap, failRuntimeBootstrap, main } from "./utils/init";
 import ToastProvider from "./_Toaster/ToastProvider";
 import Progress from "./_Progress/Progress";
 import { startIntegrityMaintenanceOnLaunch } from "./utils/linkIntegrity";
 import { startIniStateSync, stopIniStateSync, syncIniStateOnce } from "./utils/iniStateSync";
+import { error as logError } from "./lib/logger";
+import RecoveryCenter from "./_Recovery/RecoveryCenter";
+import { getAppStateBootstrapStatus, type AppStateBootstrapStatus } from "./utils/appConfigRepository";
 // import { Button } from "./components/ui/button";
 
 initializeThemes();
 let appMainStarted = false;
 function App() {
 	const initDone = useAtomValue(INIT_DONE);
+	const bootstrapState = useAtomValue(BOOTSTRAP_STATE);
 	const lang = useAtomValue(LANG);
 	const err = useAtomValue(ERR);
 	const online = useAtomValue(ONLINE);
@@ -53,22 +58,53 @@ function App() {
 	const progressOverlay = useAtomValue(PROGRESS_OVERLAY);
 	const [_, setShowModeSwitch] = useState(false);
 	const [previousOnline, setPreviousOnline] = useState(online);
+	const [repositoryStatus, setRepositoryStatus] = useState<AppStateBootstrapStatus | null>(null);
 	const initialIniSyncTargetRef = useRef("");
+	const refreshedGenerationRef = useRef(-1);
 	useEffect(() => {
 		if (appMainStarted) return;
-		appMainStarted = true;
-		void main();
+		let active = true;
+		void getAppStateBootstrapStatus()
+			.then((status) => {
+				if (!active) return;
+				setRepositoryStatus(status);
+				if (status.status === "ready" && !appMainStarted) {
+					appMainStarted = true;
+					void main();
+				}
+			})
+			.catch((statusError) => {
+				if (active) logError("[IMM] Unable to read application state status:", statusError);
+			});
+		return () => {
+			active = false;
+		};
 	}, []);
-	const afterInit = useCallback(async () => {
-		saveConfigs();
-		setModList(await refreshModList());
-		return Promise.resolve();
-	}, [setModList]);
+	const completeBootstrap = useCallback(() => {
+		completeRuntimeBootstrap();
+	}, []);
 	useEffect(() => {
-		if (err) {
-			throw new Error(err);
-		}
+		if (!err) return;
+		logError("[IMM] Runtime error:", err);
+		failRuntimeBootstrap(err);
 	}, [err]);
+	useEffect(() => {
+		if (bootstrapState.phase !== "ready") return;
+		const generation = bootstrapState.generation;
+		if (refreshedGenerationRef.current === generation) return;
+		refreshedGenerationRef.current = generation;
+		let active = true;
+		void (async () => {
+			await saveConfigs();
+			const nextModList = await refreshModList();
+			if (active) setModList(nextModList);
+		})().catch((refreshError) => {
+			if (active) logError("[IMM] Post-bootstrap Mod refresh failed:", refreshError);
+		});
+		return () => {
+			active = false;
+		};
+	}, [bootstrapState.generation, bootstrapState.phase, setModList]);
 	useEffect(() => {
 		const handleBeforeUnload = () => {
 			void flushRuntimeState("window-beforeunload");
@@ -130,6 +166,9 @@ function App() {
 		}),
 		[rightSidebarOpen]
 	);
+	if (repositoryStatus?.status === "recoveryRequired") {
+		return <RecoveryCenter status={repositoryStatus} />;
+	}
 	return (
 		<div id="background" className="game-font fixed border-b flex flex-row items-start justify-start w-full h-full">
 			<div
@@ -183,8 +222,8 @@ function App() {
 					<label id="mods-total">9999</label>
 				</div>
 			</div>
-			<AnimatePresence>{(!initDone || !lang || !game) && <Checklist />}</AnimatePresence>
-			<AnimatePresence>{changes.title && <Changes afterInit={afterInit} />}</AnimatePresence>
+			<AnimatePresence>{(bootstrapState.phase !== "ready" || !lang || !game) && <Checklist />}</AnimatePresence>
+			<AnimatePresence>{changes.title && <Changes onComplete={completeBootstrap} />}</AnimatePresence>
 			<AnimatePresence>{progressOverlay.open && <Progress />}</AnimatePresence>
 			<ToastProvider />
 		</div>

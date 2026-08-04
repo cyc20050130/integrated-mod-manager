@@ -13,6 +13,7 @@ import {
 	OnlineData,
 	PreviewBackfillState,
 	Preset,
+	RuntimeBootstrapState,
 	Settings,
 } from "./types";
 import { info } from "@/lib/logger";
@@ -29,7 +30,7 @@ export const OLD_managedSRC = "DISABLED (Managed by IMM)";
 export const OLD_managedTGT = "Mods (Managed by IMM)";
 export const managedSRC = "DISABLED - ALL MODS ARE STORED HERE (Managed by IMM)";
 export const managedTGT = "DO NOT MODIFY (Managed by IMM)";
-export const VERSION = "3.2.20";
+export const VERSION = "3.2.21";
 export const GAMES: Games[] = Object.keys(GAME_REGISTRY) as Games[];
 export const GAME_GB_IDS: { [key: number]: Games } = {
 	...Object.fromEntries(Object.values(GAME_REGISTRY).map((entry) => [entry.gameBananaId, entry.key])),
@@ -78,7 +79,13 @@ export const GAME_ID_MAP: { [key: string]: number } = Object.fromEntries(
 	Object.values(GAME_REGISTRY).map((entry) => [entry.key, entry.serializedId])
 );
 export const DEFAULTS = {
-	INIT_DONE: false,
+	BOOTSTRAP_STATE: {
+		phase: "cold",
+		generation: 0,
+		game: "",
+		stage: "idle",
+		error: null,
+	} as RuntimeBootstrapState,
 	LANG: "en" as Language,
 	GAME: "" as Games,
 	SETTINGS: {
@@ -159,7 +166,6 @@ export const DEFAULTS = {
 	SEARCH: "",
 	INSTALLED_ITEMS: [] as InstalledItem[],
 	ONLINE_DATA: {} as OnlineData,
-	ONLINE_SOURCE: "all" as const,
 	ONLINE_TYPE: "Mod",
 	ONLINE_SORT: "",
 	ONLINE_PATH: "home&type=Mod",

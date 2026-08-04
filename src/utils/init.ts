@@ -1,4 +1,5 @@
 import {
+	BOOTSTRAP_STATE,
 	CATEGORIES,
 	DATA,
 	DOWNLOAD_LIST,
@@ -31,11 +32,10 @@ import { path } from "@tauri-apps/api";
 import { invoke } from "@tauri-apps/api/core";
 // import { currentMonitor, PhysicalSize } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { exists, mkdir, readTextFile, remove, writeTextFile } from "@tauri-apps/plugin-fs";
 import defConfig from "../default.json";
 import defConfigXX from "../defaultXX.json";
 import defConfigNTE from "../defaultNTE.json";
-import { apiClient } from "./api";
+import { getGameBananaProvider, runServiceHealthCheckOnce } from "./api";
 import { GAMES, VERSION } from "./consts";
 import { switchGameTheme } from "./theme";
 import { executeXXMI, isGameProcessRunning } from "./autolaunch";
@@ -55,13 +55,14 @@ import {
 	ModDataObj,
 	NteRegion,
 	Preset,
+	RuntimeBootstrapState,
 	Settings,
 } from "./types";
 import { toResumableDownloadList, withNormalizedDownloadSettings } from "./downloads";
 import { resetPageCounts } from "@/_Main/MainOnline";
 import { error, info } from "@/lib/logger";
 import { syncIniStateOnce } from "./iniStateSync";
-import { loadNteConfigText, persistNteConfig, setNteConfigRevision } from "./nteConfigRevision";
+import { getManagedConfigTarget, readManagedConfigText, writeManagedConfigText } from "./appConfigRepository";
 // import { v2_0_4_migration } from "./filesys";
 
 type RuntimeGlobalConfig = GlobalSettings & { version?: string; updatedAt?: string; notice?: number };
@@ -120,6 +121,14 @@ type UpdateBodyContent = {
 	notice?: UpdateNotice;
 	[key: string]: unknown;
 };
+type NteModsRootValidation = {
+	valid: boolean;
+	message?: string;
+};
+type XxmiLauncherConfigDocument = {
+	root: string;
+	contents: string;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -138,85 +147,46 @@ function getErrorMessage(error: unknown) {
 	return String(error || "Update check failed");
 }
 
-function isNativeRuntimePath(pathLike: string) {
-	return /^[a-zA-Z]:[\\/]/.test(pathLike) || pathLike.startsWith("\\\\");
-}
-
 async function safeExists(pathLike: string) {
-	if (!isNativeRuntimePath(pathLike)) {
-		return await pathExistsNative(pathLike);
-	}
+	const managedConfig = getManagedConfigTarget(pathLike);
+	if (!managedConfig) return false;
 	try {
-		return await exists(pathLike);
-	} catch (error) {
-		info(`[IMM] exists() check failed for ${pathLike}:`, error);
-		return await pathExistsNative(pathLike);
-	}
-}
-
-async function safeReadTextFile(pathLike: string) {
-	if (pathLike.replaceAll("/", "\\") === "configNTE.json") return loadNteConfigText();
-	if (!isNativeRuntimePath(pathLike)) {
-		return await readTextFileNative(pathLike);
-	}
-	try {
-		return await readTextFile(pathLike);
-	} catch (error) {
-		info(`[IMM] readTextFile() failed for ${pathLike}:`, error);
-		return await readTextFileNative(pathLike);
-	}
-}
-
-async function safeWriteTextFile(pathLike: string, contents: string) {
-	if (pathLike.replaceAll("/", "\\") === "configNTE.json") {
-		await persistNteConfig(contents);
+		await readManagedConfigText(managedConfig);
 		return true;
-	}
-	if (!isNativeRuntimePath(pathLike)) {
-		await writeTextFileNative(pathLike, contents);
-		return true;
-	}
-	try {
-		await writeTextFile(pathLike, contents);
-		return true;
-	} catch (error) {
-		info(`[IMM] writeTextFile() failed for ${pathLike}:`, error);
-		try {
-			await writeTextFileNative(pathLike, contents);
-			return true;
-		} catch (nativeError) {
-			info(`[IMM] native writeTextFile() failed for ${pathLike}:`, nativeError);
-			return false;
-		}
-	}
-}
-
-async function pathExistsNative(pathLike: string) {
-	try {
-		return await invoke<boolean>("path_exists_native", { path: pathLike });
-	} catch (error) {
-		info(`[IMM] native exists() check failed for ${pathLike}:`, error);
+	} catch {
 		return false;
 	}
 }
 
-async function readTextFileNative(pathLike: string) {
-	return invoke<string>("read_text_file_native", { path: pathLike });
+async function safeReadTextFile(pathLike: string) {
+	const managedConfig = getManagedConfigTarget(pathLike);
+	if (!managedConfig) throw new Error(`Unsupported managed configuration target: ${pathLike}`);
+	return readManagedConfigText(managedConfig);
 }
 
-async function writeTextFileNative(pathLike: string, contents: string) {
-	return invoke<void>("write_text_file_native", { path: pathLike, contents });
+async function safeWriteTextFile(pathLike: string, contents: string) {
+	const managedConfig = getManagedConfigTarget(pathLike);
+	if (!managedConfig) throw new Error(`Unsupported managed configuration target: ${pathLike}`);
+	await writeManagedConfigText(managedConfig, contents);
+	return true;
 }
 
-function getDefaultXxmiDirCandidatesFromAppData(appDataDir: string) {
-	const normalized = String(appDataDir || "")
-		.replaceAll("/", "\\")
-		.replace(/\\+$/g, "");
-	if (!normalized) return [] as string[];
-	const directCandidate = join(normalized, "XXMI Launcher");
-	const parentParts = normalized.split("\\").filter(Boolean).slice(0, -1);
-	const siblingCandidate = parentParts.length ? join(...parentParts, "XXMI Launcher") : "";
-	return Array.from(new Set([directCandidate, siblingCandidate].filter(Boolean)));
+async function managedGameRootExists(game: RuntimeGame, rootKind: "source" | "target") {
+	try {
+		return await invoke<boolean>("managed_path_exists", { game, rootKind, relativePath: "" });
+	} catch (error) {
+		info(`[IMM] persisted ${game} ${rootKind} is unavailable:`, error);
+		return false;
+	}
+}
+
+async function configuredXxmiIsReadable() {
+	try {
+		await invoke<XxmiLauncherConfigDocument>("read_xxmi_launcher_config");
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 let paths = {
@@ -246,21 +216,62 @@ export function getPaths() {
 let config: RuntimeGlobalConfig = sanitizeGlobalSettings({ ...defConfig }) as RuntimeGlobalConfig;
 let configXX: RuntimeGameConfig = { ...defConfigXX } as RuntimeGameConfig;
 let dataDir = "";
-let appData = "";
 let prevGame = "";
 let categories: Category[] = [];
 let isInitialized = false;
-async function getXXMIConfig(path = store.get(XXMI_DIR)): Promise<XXMIConfig | null> {
+let latestBootstrapGeneration = 0;
+let bootstrapQueue: Promise<void> = Promise.resolve();
+
+function publishBootstrapState(
+	generation: number,
+	phase: RuntimeBootstrapState["phase"],
+	game: Games,
+	stage: string,
+	errorMessage: string | null = null
+) {
+	if (generation !== latestBootstrapGeneration) return store.get(BOOTSTRAP_STATE);
+	const nextState: RuntimeBootstrapState = { phase, generation, game, stage, error: errorMessage };
+	store.set(BOOTSTRAP_STATE, nextState);
+	return nextState;
+}
+
+export function completeRuntimeBootstrap(game = store.get(GAME)) {
+	const current = store.get(BOOTSTRAP_STATE);
+	if (current.generation !== latestBootstrapGeneration) return current;
+	if (current.game && game && current.game !== game) return current;
+	const readyState = publishBootstrapState(current.generation, "ready", game || current.game, "ready");
+	if (readyState.game) {
+		void runServiceHealthCheckOnce(readyState.game, config.clientDate || "");
+		void setCategories(readyState.game, false, true, readyState.generation).catch((categoryError) => {
+			info("[IMM] Background category refresh failed:", categoryError);
+		});
+	}
+	return readyState;
+}
+
+export function requestRuntimeConfiguration(stage = "configuration-requested") {
+	const current = store.get(BOOTSTRAP_STATE);
+	return publishBootstrapState(current.generation, "needsConfiguration", store.get(GAME) || current.game, stage);
+}
+
+export function failRuntimeBootstrap(value: unknown, stage = "runtime-error") {
+	const current = store.get(BOOTSTRAP_STATE);
+	const message = value instanceof Error ? value.message : String(value || "Runtime initialization failed");
+	return publishBootstrapState(current.generation, "failed", store.get(GAME) || current.game, stage, message);
+}
+async function getXXMIConfig(): Promise<{ config: XXMIConfig; root: string } | null> {
 	try {
-		return readJsonText<XXMIConfig>(await readTextFileNative(join(path, "XXMI Launcher Config.json")));
+		const document = await invoke<XxmiLauncherConfigDocument>("read_xxmi_launcher_config");
+		return { config: readJsonText<XXMIConfig>(document.contents), root: document.root };
 	} catch (e) {
 		info("[IMM] Failed to read XXMI Launcher config:", e);
 		return null;
 	}
 }
 export async function setPrePostLaunch(game: Games, value: boolean) {
-	const data = await getXXMIConfig();
-	if (!data) return;
+	const document = await getXXMIConfig();
+	if (!document) return;
+	const data = document.config;
 	const importer = data.Importers[game + "MI"];
 	if (!importer) return;
 	const cmd = `start imm://mode/${game.toLowerCase()}`;
@@ -283,9 +294,9 @@ export async function setPrePostLaunch(game: Games, value: boolean) {
 				.join(" && ");
 		}
 	}
-	await writeTextFileNative(join(store.get(XXMI_DIR), "XXMI Launcher Config.json"), JSON.stringify(data, null, 2));
+	await invoke<void>("write_xxmi_launcher_config", { contents: JSON.stringify(data, null, 2) });
 }
-export async function readXXMIConfig(path: string) {
+export async function readXXMIConfig() {
 	paths = {
 		"": "",
 		exe: "",
@@ -306,9 +317,10 @@ export async function readXXMIConfig(path: string) {
 		NTE: false,
 		"": false,
 	};
-	if (path && path != "") {
-		const data = await getXXMIConfig(path);
-		if (!data) return;
+	const document = await getXXMIConfig();
+	if (document) {
+		const data = document.config;
+		const path = document.root;
 		info("[IMM] Loaded XXMI Launcher config:", data);
 		GAMES.forEach((game) => {
 			const importer = data.Importers[game + "MI"];
@@ -436,18 +448,18 @@ export async function updateConfig(oconfig: LegacyConfig | null = null): Promise
 	return config;
 }
 export async function verifyGameDir(game: Games) {
-	const XXPath = paths[game];
 	const dirs = {
 		targetDir: "",
 		sourceDir: "",
 	};
 	try {
-		(await safeReadTextFile(join(XXPath, "d3dx.ini"))).split("\n").forEach((line: string) => {
+		(await invoke<string>("read_xxmi_importer_d3dx", { game })).split("\n").forEach((line: string) => {
 			const [key, value] = line.split("=").map((x: string) => x.trim());
 			if (key == "include_recursive") {
 				const isPath = value.slice(1, 3) == ":\\";
-				dirs.targetDir = isPath ? value : join(XXPath, value);
-				dirs.sourceDir = isPath ? value : join(XXPath, value);
+				const importerPath = paths[game];
+				dirs.targetDir = isPath ? value : join(importerPath, value);
+				dirs.sourceDir = isPath ? value : join(importerPath, value);
 			}
 		});
 	} catch (e) {
@@ -464,7 +476,6 @@ export async function initGame(game: RuntimeGame, status = true) {
 	const savedConfig = (await safeExists(`config${game}.json`))
 		? readJsonText<Partial<RuntimeGameConfig>>(await safeReadTextFile(`config${game}.json`))
 		: {};
-	if (game === "NTE") setNteConfigRevision(savedConfig.updatedAt);
 	const mergedSettings = {
 		...defaultGameConfig.settings,
 		...(savedConfig.settings || {}),
@@ -503,12 +514,11 @@ export async function initGame(game: RuntimeGame, status = true) {
 		dataDir = configXX.targetDir;
 	}
 	await safeWriteTextFile(`config${game}.json`, JSON.stringify(configXX, null, 2));
-	apiClient.setGame(game);
-	await setCategories(game, status);
+	await setCategories(game, status, false, generationForCurrentBootstrap());
 	invoke("set_window_icon", { game });
 	// Validate source and target dirs
-	if (configXX.sourceDir && !(await pathExistsNative(join(configXX.sourceDir)))) configXX.sourceDir = "";
-	if (game !== "NTE" && configXX.targetDir && !(await pathExistsNative(configXX.targetDir))) configXX.targetDir = "";
+	if (configXX.sourceDir && !(await managedGameRootExists(game, "source"))) configXX.sourceDir = "";
+	if (game !== "NTE" && configXX.targetDir && !(await managedGameRootExists(game, "target"))) configXX.targetDir = "";
 	if (status) store.set(MAIN_FUNC_STATUS, "Validating source and target directories");
 	info("[IMM] Validating source and target directories...", configXX.sourceDir, configXX.targetDir);
 	store.set(SOURCE, configXX.sourceDir || "");
@@ -519,7 +529,6 @@ export async function initGame(game: RuntimeGame, status = true) {
 		SETTINGS,
 		(prev) => ({ global: { ...prev.global, game }, game: { ...prev.game, ...configXX.settings } }) as Settings
 	);
-	store.set(TYPES, apiClient.generic.types);
 	store.set(DATA, configXX.data || ({} as ModDataObj));
 	store.set(PRESETS, configXX.presets || []);
 	store.set(DOWNLOAD_LIST, toResumableDownloadList(configXX.downloads));
@@ -553,30 +562,48 @@ store.sub(SAVED_LANG, () => {
 		store.set(LANG, lang);
 	}
 });
-export async function setCategories(game = prevGame, status = true) {
+function generationForCurrentBootstrap() {
+	return store.get(BOOTSTRAP_STATE).generation;
+}
+
+export async function setCategories(
+	game: Games = prevGame as Games,
+	status = true,
+	refreshRemote = true,
+	generation = generationForCurrentBootstrap()
+) {
 	info("[IMM] Setting categories...");
 
 	// await new Promise((resolve) => setTimeout(resolve, 10000));
 	if (!game) return;
-	prevGame = game;
-	try {
-		if (status) store.set(MAIN_FUNC_STATUS, "Fetching game categories from Gamebanana");
-		categories = await apiClient.categories();
-		//info("Fetched categories:", categories);
-		if (!categories || categories.length == 0) throw "No categories found, please verify the directories again";
-	} catch (e) {
-		if (status) store.set(MAIN_FUNC_STATUS, "Unable to reach Gamebanana");
-		info("[IMM] Failed to fetch categories from API, using local config if available.", e);
-		categories =
-			configXX.categories && configXX.categories.length > 0
-				? configXX.categories
-				: [...apiClient.categoryList, ...apiClient.generic.categories];
+	const provider = getGameBananaProvider(game);
+	let nextCategories: Category[] = [];
+	let nextTypes = provider.fallbackTypes;
+	if (refreshRemote) {
+		try {
+			if (status) store.set(MAIN_FUNC_STATUS, "Fetching game categories from Gamebanana");
+			const result = await provider.categories();
+			nextCategories = result.categories;
+			nextTypes = result.types;
+			if (!nextCategories.length) throw new Error("No categories found, please verify the directories again");
+		} catch (e) {
+			if (status) store.set(MAIN_FUNC_STATUS, "Unable to reach Gamebanana");
+			info("[IMM] Failed to fetch categories from API, using local config if available.", e);
+		}
 	}
-	//info("Using categories:", categories,apiClient.categoryList,configXX.categories);
-	if (!categories || categories.length == 0) return;
-	info("[IMM] Finalized categories:", categories);
+	if (!nextCategories.length) {
+		nextCategories =
+			configXX.categories && configXX.categories.length > 0 ? configXX.categories : provider.fallbackCategories;
+		if (game === "NTE" && configXX.categories?.length) {
+			nextTypes = configXX.categories.map((category) => ({ ...category }));
+		}
+	}
+	if (generation !== latestBootstrapGeneration || (refreshRemote && game !== store.get(GAME))) return;
+	prevGame = game;
+	if (!nextCategories.length) return;
+	info("[IMM] Finalized categories:", nextCategories);
 	const catObj: { [key: string]: Category } = {};
-	categories.forEach((cat) => {
+	nextCategories.forEach((cat) => {
 		catObj[cat._sName] = cat;
 	});
 	const customCats = (configXX.settings.customCategories || {}) as Record<string, Partial<Category>>;
@@ -585,6 +612,7 @@ export async function setCategories(game = prevGame, status = true) {
 	}
 	categories = Object.values(catObj).map((cat) => ({ ...cat, _sIconUrl: cat._sIconUrl || "/who.jpg" }));
 	store.set(CATEGORIES, categories);
+	store.set(TYPES, nextTypes);
 }
 function removeHelpers() {
 	stopWindowMonitoring();
@@ -618,10 +646,10 @@ export async function launchGame() {
 		return;
 	}
 	await syncIniStateOnce("launch-game");
-	if (await pathExistsNative(config.XXMI))
+	if (config.XXMI)
 		isGameProcessRunning(config.game).then((running) => {
 			if (!running) {
-				executeXXMI(join(config.XXMI, "Resources\\Bin\\XXMI Launcher.exe"));
+				executeXXMI();
 				addToast({
 					type: "info",
 					message: "Launching Game",
@@ -638,104 +666,14 @@ async function initHelpers() {
 		});
 	}
 	if (config.game !== "NTE") {
-		setHotreload(configXX.settings.hotReload as 0 | 1 | 2, config.game, configXX.targetDir);
+		setHotreload(configXX.settings.hotReload as 0 | 1 | 2, config.game);
 	}
 
 	registerGlobalHotkeys();
 }
-export async function checkWWMM() {
-	info("[IMM] Checking for WWMM config...");
-	const wwmmPath = await path.join(await path.localDataDir(), "Wuwa Mod Manager (WWMM)", "config.json");
-	if (await safeExists(wwmmPath)) {
-		//info('exists')
-		return (await safeReadTextFile(wwmmPath)) || null;
-	}
-	return null;
-}
-export async function maintainBackups() {
-	info("[IMM] Maintaining backups...");
-	store.set(MAIN_FUNC_STATUS, "Maintaining backups");
-	const files = GAMES.map((g) => `config${g}.json`);
-	files.push("config.json");
-	mkdir("backups", { recursive: true });
-	const backupPath = "backups\\AUTO_";
-	for (const file of files) {
-		if (await safeExists(file)) {
-			try {
-				const data = JSON.parse(await safeReadTextFile(file));
-				delete data.categories;
-				if (await safeExists(backupPath + file + ".bak")) {
-					try {
-						const backupData = readJsonText<Record<string, unknown>>(
-							await safeReadTextFile(backupPath + file + ".bak")
-						);
-						if (
-							backupData.updatedAt &&
-							new Date().getTime() - new Date(String(backupData.updatedAt)).getTime() > 24 * 60 * 60 * 1000
-						) {
-							info(`[IMM] Creating backup for: ${file}...`);
-							await remove(backupPath + file + ".bak.bak").catch(() => undefined);
-							const currentBackupText = await safeReadTextFile(backupPath + file + ".bak");
-							await safeWriteTextFile(backupPath + file + ".bak.bak", currentBackupText);
-							await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
-						}
-					} catch {
-						info(`[IMM] Detected corrupted backup file: ${file}.bak, creating new backup...`);
-						await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
-					}
-				} else {
-					info(`[IMM] Creating initial backup for: ${file}...`);
-					await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(data, null, 2));
-				}
-			} catch {
-				info(`[IMM] Detected corrupted config file: ${file}, restoring from backup...`);
-				store.set(MAIN_FUNC_STATUS, `Config file corrupted, restoring from backup`);
-				if (await safeExists(backupPath + file + ".bak")) {
-					try {
-						const backupData = readJsonText<Record<string, unknown>>(
-							await safeReadTextFile(backupPath + file + ".bak")
-						);
-						await safeWriteTextFile(file, JSON.stringify(backupData, null, 2));
-						info(`[IMM] Successfully restored backup for: ${file}`);
-					} catch {
-						info(`[IMM] Detected corrupted backup config file: ${file}.bak, restoring from secondary backup...`);
-						if (await safeExists(backupPath + file + ".bak.bak")) {
-							try {
-								const backupData2 = readJsonText<Record<string, unknown>>(
-									await safeReadTextFile(backupPath + file + ".bak.bak")
-								);
-								await safeWriteTextFile(file, JSON.stringify(backupData2, null, 2));
-								await safeWriteTextFile(backupPath + file + ".bak", JSON.stringify(backupData2, null, 2));
-								info(`[IMM] Successfully restored secondary backup for: ${file}`);
-							} catch (e) {
-								info(`[IMM] Failed to restore secondary backup for: ${file}:`, e);
-								info(`[IMM] Manual intervention required to fix config file: ${file}`);
-								store.set(
-									ERR,
-									`Corrupted config file detected: ${file}, ${backupPath + file + ".bak"} & ${
-										backupPath + file + ".bak.bak"
-									}. Unable to proceed, please restore manually or press ESC x3 to reset IMM.`
-								);
-							}
-						} else {
-							store.set(
-								ERR,
-								`Corrupted config file detected: ${file} & ${
-									backupPath + file + ".bak"
-								}. Unable to proceed, please restore manually or press ESC x3 to reset IMM.`
-							);
-						}
-					}
-				} else {
-					info(`[IMM] No backup found for corrupted config file: ${file}. Manual intervention required.`);
-					store.set(
-						ERR,
-						`Corrupted config file detected: ${file}. Unable to proceed, please restore manually or press ESC x3 to reset IMM.`
-					);
-				}
-			}
-		}
-	}
+export function maintainBackups() {
+	info("[IMM] Configuration integrity and recovery are managed by AppStateRepository.");
+	store.set(MAIN_FUNC_STATUS, "Validating managed application state");
 }
 let cwd = "";
 let runtimeDirPromise: Promise<string> | null = null;
@@ -832,18 +770,18 @@ export async function refreshAppUpdateCheck(openUpdater = false) {
 		return null;
 	}
 }
-export async function main(useGame = "" as Games) {
+async function runRuntimeBootstrap(useGame: Games, generation: number): Promise<RuntimeBootstrapState> {
 	try {
+		if (generation !== latestBootstrapGeneration) return store.get(BOOTSTRAP_STATE);
+		publishBootstrapState(generation, "preparing", useGame, "initializing-app");
 		store.set(MAIN_FUNC_STATUS, "Initializing App");
 		isInitialized = false;
 		info("[IMM] Initializing application...");
 		invoke("get_username");
 		resetAtoms();
 		removeHelpers();
-		appData = await path.dataDir();
 		cwd = await readRuntimeDataDir();
 		info("[IMM] Runtime data directory:", cwd);
-		const xxmiCandidates = getDefaultXxmiDirCandidatesFromAppData(appData);
 		if (!(await safeExists("config.json"))) {
 			store.set(MAIN_FUNC_STATUS, "Creating default config.json");
 			info("[IMM] Creating default config.json...");
@@ -862,28 +800,21 @@ export async function main(useGame = "" as Games) {
 		config = sanitizeGlobalSettings(config);
 		info("[IMM] Loaded config:", config);
 		store.set(MAIN_FUNC_STATUS, "Config loaded");
+		publishBootstrapState(generation, "preparing", useGame || config.game, "config-loaded");
 		const savedLang = store.get(SAVED_LANG);
 		if (!savedLang && config.lang) {
 			store.set(SAVED_LANG, config.lang);
 		}
 		config.lang = store.get(SAVED_LANG) || config.lang;
 		if (!config.XXMI && !config.game && !config.lang) {
-			store.set(MAIN_FUNC_STATUS, "First time setup detected, checking for WWMM");
-			info("[IMM] First time setup detected, checking for WWMM...");
+			store.set(MAIN_FUNC_STATUS, "First time setup detected");
+			info("[IMM] First time setup detected.");
 			store.set(FIRST_LOAD, true);
-			const temp = await checkWWMM();
-			if (temp) config = await updateConfig(JSON.parse(temp));
 		} else {
 			store.set(FIRST_LOAD, false);
 		}
-		apiClient.setClient(config.clientDate || "");
-		if (config.XXMI == "" || !(await safeExists(config.XXMI))) {
-			for (const candidate of xxmiCandidates) {
-				if (await pathExistsNative(candidate)) {
-					config.XXMI = candidate;
-					break;
-				}
-			}
+		if (config.XXMI == "" || !(await configuredXxmiIsReadable())) {
+			config.XXMI = (await invoke<string | null>("discover_xxmi_launcher_dir")) || "";
 		}
 		paths.XX = config.XXMI;
 		config.game = useGame || config.game;
@@ -892,16 +823,16 @@ export async function main(useGame = "" as Games) {
 			config.game = GAMES.includes(config.game) ? config.game : "";
 			sessionStorage.removeItem("imm-deep-link-game");
 		}
-		if (config.game) apiClient.setGame(config.game as RuntimeGame);
 		if (compareVersions(config.version || "0.0.0", "2.1.0") < 0) {
 			config = await updateConfig();
 		}
 		info("[IMM] Saving config...");
 		await safeWriteTextFile("config.json", JSON.stringify(config, null, 2));
-		await readXXMIConfig(config.XXMI || "");
+		await readXXMIConfig();
 		store.set(MAIN_FUNC_STATUS, "Initializing game");
 		info("[IMM] Initializing game...");
 		if (config.game) configXX = await initGame(config.game as RuntimeGame);
+		publishBootstrapState(generation, "preparing", config.game, "game-prepared");
 		info("[IMM] Setting window type...");
 		if (config.winType > 1) setWindowType(config.winType);
 		const bg = document.querySelector("body");
@@ -916,10 +847,59 @@ export async function main(useGame = "" as Games) {
 		isInitialized = true;
 		store.set(MAIN_FUNC_STATUS, "fin");
 		void refreshAppUpdateCheck(false);
+
+		if (generation !== latestBootstrapGeneration) return store.get(BOOTSTRAP_STATE);
+		if (!config.game) {
+			return publishBootstrapState(generation, "needsConfiguration", "", "select-game");
+		}
+		if (!configXX.sourceDir || !configXX.targetDir) {
+			return publishBootstrapState(generation, "needsConfiguration", config.game, "configure-paths");
+		}
+
+		publishBootstrapState(generation, "prepared", config.game, "runtime-prepared");
+		if (config.game === "NTE") {
+			try {
+				const validation = await invoke<NteModsRootValidation>("validate_nte_mods_root", {
+					modsRoot: configXX.targetDir,
+					region: configXX.nteRegion === "auto" ? null : configXX.nteRegion || null,
+				});
+				if (validation.valid) return completeRuntimeBootstrap("NTE");
+				return publishBootstrapState(
+					generation,
+					"needsConfiguration",
+					"NTE",
+					"validate-nte-mods-root",
+					validation.message || "Configured NTE Mods root is no longer valid"
+				);
+			} catch (validationError) {
+				return publishBootstrapState(
+					generation,
+					"needsConfiguration",
+					"NTE",
+					"validate-nte-mods-root",
+					getErrorMessage(validationError)
+				);
+			}
+		}
+		return completeRuntimeBootstrap(config.game);
 	} catch (error) {
 		const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
 		info("[IMM] main() failed:", message);
-		store.set(MAIN_FUNC_STATUS, "Startup failed");
-		store.set(ERR, message);
+		if (generation === latestBootstrapGeneration) {
+			store.set(MAIN_FUNC_STATUS, "Startup failed");
+			store.set(ERR, message);
+		}
+		return publishBootstrapState(generation, "failed", useGame || store.get(GAME), "startup-failed", message);
 	}
+}
+
+export function main(useGame = "" as Games): Promise<RuntimeBootstrapState> {
+	const generation = ++latestBootstrapGeneration;
+	publishBootstrapState(generation, "preparing", useGame, "queued");
+	const operation = bootstrapQueue.then(() => runRuntimeBootstrap(useGame, generation));
+	bootstrapQueue = operation.then(
+		() => undefined,
+		() => undefined
+	);
+	return operation;
 }

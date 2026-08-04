@@ -44,3 +44,11 @@ src-tauri/dev-data/
 src-tauri/gen/
 .eslint-*.json
 integrated-mod-manager/
+
+# Local Codex planning and adversarial review artifacts
+.planning/
+PLAN.md
+PLAN-REVIEW-LOG.md
+findings.md
+progress.md
+task_plan.md

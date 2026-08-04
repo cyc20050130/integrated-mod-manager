@@ -21,13 +21,35 @@ function encode(value: string | number) {
 	return encodeURIComponent(String(value));
 }
 
+const NTE_SORTS: Readonly<Record<string, string | null>> = Object.freeze({
+	default: null,
+	newest: "Generic_Newest",
+	popular: "Generic_MostLiked",
+	updated: "Generic_LatestModified",
+});
+
+export function normalizeNteSort(sort: string): string | null {
+	if (!Object.hasOwn(NTE_SORTS, sort)) {
+		throw new Error(`unsupported NTE sort: ${sort}`);
+	}
+	return NTE_SORTS[sort];
+}
+
+function appendNteSort(params: URLSearchParams, sort: string) {
+	const normalized = normalizeNteSort(sort);
+	if (normalized) params.set("_sSort", normalized);
+}
+
 export function buildNteHomeUrl({
 	page = 1,
 	sort = "default",
 	type = "",
 }: { page?: number; sort?: string; type?: string } = {}) {
-	const modelFilter = type ? `_csvModelInclusions=${encode(type)}&` : "";
-	return `${GAMEBANANA_API}/Game/${NTE_GAME_BANANA_ID}/Subfeed?${modelFilter}_sSort=${encode(sort)}&_nPage=${Math.max(1, page)}`;
+	const params = new URLSearchParams();
+	if (type) params.set("_csvModelInclusions", type);
+	appendNteSort(params, sort);
+	params.set("_nPage", String(Math.max(1, page)));
+	return `${GAMEBANANA_API}/Game/${NTE_GAME_BANANA_ID}/Subfeed?${params.toString()}`;
 }
 
 export function buildNteSearchUrl(term: string, page = 1, type = "Mod") {
@@ -38,7 +60,12 @@ export function buildNteCategoryUrl(categoryId: number, page = 1, sort = "defaul
 	if (!NTE_ROOT_CATEGORIES.has(categoryId)) {
 		throw new Error(`unsupported NTE category: ${categoryId}`);
 	}
-	return `${GAMEBANANA_API}/Mod/Index?_nPerpage=15&_aFilters%5BGeneric_Category%5D=${categoryId}&_sSort=${encode(sort)}&_nPage=${Math.max(1, page)}`;
+	const params = new URLSearchParams();
+	params.set("_nPerpage", "15");
+	params.set("_aFilters[Generic_Category]", String(categoryId));
+	appendNteSort(params, sort);
+	params.set("_nPage", String(Math.max(1, page)));
+	return `${GAMEBANANA_API}/Mod/Index?${params.toString()}`;
 }
 
 export function normalizeNteCategories(records: unknown): Category[] {

@@ -897,6 +897,55 @@ pub(crate) fn trusted_nte_library_destination(
     Ok(destination)
 }
 
+pub(crate) fn ensure_nte_library_destination_parent(
+    trusted_library_root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let relative = validate_relative_mod_path(relative_path)?;
+    let destination = trusted_library_root.join(&relative);
+    let parent_relative = relative
+        .parent()
+        .ok_or_else(|| "NTE library destination has no parent path.".to_string())?;
+    let mut bound = bind_absolute_directory(trusted_library_root, "NTE managed library root")?;
+
+    for component in parent_relative.components() {
+        let Component::Normal(name) = component else {
+            return Err("Invalid NTE library category path.".to_string());
+        };
+        let child = match open_bound_directory_optional(bound.leaf(), name, "NTE library category")?
+        {
+            Some(child) => child,
+            None => {
+                match bound.leaf().create_dir(Path::new(name)) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(err) => {
+                        return Err(format!(
+                            "Unable to create the NTE library category '{}': {err}",
+                            name.to_string_lossy()
+                        ))
+                    }
+                }
+                open_bound_directory_optional(bound.leaf(), name, "NTE library category")?
+                    .ok_or_else(|| {
+                        format!(
+                            "The created NTE library category '{}' is unavailable.",
+                            name.to_string_lossy()
+                        )
+                    })?
+            }
+        };
+        bound.handles.push(child);
+    }
+
+    if normalized_path_for_comparison(&destination)
+        != normalized_path_for_comparison(&trusted_library_root.join(relative))
+    {
+        return Err("NTE library destination escaped the persisted root.".to_string());
+    }
+    Ok(destination)
+}
+
 fn canonical_nte_library_destination_optional(
     trusted_library_root: &Path,
     destination: &Path,
@@ -953,6 +1002,15 @@ pub(crate) fn with_bound_nte_library_destination<T, F>(
 where
     F: FnOnce(&CapDir, &std::ffi::OsStr) -> Result<T, String>,
 {
+    let (destination_parent_chain, destination_name) =
+        bind_nte_library_destination(trusted_library_root, destination)?;
+    operation(destination_parent_chain.leaf(), &destination_name)
+}
+
+pub(crate) fn bind_nte_library_destination(
+    trusted_library_root: &Path,
+    destination: &Path,
+) -> Result<(BoundDirectoryChain, OsString), String> {
     let expected = canonical_nte_library_destination(trusted_library_root, destination)?;
     let relative = expected
         .strip_prefix(trusted_library_root)
@@ -978,7 +1036,7 @@ where
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(format!("Unable to inspect the archive destination: {err}")),
     }
-    operation(destination_parent_chain.leaf(), destination_name)
+    Ok((destination_parent_chain, destination_name.to_os_string()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4793,28 +4851,32 @@ pub async fn save_nte_config(
     contents: String,
     expected_updated_at: Option<String>,
 ) -> Result<String, String> {
-    let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
     let deployment_state_root = app_handle
         .path()
         .app_local_data_dir()
         .map_err(|err| format!("Unable to resolve NTE deployment state: {err}"))?
         .join("nte-deployments");
+    let task_app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        save_nte_config_from_dir(
-            &config_dir,
-            &deployment_state_root,
-            &contents,
-            expected_updated_at.as_deref(),
-        )
+        let repository = task_app.state::<crate::app_state::AppStateRepository>();
+        repository.coordinate_runtime_game_mutation("NTE", |config_dir| {
+            save_nte_config_from_dir(
+                config_dir,
+                &deployment_state_root,
+                &contents,
+                expected_updated_at.as_deref(),
+            )
+        })
     })
     .await
     .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
-pub fn load_nte_config() -> Result<String, String> {
-    let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
-    let config = read_nte_config_value(&config_dir, "for renderer load")?;
+pub fn load_nte_config(
+    repository: tauri::State<'_, crate::app_state::AppStateRepository>,
+) -> Result<String, String> {
+    let config = repository.load_game_value("NTE")?;
     serde_json::to_string_pretty(&config)
         .map_err(|err| format!("Unable to serialize NTE configuration: {err}"))
 }
@@ -4871,19 +4933,22 @@ pub async fn set_nte_mod_enabled(
         .app_local_data_dir()
         .map_err(|err| format!("Unable to resolve NTE deployment state: {err}"))?
         .join("nte-deployments");
-    let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
+    let task_app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let trusted = trusted_nte_paths_from_config(&config_dir, &relative_path)?;
-        set_mod_enabled_inner_with_library_root(NteTargetTransactionRequest {
-            source_path: &trusted.source_path,
-            trusted_library_root: &trusted.source_library_root,
-            mods_root: &trusted.mods_root,
-            relative_path: &relative_path,
-            enabled,
-            requested_region: trusted.region.as_deref(),
-            deployment_state_root: &deployment_state_root,
-            config_dir: Some(&config_dir),
-            config_snapshot: Some(&trusted.config_snapshot),
+        let repository = task_app.state::<crate::app_state::AppStateRepository>();
+        repository.coordinate_runtime_game_mutation("NTE", |config_dir| {
+            let trusted = trusted_nte_paths_from_config(config_dir, &relative_path)?;
+            set_mod_enabled_inner_with_library_root(NteTargetTransactionRequest {
+                source_path: &trusted.source_path,
+                trusted_library_root: &trusted.source_library_root,
+                mods_root: &trusted.mods_root,
+                relative_path: &relative_path,
+                enabled,
+                requested_region: trusted.region.as_deref(),
+                deployment_state_root: &deployment_state_root,
+                config_dir: Some(config_dir),
+                config_snapshot: Some(&trusted.config_snapshot),
+            })
         })
     })
     .await
@@ -4900,9 +4965,12 @@ pub async fn delete_nte_mod(
         .app_local_data_dir()
         .map_err(|err| format!("Unable to resolve NTE deployment state: {err}"))?
         .join("nte-deployments");
-    let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
+    let task_app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        delete_nte_mod_from_config(&config_dir, &deployment_state_root, &relative_path)
+        let repository = task_app.state::<crate::app_state::AppStateRepository>();
+        repository.coordinate_runtime_game_mutation("NTE", |config_dir| {
+            delete_nte_mod_from_config(config_dir, &deployment_state_root, &relative_path)
+        })
     })
     .await
     .map_err(|err| err.to_string())?
@@ -4937,30 +5005,33 @@ pub async fn rename_nte_mod(
         .app_local_data_dir()
         .map_err(|err| format!("Unable to resolve NTE deployment state: {err}"))?
         .join("nte-deployments");
-    let config_dir = std::env::current_dir().map_err(|err| err.to_string())?;
+    let task_app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let config_snapshot = load_persisted_nte_config(&config_dir)?;
-        let old = trusted_nte_paths_from_snapshot(config_snapshot.clone(), &relative_path)?;
-        let new = trusted_nte_paths_from_snapshot(config_snapshot, &new_relative_path)?;
-        if normalized_path_for_comparison(&old.source_library_root)
-            != normalized_path_for_comparison(&new.source_library_root)
-            || normalized_path_for_comparison(&old.mods_root)
-                != normalized_path_for_comparison(&new.mods_root)
-            || old.region != new.region
-        {
-            return Err("NTE rename roots changed while preparing the operation.".to_string());
-        }
-        rename_mod_inner_with_library_root(NteRenameRequest {
-            old_source: &old.source_path,
-            new_source: &new.source_path,
-            trusted_library_root: &old.source_library_root,
-            mods_root: &old.mods_root,
-            old_relative_text: &relative_path,
-            new_relative_text: &new_relative_path,
-            requested_region: old.region.as_deref(),
-            deployment_state_root: &deployment_state_root,
-            config_dir: &config_dir,
-            config_snapshot: Some(&old.config_snapshot),
+        let repository = task_app.state::<crate::app_state::AppStateRepository>();
+        repository.coordinate_runtime_game_mutation("NTE", |config_dir| {
+            let config_snapshot = load_persisted_nte_config(config_dir)?;
+            let old = trusted_nte_paths_from_snapshot(config_snapshot.clone(), &relative_path)?;
+            let new = trusted_nte_paths_from_snapshot(config_snapshot, &new_relative_path)?;
+            if normalized_path_for_comparison(&old.source_library_root)
+                != normalized_path_for_comparison(&new.source_library_root)
+                || normalized_path_for_comparison(&old.mods_root)
+                    != normalized_path_for_comparison(&new.mods_root)
+                || old.region != new.region
+            {
+                return Err("NTE rename roots changed while preparing the operation.".to_string());
+            }
+            rename_mod_inner_with_library_root(NteRenameRequest {
+                old_source: &old.source_path,
+                new_source: &new.source_path,
+                trusted_library_root: &old.source_library_root,
+                mods_root: &old.mods_root,
+                old_relative_text: &relative_path,
+                new_relative_text: &new_relative_path,
+                requested_region: old.region.as_deref(),
+                deployment_state_root: &deployment_state_root,
+                config_dir,
+                config_snapshot: Some(&old.config_snapshot),
+            })
         })
     })
     .await
@@ -4988,6 +5059,33 @@ pub async fn launch_nte_game(game_root: String, region: Option<String>) -> Resul
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn download_parent_creation_never_publishes_the_mod_leaf() {
+        let temp = tempdir().unwrap();
+        let library = temp.path().join("library");
+        fs::create_dir(&library).unwrap();
+
+        let destination =
+            ensure_nte_library_destination_parent(&library, "Characters/New Mod").unwrap();
+
+        assert!(library.join("Characters").is_dir());
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn download_parent_creation_rejects_an_unsafe_existing_component() {
+        let temp = tempdir().unwrap();
+        let library = temp.path().join("library");
+        fs::create_dir(&library).unwrap();
+        fs::write(library.join("Characters"), b"not a directory").unwrap();
+
+        let error = ensure_nte_library_destination_parent(&library, "Characters/New Mod")
+            .expect_err("a file cannot be used as a category directory");
+
+        assert!(error.contains("NTE library category"));
+        assert!(!library.join("New Mod").exists());
+    }
 
     #[test]
     fn nte_file_lock_is_exclusive_across_processes() {

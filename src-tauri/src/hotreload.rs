@@ -1,3 +1,4 @@
+use log as tracing;
 #[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
@@ -7,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 #[cfg(windows)]
 use std::time::Duration;
-use tauri_plugin_tracing::tracing;
 #[cfg(windows)]
 use winapi::um::{
     handleapi::CloseHandle,

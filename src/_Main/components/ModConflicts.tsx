@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { toggleMod } from "@/utils/filesys";
 import { addToast } from "@/_Toaster/ToastProvider";
 
-import { CONFLICT_INDEX, CONFLICTS, CONFLICTS_OPEN, MOD_LIST, TEXT_DATA } from "@/utils/vars";
+import { CONFLICT_INDEX, CONFLICTS, CONFLICTS_OPEN, GAME, MOD_LIST, TEXT_DATA } from "@/utils/vars";
 
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { AnimatePresence, motion } from "motion/react";
@@ -16,14 +16,16 @@ function ModConflicts() {
 	const [conflictsOpen, setConflictsOpen] = useAtom(CONFLICTS_OPEN);
 	const { conflicts } = useAtomValue(CONFLICTS);
 	const [curIndex, setCurIndex] = useAtom(CONFLICT_INDEX);
-	const [curSelected, setCurSelected] = useState(-1);
+	const [selection, setSelection] = useState({ conflictIndex: -1, itemIndex: -1 });
 	const [nextSide, setNextSide] = useState<"left" | "right">("right");
 	const textData = useAtomValue(TEXT_DATA);
+	const game = useAtomValue(GAME);
 	const safeIndex = useMemo(() => {
 		if (!conflicts.length) return 0;
 		return Math.min(curIndex, conflicts.length - 1);
 	}, [conflicts, curIndex]);
 	const currentConflict = conflicts[safeIndex] || [];
+	const curSelected = selection.conflictIndex === safeIndex ? selection.itemIndex : -1;
 
 	useEffect(() => {
 		if (!conflicts.length) {
@@ -35,10 +37,6 @@ function ModConflicts() {
 			setCurIndex(safeIndex);
 		}
 	}, [conflicts.length, conflictsOpen, curIndex, safeIndex, setCurIndex, setConflictsOpen]);
-
-	useEffect(() => {
-		if (curSelected !== -1) setCurSelected(-1);
-	}, [safeIndex, curSelected]);
 
 	return (
 		<DialogContent>
@@ -78,11 +76,17 @@ function ModConflicts() {
 									key={`${path}-${idx}`}
 									onClick={(e) => {
 										e.preventDefault();
-										setCurSelected((prev) => (prev === idx ? -1 : idx));
+										setSelection((previous) => ({
+											conflictIndex: safeIndex,
+											itemIndex: previous.conflictIndex === safeIndex && previous.itemIndex === idx ? -1 : idx,
+										}));
 									}}
 									onContextMenu={(e) => {
 										e.preventDefault();
-										setCurSelected((prev) => (prev === idx ? -1 : idx));
+										setSelection((previous) => ({
+											conflictIndex: safeIndex,
+											itemIndex: previous.conflictIndex === safeIndex && previous.itemIndex === idx ? -1 : idx,
+										}));
 									}}
 								>
 									<CardLocal
@@ -92,8 +96,8 @@ function ModConflicts() {
 											enabled: curSelected === -1 ? true : curSelected === idx,
 											isDir: false,
 										}}
+										game={game}
 										selected={curSelected === idx}
-										lastUpdated={0}
 										hasUpdate={false}
 										updateAvl={""}
 										key={idx}
@@ -143,6 +147,7 @@ function ModConflicts() {
 						if (safeIndex > 0) {
 							const newIndex = safeIndex - 1;
 							setNextSide("left");
+							setSelection({ conflictIndex: -1, itemIndex: -1 });
 							setTimeout(() => {
 								setCurIndex(newIndex);
 							}, 50);
@@ -162,6 +167,7 @@ function ModConflicts() {
 								}`}
 								onClick={() => {
 									setNextSide(i < safeIndex ? "left" : "right");
+									setSelection({ conflictIndex: -1, itemIndex: -1 });
 									setTimeout(() => {
 										setCurIndex(i);
 									}, 50);
@@ -187,7 +193,7 @@ function ModConflicts() {
 							);
 							const disabledSet = new Set(results.filter((item) => item.disabled).map((item) => item.path));
 							setNextSide("right");
-							setCurSelected(-1);
+							setSelection({ conflictIndex: -1, itemIndex: -1 });
 							const allDisabled = disabledSet.size === toDisable.length;
 							if (disabledSet.size > 0) {
 								setModList((old) =>
@@ -210,7 +216,7 @@ function ModConflicts() {
 						} else if (safeIndex < conflicts.length - 1) {
 							const newIndex = safeIndex + 1;
 							setNextSide("right");
-							setCurSelected(-1);
+							setSelection({ conflictIndex: -1, itemIndex: -1 });
 							setTimeout(() => {
 								setCurIndex(newIndex);
 							}, 50);

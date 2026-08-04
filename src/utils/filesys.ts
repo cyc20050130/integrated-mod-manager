@@ -1,14 +1,5 @@
 import defConfig from "../default.json";
 import {
-	exists as fsExists,
-	mkdir as fsMkdir,
-	readDir as fsReadDir,
-	readTextFile as fsReadTextFile,
-	rename,
-	writeFile,
-	writeTextFile as fsWriteTextFile,
-} from "@tauri-apps/plugin-fs";
-import {
 	exts,
 	IGNORE,
 	managedSRC,
@@ -65,19 +56,26 @@ import { error, info, warn } from "@/lib/logger";
 import { addToExtracts } from "@/_LeftSidebar/components/Downloads";
 import { normalizeDownloadList, withNormalizedDownloadSettings } from "./downloads";
 import { syncIniStateFromText } from "./iniStateSyncCore.js";
-import { refreshPreviewAssets, updatePreviewAsset } from "./imagePreview";
-import { acceptNteOperationRevision, loadNteConfigText, persistNteConfig } from "./nteConfigRevision";
+import { beginPreviewGeneration, updatePreviewAsset } from "./imagePreview";
+import { acceptNteOperationRevision } from "./nteConfigRevision";
+import {
+	getManagedConfigTarget,
+	persistGameConfigWithModPreview,
+	persistRuntimeConfigs,
+	readManagedConfigText,
+	writeManagedConfigText,
+} from "./appConfigRepository";
 export async function setGame(game: string) {
 	try {
 		const config = await readTextFile(`config.json`);
 		const parsedConfig = JSON.parse(config);
 		parsedConfig.game = game;
-		await writeTextFile(`config.json`, JSON.stringify(parsedConfig, null, 2));
+		await writeManagedConfigProjection(`config.json`, JSON.stringify(parsedConfig, null, 2));
 		return true;
 	} catch {
 		try {
 			if (!(await exists(`config.json`))) {
-				await writeTextFile(`config.json`, JSON.stringify({ ...defConfig, game }, null, 2));
+				await writeManagedConfigProjection(`config.json`, JSON.stringify({ ...defConfig, game }, null, 2));
 				return true;
 			}
 			throw new Error("Config file exists but could not be read or updated.");
@@ -101,55 +99,64 @@ let progressPerct: HTMLElement | null = null;
 // Initialize Intl.Collator for faster string comparison
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-function shouldUseNativePath(path: string) {
-	return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\");
+type ManagedPathRoot = "source" | "target";
+type ManagedPathIdentity = { rootKind: ManagedPathRoot; relativePath: string };
+function normalizeManagedAbsolutePath(path: string) {
+	let normalized = String(path || "").replaceAll("/", "\\");
+	while (normalized.length > 3 && normalized.endsWith("\\")) normalized = normalized.slice(0, -1);
+	return normalized;
+}
+function getManagedPathIdentity(path: string): ManagedPathIdentity {
+	const normalized = normalizeManagedAbsolutePath(path);
+	if (!/^[a-zA-Z]:\\/.test(normalized) && !normalized.startsWith("\\\\")) {
+		throw new Error(`Managed filesystem path must be absolute: ${path}`);
+	}
+	const roots = [
+		{ rootKind: "source" as const, path: normalizeManagedAbsolutePath(src) },
+		{ rootKind: "target" as const, path: normalizeManagedAbsolutePath(tgt) },
+	]
+		.filter((entry) => entry.path)
+		.sort((left, right) => right.path.length - left.path.length);
+	const lower = normalized.toLowerCase();
+	for (const root of roots) {
+		const rootLower = root.path.toLowerCase();
+		if (lower === rootLower) return { rootKind: root.rootKind, relativePath: "" };
+		if (lower.startsWith(rootLower + "\\")) {
+			return { rootKind: root.rootKind, relativePath: normalized.slice(root.path.length + 1) };
+		}
+	}
+	throw new Error(`Path is outside the persisted game roots: ${path}`);
+}
+function managedPathArgs(path: string) {
+	return { game: store.get(GAME), ...getManagedPathIdentity(path) };
 }
 async function exists(path: string) {
-	if (shouldUseNativePath(path)) return pathExistsNative(path);
-	try {
-		return await fsExists(path);
-	} catch (err) {
-		info("[IMM] plugin fs exists() failed, using native fallback:", path, err);
-		return pathExistsNative(path);
+	const managedConfig = getManagedConfigTarget(path);
+	if (managedConfig) {
+		try {
+			await readManagedConfigText(managedConfig);
+			return true;
+		} catch {
+			return false;
+		}
 	}
+	return pathExistsNative(path);
 }
 async function mkdir(path: string, options: { recursive?: boolean } = {}) {
-	if (shouldUseNativePath(path)) return mkdirNative(path, Boolean(options.recursive));
-	try {
-		return await fsMkdir(path, options);
-	} catch (err) {
-		info("[IMM] plugin fs mkdir() failed, using native fallback:", path, err);
-		return mkdirNative(path, Boolean(options.recursive));
-	}
+	return mkdirNative(path, Boolean(options.recursive));
 }
 async function readDir(path: string) {
-	if (shouldUseNativePath(path)) return readDirNative(path);
-	try {
-		return await fsReadDir(path);
-	} catch (err) {
-		info("[IMM] plugin fs readDir() failed, using native fallback:", path, err);
-		return readDirNative(path);
-	}
+	return readDirNative(path);
 }
 async function readTextFile(path: string) {
-	if (path.replaceAll("/", "\\") === "configNTE.json") return loadNteConfigText();
-	if (shouldUseNativePath(path)) return readTextFileNative(path);
-	try {
-		return await fsReadTextFile(path);
-	} catch (err) {
-		info("[IMM] plugin fs readTextFile() failed, using native fallback:", path, err);
-		return readTextFileNative(path);
-	}
+	const managedConfig = getManagedConfigTarget(path);
+	if (managedConfig) return readManagedConfigText(managedConfig);
+	return readTextFileNative(path);
 }
-async function writeTextFile(path: string, contents: string) {
-	if (path.replaceAll("/", "\\") === "configNTE.json") return persistNteConfig(contents);
-	if (shouldUseNativePath(path)) return writeTextFileNative(path, contents);
-	try {
-		return await fsWriteTextFile(path, contents);
-	} catch (err) {
-		info("[IMM] plugin fs writeTextFile() failed, using native fallback:", path, err);
-		return writeTextFileNative(path, contents);
-	}
+async function writeManagedConfigProjection(path: string, contents: string) {
+	const managedConfig = getManagedConfigTarget(path);
+	if (!managedConfig) throw new Error(`Unsupported managed configuration target: ${path}`);
+	return writeManagedConfigText(managedConfig, contents);
 }
 
 const sp = [UNCATEGORIZED, IGNORE, OLD_RESTORE];
@@ -213,7 +220,7 @@ export async function setConfig(config: Partial<GameConfig> & { version?: string
 		return;
 	}
 	config.version = VERSION;
-	await writeTextFile(`config${curConfig.game}.json`, JSON.stringify(config, null, 2));
+	await writeManagedConfigProjection(`config${curConfig.game}.json`, JSON.stringify(config, null, 2));
 	// store.set(INIT_DONE,false)
 	addToast({ type: "success", message: textData._Toasts.ConfigLoaded });
 	main();
@@ -266,16 +273,20 @@ export function getConfig(settings: Settings) {
 }
 async function persistConfigs(snapshot: RuntimeStateSnapshot = {}, skip = false) {
 	const { config, gameConfig } = getConfigPayload(snapshot);
-	const promises: Promise<void>[] = [writeTextFile("config.json", JSON.stringify(config, null, 2))];
-	if (config.game && !skip) {
-		promises.push(writeTextFile(`config${config.game}.json`, JSON.stringify(gameConfig, null, 2)));
-	}
-	await Promise.all(promises);
+	await persistRuntimeConfigs(
+		config as unknown as Record<string, unknown>,
+		config.game && !skip ? (gameConfig as unknown as Record<string, unknown>) : undefined
+	);
 }
 export async function saveConfigs(skip = false, settings = store.get(SETTINGS)) {
 	info("[IMM] Saving configs...");
 	if (!isAppInitialized()) return;
 	await persistConfigs({ settings }, skip);
+}
+export async function saveGameBananaBinding(game: string, relativePath: string, previewUrl: string, data: ModDataObj) {
+	const { gameConfig } = getConfigPayload({ data });
+	if (gameConfig.game !== game) throw new Error("Active game changed before the binding transaction started.");
+	await persistGameConfigWithModPreview(gameConfig as unknown as Record<string, unknown>, relativePath, previewUrl);
 }
 export async function flushRuntimeState(reason = "manual", snapshot: RuntimeStateSnapshot = {}) {
 	info(`[IMM] Flushing runtime state (${reason})...`);
@@ -302,82 +313,77 @@ export async function selectPath(
 export function folderSelector(path = "", title: string | undefined = undefined) {
 	return selectPath({ directory: true, ...(path ? { defaultPath: path } : {}), ...(title ? { title } : {}) });
 }
-export async function ensureManagedSourceDir(sourceRoot: string) {
-	await mkdirNative(join(sourceRoot, managedSRC), true);
+export async function ensureManagedSourceDir(game = store.get(GAME)) {
+	await invoke<void>("prepare_managed_source_dir", { game });
 }
 type GuardedPathOptions = {
-	allowedRoots?: string[];
-	includeDefaultRoots?: boolean;
 	recursive?: boolean;
 };
-function getGuardedFileRoots(extraRoots: string[] = [], includeDefaultRoots = true) {
-	const defaultRoots = includeDefaultRoots ? [src, modRoot, tgt] : [];
-	const roots = [...defaultRoots, ...extraRoots].map((root) => String(root || "").trim()).filter(Boolean);
-	return Array.from(new Set(roots));
-}
 export async function guardedRemove(path: string, options: GuardedPathOptions = {}) {
-	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
-	return invoke<void>("guarded_remove_path", {
-		path,
-		allowedRoots,
+	return invoke<void>("remove_managed_path", {
+		...managedPathArgs(path),
 		recursive: Boolean(options.recursive),
 	});
 }
-export async function guardedRename(
-	from: string,
-	to: string,
-	options: Pick<GuardedPathOptions, "allowedRoots" | "includeDefaultRoots"> = {}
-) {
-	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
-	return invoke<void>("guarded_rename_path", {
-		from,
-		to,
-		allowedRoots,
+export async function guardedRename(from: string, to: string) {
+	const fromIdentity = getManagedPathIdentity(from);
+	const toIdentity = getManagedPathIdentity(to);
+	return invoke<void>("rename_managed_path", {
+		game: store.get(GAME),
+		fromRootKind: fromIdentity.rootKind,
+		fromRelativePath: fromIdentity.relativePath,
+		toRootKind: toIdentity.rootKind,
+		toRelativePath: toIdentity.relativePath,
 	});
 }
-export async function guardedCopyFile(
-	from: string,
-	to: string,
-	options: Pick<GuardedPathOptions, "allowedRoots" | "includeDefaultRoots"> = {}
-) {
-	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
-	return invoke<void>("guarded_copy_file_path", {
-		from,
-		to,
-		allowedRoots,
-	});
-}
-export async function guardedImportFile(
-	from: string,
-	to: string,
-	options: Pick<GuardedPathOptions, "allowedRoots" | "includeDefaultRoots"> = {}
-) {
-	const allowedRoots = getGuardedFileRoots(options.allowedRoots, options.includeDefaultRoots !== false);
-	return invoke<void>("guarded_import_file_path", {
-		from,
-		to,
-		allowedRoots,
+export async function guardedCopyFile(from: string, to: string) {
+	const fromIdentity = getManagedPathIdentity(from);
+	const toIdentity = getManagedPathIdentity(to);
+	return invoke<void>("copy_managed_file", {
+		game: store.get(GAME),
+		fromRootKind: fromIdentity.rootKind,
+		fromRelativePath: fromIdentity.relativePath,
+		toRootKind: toIdentity.rootKind,
+		toRelativePath: toIdentity.relativePath,
 	});
 }
 async function pathExistsNative(path: string) {
 	try {
-		return await invoke<boolean>("path_exists_native", { path });
+		return await invoke<boolean>("managed_path_exists", managedPathArgs(path));
 	} catch (err) {
-		info("[IMM] native exists() check failed:", path, err);
+		info("[IMM] managed exists() check failed:", path, err);
 		return false;
 	}
 }
 async function readDirNative(path: string) {
-	return invoke<DirEntry[]>("read_dir_native", { path });
+	return invoke<DirEntry[]>("read_managed_dir", managedPathArgs(path));
 }
 async function readTextFileNative(path: string) {
-	return invoke<string>("read_text_file_native", { path });
+	return invoke<string>("read_managed_text_file", managedPathArgs(path));
 }
-async function writeTextFileNative(path: string, contents: string) {
-	return invoke<void>("write_text_file_native", { path, contents });
+type ManagedTextPurpose =
+	"d3dxUserIni" | "modMetadata" | "presetExport" | "collisionChecklist" | "modPreference" | "modIni";
+async function writeManagedTextAsset(purpose: ManagedTextPurpose, relativePath: string, contents: string) {
+	return invoke<void>("write_managed_text_asset", {
+		game: store.get(GAME),
+		purpose,
+		relativePath,
+		contents,
+	});
+}
+async function readD3DXUserIni() {
+	return invoke<string | null>("read_d3dx_user_ini", { game: store.get(GAME) });
+}
+async function ensureD3DXUserIniBackup() {
+	return invoke<boolean>("ensure_d3dx_user_ini_backup", { game: store.get(GAME) });
 }
 async function mkdirNative(path: string, recursive = true) {
-	return invoke<void>("mkdir_native", { path, recursive });
+	const args = managedPathArgs(path);
+	if (!args.relativePath) return;
+	if (!recursive && args.relativePath.includes("\\")) {
+		throw new Error("Non-recursive managed directory creation only accepts one path component.");
+	}
+	return invoke<void>("create_managed_dir", args);
 }
 function replaceDisabled(name: string) {
 	return name.replace("DISABLED_", "").replace("DISABLED", "").trim();
@@ -501,14 +507,7 @@ export async function getRestorePoints(): Promise<string[]> {
 }
 export async function resetWithBackup() {
 	info("[IMM] Resetting with backup...");
-	const configs = ["", "WW", "ZZ", "GI", "SR", "EF"];
-	for (const cfg of configs) {
-		try {
-			await rename(`config${cfg}.json`, `backups/MAN_${Date.now()}_config${cfg}.json.bak`);
-		} catch (backupError) {
-			warn(`[IMM] Skipping missing or locked config backup for ${cfg || "default"}:`, backupError);
-		}
-	}
+	await invoke("reset_app_state_with_backup");
 	window.location.reload();
 }
 export async function previewRestorePoint(point: string) {
@@ -669,7 +668,7 @@ export async function createRestorePoint(prefix = "") {
 		await guardedRemove(join(modRoot, RESTORE, restorePointName), { recursive: true });
 		try {
 			await guardedRemove(join(modRoot, RESTORE));
-			await guardedRemove(join(modRoot), { allowedRoots: [src], includeDefaultRoots: false });
+			await guardedRemove(join(modRoot));
 		} catch (cleanupError) {
 			warn("[IMM] Failed to clean canceled restore point directories:", cleanupError);
 		}
@@ -700,16 +699,12 @@ export async function checkOldVerDirs(src: string) {
 
 export async function categorizeDir(src: string, modifyIni = false) {
 	info("[IMM] Categorizing directory:", src, "Skip restore:", modifyIni);
-	const d3dx_path = join(...tgt.split("\\").slice(0, -1), "d3dx_user.ini");
 	let d3dx = "";
 	try {
-		info("[IMM] Reading d3dx_user.ini...", await pathExistsNative(d3dx_path));
-		const targetParent = join(...tgt.split("\\").slice(0, -1));
-		const backupPath = join(targetParent, `d3dx_user_pre_imm.ini.bak`);
-		if (!(await pathExistsNative(backupPath))) {
-			await guardedCopyFile(d3dx_path, backupPath, { allowedRoots: [targetParent], includeDefaultRoots: false });
-		}
-		if (modifyIni) d3dx = await readTextFileNative(d3dx_path);
+		const ini = await readD3DXUserIni();
+		info("[IMM] Reading d3dx_user.ini...", ini !== null);
+		if (ini !== null) await ensureD3DXUserIniBackup();
+		if (modifyIni) d3dx = ini || "";
 	} catch {
 		info("[IMM] d3dx_user.ini not found or could not be read.");
 	}
@@ -804,7 +799,7 @@ export async function categorizeDir(src: string, modifyIni = false) {
 					d3dxLines[i] = d3dxLines[i].startsWith(op) ? d3dxLines[i].replace(op, np) : d3dxLines[i];
 				}
 			}
-			await writeTextFileNative(d3dx_path, d3dxLines.join("\n"));
+			await writeManagedTextAsset("d3dxUserIni", "", d3dxLines.join("\n"));
 		}
 	} catch (categorizeError) {
 		error("[IMM] Error categorizing directory:", categorizeError);
@@ -830,15 +825,13 @@ export async function verifyDirStruct() {
 			if (await pathExistsNative(oldTgtPath)) {
 				await guardedRename(oldTgtPath, newTgtPath);
 				//add code to read the file d3dx_user.ini in the parent folder of oldTgtPath, and replace all instances of OLD_managedTGT with managedTGT
-				const parentDir = tgt.split("\\").slice(0, -1).join("\\");
-				const iniPath = join(parentDir, "d3dx_user.ini");
-				info("[IMM] Updating d3dx_user.ini at:", iniPath);
+				info("[IMM] Updating managed d3dx_user.ini projection.");
 
 				try {
-					if (await pathExistsNative(iniPath)) {
-						const iniContent = await readTextFileNative(iniPath);
+					const iniContent = await readD3DXUserIni();
+					if (iniContent !== null) {
 						const updatedContent = iniContent.split(OLD_managedTGT.toLowerCase()).join(managedTGT.toLowerCase());
-						await writeTextFileNative(iniPath, updatedContent);
+						await writeManagedTextAsset("d3dxUserIni", "", updatedContent);
 					}
 				} catch (e) {
 					error("Error updating d3dx_user.ini:", e);
@@ -851,18 +844,12 @@ export async function verifyDirStruct() {
 				const targetEntries = (await readDirRecr(newTgtPath, "", 2)).flatMap((x) => x.children || []);
 				info("[IMM] Fixing symlinks in target directory. Broken: ", targetEntries);
 				for (const entry of targetEntries) {
-					const linkPath = join(newTgtPath, entry.path);
-					await guardedRemove(linkPath);
-					await mkdirNative(join(newTgtPath, entry.parent), true);
-					try {
-						await invoke("create_symlink", {
-							linkPath: linkPath,
-							targetPath: join(newSrcPath, entry.path),
-						});
-						info("[IMM] Fixed symlink:", linkPath, "->", join(newSrcPath, entry.path));
-					} catch (err) {
-						error("[IMM] Error creating symlink:", err);
-					}
+					await invoke("set_managed_mod_enabled", {
+						game: store.get(GAME),
+						relativePath: entry.path,
+						enabled: true,
+					});
+					info("[IMM] Rebuilt managed junction:", entry.path);
 				}
 			}
 		} catch (e) {
@@ -1113,12 +1100,11 @@ export async function applyChanges(isMigration = false) {
 					);
 				} else {
 					itemOperations.push(
-						invoke<void>("create_symlink", {
-							linkPath: join(target, key, name),
-							targetPath: join(src, managedSRC, key, name),
-						}).catch(() => {
-							//console.error(`Error creating symlink for ${name}:`, error);
-						}) as Promise<void>
+						invoke<void>("set_managed_mod_enabled", {
+							game: store.get(GAME),
+							relativePath: join(key, name),
+							enabled: true,
+						})
 					);
 				}
 			}
@@ -1166,24 +1152,17 @@ export async function remSaveModData() {
 		.filter((child) => child.isDir);
 	const data = store.get(DATA) || {};
 	const promises = entries.map(async (entry) => {
-		const modPath = join(modSrc, entry.path, "mod.json");
-
 		if (data[entry.path]) {
-			const modData = data[entry.path];
-			delete modData.viewedAt;
-			delete modData.updatedAt;
-			await writeTextFile(modPath, JSON.stringify(modData, null, 2));
+			const { viewedAt: _viewedAt, updatedAt: _updatedAt, ...modData } = data[entry.path];
+			await writeManagedTextAsset("modMetadata", entry.path, JSON.stringify(modData, null, 2));
 		}
 	});
 	await Promise.all(promises);
 }
 export async function remSavePresets() {
 	const presets = store.get(PRESETS) || {};
-	const presetFolder = join(tgt, "Presets");
-	await mkdir(presetFolder, { recursive: true });
 	const promises = presets.map(async (preset) => {
-		const presetPath = join(presetFolder, `${preset.name}.txt`);
-		await writeTextFile(presetPath, preset.data.join("\n"));
+		await writeManagedTextAsset("presetExport", preset.name, preset.data.join("\n"));
 	});
 	await Promise.all(promises);
 }
@@ -1215,7 +1194,7 @@ export async function remMoveMods(categoryMode = true, enable = 0) {
 		);
 		let finalTgt = tgtPath;
 		let counter = 1;
-		while (await exists(finalTgt)) {
+		while (await exists(join(tgt, finalTgt))) {
 			finalTgt = tgtPath + `_${counter}`;
 			counter++;
 		}
@@ -1226,14 +1205,14 @@ export async function remMoveMods(categoryMode = true, enable = 0) {
 	});
 	await Promise.all(movePromises);
 	// console.log("All entries moved. Updating d3dx_user.ini if needed...", iniChanges);
-	const d3dxPath = join(...tgt.split("\\").slice(0, -1), "d3dx_user.ini");
 	try {
-		if (await exists(d3dxPath)) {
-			let d3dx = await readTextFile(d3dxPath);
+		const managedD3dx = await readD3DXUserIni();
+		if (managedD3dx !== null) {
+			let d3dx = managedD3dx;
 			for (const [oldPath, newPath] of Object.entries(iniChanges)) {
 				d3dx = d3dx.split(oldPath).join(newPath);
 			}
-			await writeTextFile(d3dxPath, d3dx);
+			await writeManagedTextAsset("d3dxUserIni", "", d3dx);
 		}
 	} catch (e) {
 		error("Error updating d3dx_user.ini:", e);
@@ -1262,7 +1241,7 @@ export async function remMoveMods(categoryMode = true, enable = 0) {
 		warn("[IMM] Failed to remove managed prefs directory:", removePrefsError);
 	}
 	try {
-		await guardedRemove(join(src, managedSRC), { allowedRoots: [src], includeDefaultRoots: false });
+		await guardedRemove(join(src, managedSRC));
 	} catch (removeManagedRootError) {
 		warn("[IMM] Failed to remove managed source root:", removeManagedRootError);
 	}
@@ -1438,7 +1417,7 @@ async function detectHotkeys(
 						hkData = [...hkData, ...childHK];
 					}
 					if (depth == 1 && def) {
-						writeTextFile(join(src, entry.path, ".imm-collision-checklist"), Array.from(hashes).join("\n"));
+						await writeManagedTextAsset("collisionChecklist", entry.path, Array.from(hashes).join("\n"));
 						if (namespace) namespaces[entry.path] = namespace;
 					}
 					if (depth < 2) {
@@ -1653,19 +1632,9 @@ export async function refreshModList() {
 		for (const { entry, enabled } of existsResults) {
 			entry.enabled = enabled;
 		}
-		try {
-			await refreshPreviewAssets(
-				src,
-				entries.map((entry) => entry.path)
-			);
-		} catch (previewError) {
-			warn("[IMM] Unable to refresh local preview cache:", previewError);
-		}
+		beginPreviewGeneration(store.get(GAME));
 		//info(recentlyDownloaded);
-		info(
-			"[IMM] Mod list refreshed:",
-			entries.map((e) => ({ path: e.path, enabled: e.enabled }))
-		);
+		info("[IMM] Mod list refreshed:", entries.length, "mods");
 		info("[IMM] Mod list refresh took", Date.now() - before, "ms");
 		return entries
 			.filter((entry) => recentlyDownloaded.includes(entry.path))
@@ -1718,7 +1687,10 @@ export async function createModDownloadTarget(cat: string, dir: string) {
 				relPath,
 				dirName: safeDir,
 			};
-		if (!isNte) await mkdir(path, { recursive: true });
+		// The final Mod leaf is created by the native archive transaction. Only
+		// prepare its trusted category parent here; a failed download must not
+		// publish an empty Mod directory that looks installed.
+		if (!isNte) await mkdir(categoryRoot, { recursive: true });
 		return {
 			path,
 			relPath,
@@ -1982,14 +1954,16 @@ export async function syncIniStateFromD3DXIni(
 		.filter((modPath) => modPath);
 	if (!mods.length) return [] as string[];
 
-	const root = getD3DXUserIniPath(options.targetPath);
-	if (!root || !(await exists(root))) return [] as string[];
+	if (options.targetPath && normalizeManagedAbsolutePath(options.targetPath) !== normalizeManagedAbsolutePath(tgt)) {
+		throw new Error("INI state sync target no longer matches the persisted game target.");
+	}
+	const rawIni = await readD3DXUserIni();
+	if (rawIni === null) return [] as string[];
 	if (options.clearPrefsBeforeSync) {
 		await Promise.all(
 			mods.map((modPath) => guardedRemove(join(tgt, managedTGT, PREFS, modPath + ".ini")).catch(() => undefined))
 		);
 	}
-	const rawIni = await readTextFile(root);
 	const trackedMods = getTrackedMods(mods);
 	const { nextData, changedMods } = syncIniStateFromText(rawIni, store.get(DATA), trackedMods, managedTGT);
 	if (!changedMods.length) return changedMods;
@@ -2006,14 +1980,14 @@ export async function syncIniStateFromD3DXIni(
 export async function updatePrefsIniFromData(modPath: string, oldPath = "") {
 	const data = store.get(DATA)[modPath];
 	if (!data || !data.vars) return;
-	const [category, name] = modPath.split("\\");
-	const dir = join(tgt, managedTGT, PREFS, category);
-	await mkdir(dir, { recursive: true });
-	const root = join(dir, `${name}.ini`);
 	if (oldPath) {
 		const oldRoot = join(tgt, managedTGT, PREFS, oldPath);
 		if (!(await exists(oldRoot))) return;
-		await writeTextFile(root, (await readTextFile(oldRoot)).split(oldPath.toLowerCase()).join(modPath.toLowerCase()));
+		await writeManagedTextAsset(
+			"modPreference",
+			modPath,
+			(await readTextFile(oldRoot)).split(oldPath.toLowerCase()).join(modPath.toLowerCase())
+		);
 		await guardedRemove(oldRoot);
 	} else {
 		const lines = {} as Record<string, string>;
@@ -2027,8 +2001,9 @@ export async function updatePrefsIniFromData(modPath: string, oldPath = "") {
 				else info(`[IMM] Updating Mod: ${modPath} | File: ${key} | Added Line: ${line}`);
 			}
 		}
-		await writeTextFile(
-			root,
+		await writeManagedTextAsset(
+			"modPreference",
+			modPath,
 			[
 				";-- set by imm --",
 				"[constants]",
@@ -2069,7 +2044,7 @@ export async function updateIniVars(relPath: string, keyVals: Record<string, str
 	} catch {
 		return false;
 	}
-	await writeTextFile(path, lines.join("\n"));
+	await writeManagedTextAsset("modIni", relPath, lines.join("\n"));
 	return true;
 }
 export function openFile(relPath: string) {
@@ -2086,9 +2061,6 @@ export function openManagedFolder(rootKind: "source" | "target", relativePath = 
 export async function toggleMod(path: string, enabled: boolean, forced = false): Promise<boolean> {
 	info("[IMM] Togglingx mod:", path, "Enabled:", enabled);
 	try {
-		const modSrc = join(src, managedSRC, path);
-		const modTgt = store.get(GAME) === "NTE" ? join(tgt, path) : join(tgt, managedTGT, path);
-
 		if (store.get(GAME) === "NTE") {
 			await invoke("set_nte_mod_enabled", {
 				relativePath: path,
@@ -2098,33 +2070,19 @@ export async function toggleMod(path: string, enabled: boolean, forced = false):
 		}
 
 		if (enabled) {
-			const [srcExists, tgtExists] = await Promise.all([exists(modSrc), exists(modTgt)]);
-			if ((srcExists && !tgtExists) || forced) {
-				await updatePrefsIniFromData(path);
-				if (forced) return true;
-				await mkdir(join(tgt, managedTGT, ...path.split("\\").slice(0, -1)), { recursive: true });
-				try {
-					await invoke("create_symlink", {
-						linkPath: modTgt,
-						targetPath: modSrc,
-					});
-				} catch (err) {
-					error("[IMM] Error creating symlink:", err);
-					return false;
-				}
-			}
+			await updatePrefsIniFromData(path);
+			if (forced) return true;
 		} else {
 			await syncIniStateFromD3DXIni(path, {
 				rewritePrefs: false,
 				clearPrefsBeforeSync: true,
 			});
-			try {
-				await guardedRemove(modTgt);
-			} catch (err) {
-				error("[IMM] Error removing mod:", err);
-				return false;
-			}
 		}
+		await invoke("set_managed_mod_enabled", {
+			game: store.get(GAME),
+			relativePath: path,
+			enabled,
+		});
 	} catch (err) {
 		error("[IMM] Error toggling mod:", err);
 		return false;
@@ -2133,29 +2091,20 @@ export async function toggleMod(path: string, enabled: boolean, forced = false):
 	return true;
 }
 export async function savePreviewImageFromData(relPath: string, type: string, data: Uint8Array) {
-	const path = join(src, managedSRC, relPath);
-	const previewPath = join(path, "preview." + type);
-	info("[IMM] Saving preview image for:", path, previewPath);
-	if (store.get(GAME) === "NTE") {
-		await invoke("save_nte_preview_data", {
-			relativePath: relPath,
-			extension: type,
-			data: Array.from(data),
-		});
-	} else {
-		const removePromises = exts.map((ext) =>
-			guardedRemove(path + "\\" + "preview." + ext).catch(() => {
-				// Ignore errors if file doesn't exist
-			})
-		);
-		await Promise.all(removePromises);
-		await writeFile(previewPath, data);
-	}
+	const game = store.get(GAME);
+	info("[IMM] Saving managed preview image for:", game, relPath);
+	await invoke("save_managed_preview_data", {
+		game,
+		relativePath: relPath,
+		extension: type,
+		data: Array.from(data),
+	});
 	try {
-		await updatePreviewAsset(src, relPath);
+		await updatePreviewAsset(game, relPath);
 	} catch (previewError) {
 		warn("[IMM] Unable to update the local preview cache:", previewError);
 	}
+	if (store.get(GAME) !== game) return;
 	store.set(LAST_UPDATED, Date.now());
 	store.set(DATA, (prev) => {
 		if (!prev[relPath]) return prev;
@@ -2170,13 +2119,13 @@ export async function savePreviewImageFromData(relPath: string, type: string, da
 			return mod;
 		});
 	});
-	saveConfigs();
+	await saveConfigs();
 
 	addToast({ type: "success", message: textData._Toasts.ImgSaved });
 }
 export async function savePreviewImage(relPath: string) {
 	try {
-		const path = join(src, managedSRC, relPath);
+		const game = store.get(GAME);
 		const file = await open({
 			multiple: false,
 			directory: false,
@@ -2184,30 +2133,17 @@ export async function savePreviewImage(relPath: string) {
 		});
 
 		if (!file) return false;
-
-		if (store.get(GAME) === "NTE") {
-			await invoke("import_nte_preview_file", {
-				relativePath: relPath,
-				sourcePath: file,
-			});
-		} else {
-			// Remove existing preview images in parallel
-			const removePromises = exts.map((ext) =>
-				guardedRemove(path + "\\" + "preview." + ext).catch(() => {
-					// Ignore errors if file doesn't exist
-				})
-			);
-			await Promise.all(removePromises);
-
-			// Copy new preview image
-			const fileExt = file.split(".").pop();
-			await guardedImportFile(file, path + "\\" + "preview." + fileExt);
-		}
+		await invoke("import_managed_preview_file", {
+			game,
+			relativePath: relPath,
+			sourcePath: file,
+		});
 		try {
-			await updatePreviewAsset(src, relPath);
+			await updatePreviewAsset(game, relPath);
 		} catch (previewError) {
 			warn("[IMM] Unable to update the local preview cache:", previewError);
 		}
+		if (store.get(GAME) !== game) return true;
 		store.set(LAST_UPDATED, Date.now());
 		addToast({ type: "success", message: textData._Toasts.ImgSaved });
 	} catch {

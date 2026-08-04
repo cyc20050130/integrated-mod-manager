@@ -6,9 +6,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const WAL_MAGIC: [u8; 8] = *b"IMMNTEW1";
+const NTE_WAL_MAGIC: [u8; 8] = *b"IMMNTEW1";
+const APP_STATE_WAL_MAGIC: [u8; 8] = *b"IMMAPPW1";
+const MOD_MUTATION_WAL_MAGIC: [u8; 8] = *b"IMMMODW1";
 const WAL_SCHEMA_VERSION: u16 = 1;
-const PREFIX_LEN: usize = WAL_MAGIC.len() + size_of::<u32>();
+const PREFIX_LEN: usize = NTE_WAL_MAGIC.len() + size_of::<u32>();
 const TRANSACTION_ID_LEN: usize = 16;
 const HASH_LEN: usize = 32;
 const FIXED_BODY_LEN: usize = size_of::<u16>()
@@ -79,6 +81,8 @@ struct WalRecord {
 
 pub(crate) struct WalJournal {
     file: std::fs::File,
+    magic: [u8; 8],
+    label: &'static str,
     next_sequence: u64,
     prior_record_hash: [u8; HASH_LEN],
     active_transaction_id: Option<[u8; TRANSACTION_ID_LEN]>,
@@ -120,7 +124,7 @@ impl fmt::Display for WalCorruption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "NTE transaction WAL is corrupt at byte {}: {}. Repair is required before changing Mods.",
+            "Transaction WAL is corrupt at byte {}: {}. Recovery is required before writing state.",
             self.offset, self.reason
         )
     }
@@ -143,7 +147,8 @@ fn new_transaction_id() -> Result<[u8; TRANSACTION_ID_LEN], String> {
     Ok(digest[..TRANSACTION_ID_LEN].try_into().unwrap())
 }
 
-fn encode_frame(
+fn encode_frame_with_magic(
+    magic: [u8; 8],
     transaction_id: [u8; TRANSACTION_ID_LEN],
     sequence: u64,
     prior_record_hash: [u8; HASH_LEN],
@@ -158,7 +163,7 @@ fn encode_frame(
     }
     let stored_body_len = FIXED_BODY_LEN + payload.len() + RECORD_HASH_LEN;
     let mut frame = Vec::with_capacity(PREFIX_LEN + stored_body_len);
-    frame.extend_from_slice(&WAL_MAGIC);
+    frame.extend_from_slice(&magic);
     frame.extend_from_slice(&(stored_body_len as u32).to_le_bytes());
     frame.extend_from_slice(&WAL_SCHEMA_VERSION.to_le_bytes());
     frame.push(state as u8);
@@ -172,6 +177,24 @@ fn encode_frame(
     let record_hash = sha256(&frame);
     frame.extend_from_slice(&record_hash);
     Ok((frame, record_hash))
+}
+
+#[cfg(test)]
+fn encode_frame(
+    transaction_id: [u8; TRANSACTION_ID_LEN],
+    sequence: u64,
+    prior_record_hash: [u8; HASH_LEN],
+    state: WalState,
+    payload: &[u8],
+) -> Result<(Vec<u8>, [u8; HASH_LEN]), String> {
+    encode_frame_with_magic(
+        NTE_WAL_MAGIC,
+        transaction_id,
+        sequence,
+        prior_record_hash,
+        state,
+        payload,
+    )
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {
@@ -191,7 +214,7 @@ fn copy_array<const N: usize>(bytes: &[u8]) -> [u8; N] {
 }
 
 fn stored_body_len(data: &[u8], offset: usize) -> Option<usize> {
-    let length_offset = offset.checked_add(WAL_MAGIC.len())?;
+    let length_offset = offset.checked_add(NTE_WAL_MAGIC.len())?;
     let length_end = length_offset.checked_add(size_of::<u32>())?;
     if length_end > data.len() {
         return None;
@@ -199,14 +222,18 @@ fn stored_body_len(data: &[u8], offset: usize) -> Option<usize> {
     usize::try_from(read_u32(data, length_offset)).ok()
 }
 
-fn parse_complete_frame(data: &[u8], offset: usize) -> Result<(WalRecord, usize), String> {
+fn parse_complete_frame_with_magic(
+    data: &[u8],
+    offset: usize,
+    magic: [u8; 8],
+) -> Result<(WalRecord, usize), String> {
     let prefix_end = offset
         .checked_add(PREFIX_LEN)
         .ok_or_else(|| "frame offset overflow".to_string())?;
     if prefix_end > data.len() {
         return Err("incomplete frame prefix".to_string());
     }
-    if data[offset..offset + WAL_MAGIC.len()] != WAL_MAGIC {
+    if data[offset..offset + magic.len()] != magic {
         return Err("invalid frame magic".to_string());
     }
     let body_len =
@@ -275,13 +302,13 @@ fn parse_complete_frame(data: &[u8], offset: usize) -> Result<(WalRecord, usize)
     ))
 }
 
-fn has_independently_valid_frame_after(data: &[u8], offset: usize) -> bool {
+fn has_independently_valid_frame_after(data: &[u8], offset: usize, magic: [u8; 8]) -> bool {
     let Some(mut candidate) = offset.checked_add(1) else {
         return false;
     };
     while candidate.saturating_add(PREFIX_LEN + MIN_STORED_BODY_LEN) <= data.len() {
-        if data[candidate..].starts_with(&WAL_MAGIC)
-            && parse_complete_frame(data, candidate).is_ok()
+        if data[candidate..].starts_with(&magic)
+            && parse_complete_frame_with_magic(data, candidate, magic).is_ok()
         {
             return true;
         }
@@ -294,10 +321,11 @@ fn tail_or_interior(
     data: &[u8],
     offset: usize,
     records: Vec<WalRecord>,
+    magic: [u8; 8],
     reason: impl Into<String>,
 ) -> Result<ScanOutcome, WalCorruption> {
     let reason = reason.into();
-    if has_independently_valid_frame_after(data, offset) {
+    if has_independently_valid_frame_after(data, offset, magic) {
         Err(WalCorruption { offset, reason })
     } else {
         Ok(ScanOutcome::RepairTail {
@@ -307,7 +335,7 @@ fn tail_or_interior(
     }
 }
 
-fn scan_bytes(data: &[u8]) -> Result<ScanOutcome, WalCorruption> {
+fn scan_bytes_with_magic(data: &[u8], magic: [u8; 8]) -> Result<ScanOutcome, WalCorruption> {
     let mut records = Vec::new();
     let mut offset = 0usize;
     let mut expected_sequence = 1u64;
@@ -318,36 +346,37 @@ fn scan_bytes(data: &[u8]) -> Result<ScanOutcome, WalCorruption> {
     while offset < data.len() {
         if data.len() - offset < PREFIX_LEN {
             let remaining = &data[offset..];
-            let is_valid_prefix = if remaining.len() <= WAL_MAGIC.len() {
-                WAL_MAGIC.starts_with(remaining)
+            let is_valid_prefix = if remaining.len() <= magic.len() {
+                magic.starts_with(remaining)
             } else {
-                remaining.starts_with(&WAL_MAGIC)
+                remaining.starts_with(&magic)
             };
             if is_valid_prefix {
-                return tail_or_interior(data, offset, records, "incomplete frame prefix");
+                return tail_or_interior(data, offset, records, magic, "incomplete frame prefix");
             }
             return Err(WalCorruption {
                 offset,
                 reason: "invalid frame magic".to_string(),
             });
         }
-        if !data[offset..].starts_with(&WAL_MAGIC) {
+        if !data[offset..].starts_with(&magic) {
             if records.is_empty() {
                 return Err(WalCorruption {
                     offset,
                     reason: "invalid frame magic".to_string(),
                 });
             }
-            return tail_or_interior(data, offset, records, "invalid frame magic");
+            return tail_or_interior(data, offset, records, magic, "invalid frame magic");
         }
         let Some(body_len) = stored_body_len(data, offset) else {
-            return tail_or_interior(data, offset, records, "missing frame length");
+            return tail_or_interior(data, offset, records, magic, "missing frame length");
         };
         if !(MIN_STORED_BODY_LEN..=MAX_STORED_BODY_LEN).contains(&body_len) {
             return tail_or_interior(
                 data,
                 offset,
                 records,
+                magic,
                 "frame length is outside the allowed range",
             );
         }
@@ -361,10 +390,10 @@ fn scan_bytes(data: &[u8]) -> Result<ScanOutcome, WalCorruption> {
             });
         };
         if frame_end > data.len() {
-            return tail_or_interior(data, offset, records, "incomplete frame body");
+            return tail_or_interior(data, offset, records, magic, "incomplete frame body");
         }
 
-        let (record, parsed_end) = parse_complete_frame(data, offset)
+        let (record, parsed_end) = parse_complete_frame_with_magic(data, offset, magic)
             .map_err(|reason| WalCorruption { offset, reason })?;
         if record.sequence != expected_sequence {
             return Err(WalCorruption {
@@ -407,6 +436,11 @@ fn scan_bytes(data: &[u8]) -> Result<ScanOutcome, WalCorruption> {
     }
 
     Ok(ScanOutcome::Clean(records))
+}
+
+#[cfg(test)]
+fn scan_bytes(data: &[u8]) -> Result<ScanOutcome, WalCorruption> {
+    scan_bytes_with_magic(data, NTE_WAL_MAGIC)
 }
 
 fn validate_state_transition(
@@ -481,28 +515,41 @@ fn active_transaction(
 
 impl WalJournal {
     pub(crate) fn open(path: &Path) -> Result<Self, String> {
+        Self::open_with_domain(path, NTE_WAL_MAGIC, "NTE transaction")
+    }
+
+    pub(crate) fn open_app_state(path: &Path) -> Result<Self, String> {
+        Self::open_with_domain(path, APP_STATE_WAL_MAGIC, "application state")
+    }
+
+    pub(crate) fn open_mod_mutation(path: &Path) -> Result<Self, String> {
+        Self::open_with_domain(path, MOD_MUTATION_WAL_MAGIC, "Mod mutation")
+    }
+
+    fn open_with_domain(path: &Path, magic: [u8; 8], label: &'static str) -> Result<Self, String> {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(path)
-            .map_err(|err| format!("Unable to open the NTE transaction WAL: {err}"))?;
+            .map_err(|err| format!("Unable to open the {label} WAL: {err}"))?;
         let length = file
             .metadata()
-            .map_err(|err| format!("Unable to inspect the NTE transaction WAL: {err}"))?
+            .map_err(|err| format!("Unable to inspect the {label} WAL: {err}"))?
             .len();
         if length > MAX_WAL_FILE_LEN {
             return Err(format!(
-                "NTE transaction WAL exceeds the {} MiB safety limit. Repair is required before changing Mods.",
+                "The {label} WAL exceeds the {} MiB safety limit. Recovery is required before writing state.",
                 MAX_WAL_FILE_LEN / 1024 / 1024
             ));
         }
         let mut data = Vec::with_capacity(length as usize);
         file.read_to_end(&mut data)
-            .map_err(|err| format!("Unable to read the NTE transaction WAL: {err}"))?;
-        let (mut records, truncate_to) =
-            records_from_outcome(scan_bytes(&data).map_err(|err| err.to_string())?);
+            .map_err(|err| format!("Unable to read the {label} WAL: {err}"))?;
+        let (mut records, truncate_to) = records_from_outcome(
+            scan_bytes_with_magic(&data, magic).map_err(|err| err.to_string())?,
+        );
         if let Some(truncate_to) = truncate_to {
             file.set_len(truncate_to as u64)
                 .map_err(|err| format!("Unable to truncate the torn NTE transaction WAL: {err}"))?;
@@ -532,6 +579,8 @@ impl WalJournal {
             .map_err(|err| format!("Unable to seek the NTE transaction WAL: {err}"))?;
         Ok(Self {
             file,
+            magic,
+            label,
             next_sequence,
             prior_record_hash,
             active_transaction_id,
@@ -542,10 +591,10 @@ impl WalJournal {
 
     pub(crate) fn begin(&mut self, payload: &[u8]) -> Result<[u8; TRANSACTION_ID_LEN], String> {
         if self.active_transaction_id.is_some() {
-            return Err(
-                "An incomplete NTE transaction requires recovery before a new operation."
-                    .to_string(),
-            );
+            return Err(format!(
+                "An incomplete {} requires recovery before a new operation.",
+                self.label
+            ));
         }
         let transaction_id = new_transaction_id()?;
         self.append(transaction_id, WalState::Prepared, payload)?;
@@ -571,7 +620,9 @@ impl WalJournal {
         self.file
             .seek(SeekFrom::End(0))
             .map_err(|err| format!("Unable to seek the NTE transaction WAL: {err}"))?;
-        let (records, _) = records_from_outcome(scan_bytes(&data).map_err(|err| err.to_string())?);
+        let (records, _) = records_from_outcome(
+            scan_bytes_with_magic(&data, self.magic).map_err(|err| err.to_string())?,
+        );
         let prepared_payload = records
             .iter()
             .rev()
@@ -607,7 +658,8 @@ impl WalJournal {
             transaction_id,
             state,
         )?;
-        let (frame, record_hash) = encode_frame(
+        let (frame, record_hash) = encode_frame_with_magic(
+            self.magic,
             transaction_id,
             self.next_sequence,
             self.prior_record_hash,
@@ -804,6 +856,22 @@ mod tests {
     }
 
     #[test]
+    fn mod_mutation_wal_domain_is_isolated_from_app_state() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("mutation.wal");
+        let mut mutation = WalJournal::open_mod_mutation(&path).expect("open mutation WAL");
+        mutation
+            .begin(br#"{"operation":"preview"}"#)
+            .expect("begin mutation");
+        drop(mutation);
+
+        let error = WalJournal::open_app_state(&path)
+            .err()
+            .expect("app-state reader must reject mutation frames");
+        assert!(error.contains("invalid frame magic"), "{error}");
+    }
+
+    #[test]
     fn every_byte_truncation_keeps_only_proven_frames() {
         let (frames, bytes) = sample_chain();
         let boundaries: Vec<usize> = frames
@@ -854,7 +922,7 @@ mod tests {
         let second_record_hash_offset = second_offset + frames[1].len() - RECORD_HASH_LEN;
         let field_offsets = [
             second_offset,
-            second_offset + WAL_MAGIC.len(),
+            second_offset + NTE_WAL_MAGIC.len(),
             second_offset + PREFIX_LEN,
             second_offset + PREFIX_LEN + 2,
             second_offset + PREFIX_LEN + 3,

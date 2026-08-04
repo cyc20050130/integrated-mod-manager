@@ -357,6 +357,28 @@
 						"Import": "Import",
 						"Export": "Export"
 					},
+					"Diagnostics": "Crash Diagnostics",
+					"_Diagnostics": {
+						"Status": "Status",
+						"Enable": "Enable dumps",
+						"Remove": "Remove dumps",
+						"Recover": "Recover & enable",
+						"Refresh": "Refresh status",
+						"Working": "Working...",
+						"Owners": "Registered installs",
+						"DumpFolder": "Dump folder",
+						"Updated": "Crash diagnostics updated.",
+						"OperationFailed": "Crash diagnostics operation failed",
+						"_States": {
+							"UnsupportedBuild": "Unavailable in development or portable builds",
+							"Disabled": "Disabled",
+							"Enabled": "Enabled",
+							"Unmanaged": "External WER configuration detected",
+							"Drifted": "Managed configuration was changed externally",
+							"ManagedByOtherInstall": "Managed by another IMM installation",
+							"RecoveryRequired": "An interrupted WER operation needs recovery"
+						}
+					},
 					"Folders": "<game/> and Mods Folder",
 					"ModDir": "Mods Directories",
 					"XXMIDir": "XXMI Directory",
@@ -1004,6 +1026,28 @@
 						"Import": "导入",
 						"Export": "导出"
 					},
+					"Diagnostics": "崩溃诊断",
+					"_Diagnostics": {
+						"Status": "状态",
+						"Enable": "启用转储",
+						"Remove": "移除转储",
+						"Recover": "恢复并启用",
+						"Refresh": "刷新状态",
+						"Working": "处理中...",
+						"Owners": "已登记安装数",
+						"DumpFolder": "转储目录",
+						"Updated": "崩溃诊断状态已更新。",
+						"OperationFailed": "崩溃诊断操作失败",
+						"_States": {
+							"UnsupportedBuild": "开发版或便携版不支持",
+							"Disabled": "未启用",
+							"Enabled": "已启用",
+							"Unmanaged": "检测到外部 WER 配置",
+							"Drifted": "受管配置已被外部修改",
+							"ManagedByOtherInstall": "由另一个 IMM 安装管理",
+							"RecoveryRequired": "未完成的 WER 操作需要恢复"
+						}
+					},
 					"Folders": "<game/> 和模组文件夹",
 					"ModDir": "模组目录",
 					"XXMIDir": "XXMI 目录",
@@ -1646,6 +1690,28 @@
 						"Import": "Импорт",
 						"Export": "Экспорт"
 					},
+					"Diagnostics": "Диагностика сбоев",
+					"_Diagnostics": {
+						"Status": "Состояние",
+						"Enable": "Включить дампы",
+						"Remove": "Удалить дампы",
+						"Recover": "Восстановить и включить",
+						"Refresh": "Обновить состояние",
+						"Working": "Выполняется...",
+						"Owners": "Зарегистрированные установки",
+						"DumpFolder": "Папка дампов",
+						"Updated": "Диагностика сбоев обновлена.",
+						"OperationFailed": "Ошибка операции диагностики сбоев",
+						"_States": {
+							"UnsupportedBuild": "Недоступно в сборке для разработки или portable",
+							"Disabled": "Отключено",
+							"Enabled": "Включено",
+							"Unmanaged": "Обнаружена внешняя конфигурация WER",
+							"Drifted": "Управляемая конфигурация была изменена извне",
+							"ManagedByOtherInstall": "Управляется другой установкой IMM",
+							"RecoveryRequired": "Незавершенная операция WER требует восстановления"
+						}
+					},
 					"Folders": "<game/> и папка модов",
 					"ModDir": "Папки модов",
 					"XXMIDir": "Папка XXMI",
@@ -2278,6 +2344,28 @@
 						"Import": "インポート",
 						"Export": "エクスポート"
 					},
+					"Diagnostics": "クラッシュ診断",
+					"_Diagnostics": {
+						"Status": "状態",
+						"Enable": "ダンプを有効化",
+						"Remove": "ダンプを削除",
+						"Recover": "復旧して有効化",
+						"Refresh": "状態を更新",
+						"Working": "処理中...",
+						"Owners": "登録済みインストール",
+						"DumpFolder": "ダンプフォルダ",
+						"Updated": "クラッシュ診断を更新しました。",
+						"OperationFailed": "クラッシュ診断の操作に失敗しました",
+						"_States": {
+							"UnsupportedBuild": "開発版またはポータブル版では利用できません",
+							"Disabled": "無効",
+							"Enabled": "有効",
+							"Unmanaged": "外部 WER 設定を検出しました",
+							"Drifted": "管理対象の設定が外部から変更されています",
+							"ManagedByOtherInstall": "別の IMM インストールが管理しています",
+							"RecoveryRequired": "未完了の WER 操作を復旧する必要があります"
+						}
+					},
 					"Folders": "<game/> とModフォルダ",
 					"ModDir": "Modディレクトリ",
 					"XXMIDir": "XXMIディレクトリ",
@@ -2907,6 +2995,28 @@
 						"ExportPop": "설정 내보내기",
 						"Import": "가져오기",
 						"Export": "내보내기"
+					},
+					"Diagnostics": "충돌 진단",
+					"_Diagnostics": {
+						"Status": "상태",
+						"Enable": "덤프 활성화",
+						"Remove": "덤프 제거",
+						"Recover": "복구 후 활성화",
+						"Refresh": "상태 새로고침",
+						"Working": "처리 중...",
+						"Owners": "등록된 설치 수",
+						"DumpFolder": "덤프 폴더",
+						"Updated": "충돌 진단 상태가 업데이트되었습니다.",
+						"OperationFailed": "충돌 진단 작업 실패",
+						"_States": {
+							"UnsupportedBuild": "개발 또는 포터블 빌드에서는 사용할 수 없습니다",
+							"Disabled": "비활성화됨",
+							"Enabled": "활성화됨",
+							"Unmanaged": "외부 WER 설정이 감지되었습니다",
+							"Drifted": "관리 설정이 외부에서 변경되었습니다",
+							"ManagedByOtherInstall": "다른 IMM 설치에서 관리 중입니다",
+							"RecoveryRequired": "완료되지 않은 WER 작업을 복구해야 합니다"
+						}
 					},
 					"Folders": "<game/> 및 모드 폴더",
 					"ModDir": "모드 디렉토리",

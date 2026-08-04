@@ -1,9 +1,10 @@
 import React from "react";
 import { Label } from "@/components/ui/label";
-import { getImageUrl, handleImageError, handleInAppLink } from "@/utils/utils";
+import { handleImageError, handleInAppLink } from "@/utils/utils";
 import { Link2Icon, Link2OffIcon, SwordsIcon, TriangleAlertIcon, UploadIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { openConflict } from "@/utils/vars";
+import { usePreviewAssetUrl } from "@/utils/imagePreview";
 
 interface CardLocalProps {
 	item: {
@@ -19,8 +20,8 @@ interface CardLocalProps {
 			vertical?: boolean;
 		};
 	};
+	game?: string;
 	selected: boolean;
-	lastUpdated: number;
 	hasUpdate: boolean;
 	updateAvl: string;
 	inConflict: number;
@@ -31,15 +32,15 @@ interface CardLocalProps {
 const CardLocal = React.memo(
 	({
 		item,
+		game = "",
 		selected,
-		lastUpdated,
 		hasUpdate,
 		updateAvl,
 		inConflict,
 		isBlacklisted,
 		blacklistedLabel,
 	}: CardLocalProps) => {
-		const previewUrl = `${getImageUrl(item.path)}?${lastUpdated}`;
+		const previewUrl = usePreviewAssetUrl(game, item.path);
 		return (
 			<div
 				className={`card-generic relative ${selected ? "selected-card" : ""}`}
@@ -64,7 +65,7 @@ const CardLocal = React.memo(
 							minHeight: item.crop?.vertical ? "fit-content" : "18rem",
 						}}
 						className="w-full h-full relative object-cover object-center"
-						src={previewUrl}
+						src={previewUrl || "/who.jpg"}
 						loading="lazy"
 						decoding="async"
 						onError={(e) => handleImageError(e)}

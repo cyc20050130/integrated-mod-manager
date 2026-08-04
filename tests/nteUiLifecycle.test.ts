@@ -28,6 +28,16 @@ test("NTE checklist selection bypasses XXMI onboarding", () => {
 	);
 });
 
+test("NTE sidebar renders the complete game title with compact bounded typography", () => {
+	const left = readSource("src/_LeftSidebar/Left.tsx");
+
+	assert.match(left, /const gameTitle = GAME_NAMES\[game\] \|\| "Integrated"/);
+	assert.match(left, /const compactGameTitle = gameTitle\.length > 12/);
+	assert.match(left, /compactGameTitle \? "text-sm leading-4 text-balance" : "text-2xl leading-none"/);
+	assert.match(left, /className="font-en flex w-36 min-w-0 flex-col text-center/);
+	assert.doesNotMatch(left, /text-2xl text-\[#eaeaea\] min-w-fit/);
+});
+
 test("NTE checklist revalidates a persisted mods root before completing onboarding", () => {
 	const page3 = readSource("src/_Checklist/pages/Page3.tsx");
 
@@ -35,7 +45,7 @@ test("NTE checklist revalidates a persisted mods root before completing onboardi
 		page3,
 		/invoke<NteGameRootValidation>\("validate_nte_mods_root", \{\s*modsRoot: tgt,\s*region: nteRegion === "auto" \? null : nteRegion,\s*\}\)/s
 	);
-	assert.match(page3, /setPage\(validation\.valid \? 4 : 3\)/);
+	assert.match(page3, /if \(validation\.valid\) completeRuntimeBootstrap\("NTE"\)/);
 	assert.doesNotMatch(page3, /if \(game === "NTE" && src && tgt\) \{\s*setPage\(4\);/s);
 });
 
@@ -53,10 +63,16 @@ test("NTE path setup validates a selected game root and persists the resolved re
 	assert.match(page4, /setTarget\(validation\.modsRoot\)/);
 	assert.match(page4, /setChecked\(1\)/);
 	assert.match(page4, /setNteRegion\(validation\.region\)/);
+	assert.match(
+		page4,
+		/await flushRuntimeState\("configure-nte", \{[\s\S]*source: sourceRoot,[\s\S]*target: validation\.modsRoot/s
+	);
+	assert.match(page4, /await ensureManagedSourceDir\("NTE"\)/);
+	assert.match(page4, /completeRuntimeBootstrap\("NTE"\)/);
 	assert.match(filesys, /nteRegion: snapshot\.nteRegion \?\? store\.get\(NTE_REGION\)/);
 	assert.match(
 		init,
-		/if \(game !== "NTE" && configXX\.targetDir && !\(await pathExistsNative\(configXX\.targetDir\)\)\)/
+		/if \(game !== "NTE" && configXX\.targetDir && !\(await managedGameRootExists\(game, "target"\)\)\)/
 	);
 	assert.match(types, /nteRegion\?: NteRegion/);
 	assert.equal(defaults.custom, 1);
@@ -89,7 +105,7 @@ test("NTE toggle and delete use the native lifecycle command before legacy files
 
 	assert.match(toggleMod, /if \(store\.get\(GAME\) === "NTE"\)/);
 	assert.match(toggleMod, /invoke\("set_nte_mod_enabled", \{\s*relativePath: path,\s*enabled,\s*\}\)/s);
-	assert.ok(toggleMod.indexOf('invoke("set_nte_mod_enabled"') < toggleMod.indexOf('invoke("create_symlink"'));
+	assert.ok(toggleMod.indexOf('invoke("set_nte_mod_enabled"') < toggleMod.indexOf('invoke("set_managed_mod_enabled"'));
 	assert.ok(toggleMod.indexOf("return true;") < toggleMod.indexOf("syncIniStateFromD3DXIni"));
 
 	assert.match(deleteMod, /const isNte = store\.get\(GAME\) === "NTE"/);
@@ -151,6 +167,38 @@ test("NTE checklist localization keys are unique per language", () => {
 			`${key} must occur once per language`
 		);
 	}
+});
+
+test("runtime readiness is generation-scoped and independent from Changes", () => {
+	const app = readSource("src/App.tsx");
+	const changes = readSource("src/_Changes/Changes.tsx");
+	const init = readSource("src/utils/init.ts");
+	const page2 = readSource("src/_Checklist/pages/Page2.tsx");
+	const types = readSource("src/utils/types.ts");
+	const vars = readSource("src/utils/vars.ts");
+
+	for (const phase of ["cold", "preparing", "prepared", "needsConfiguration", "ready", "failed"]) {
+		assert.match(types, new RegExp(`\\"${phase}\\"`));
+	}
+	assert.match(vars, /const INIT_DONE = atom\(\(get\) => get\(BOOTSTRAP_STATE\)\.phase === "ready"\)/);
+	assert.doesNotMatch(changes, /INIT_DONE|setInitDone|setTimeout\(/);
+	assert.match(changes, /await onComplete\(\)/);
+	assert.match(changes, /catch \(completionError\)/);
+	assert.match(app, /bootstrapState\.phase !== "ready"/);
+	assert.match(app, /if \(bootstrapState\.phase !== "ready"\) return/);
+	assert.ok(app.indexOf('bootstrapState.phase !== "ready"') < app.indexOf("await refreshModList()"));
+
+	assert.doesNotMatch(page2, /initGame\(/);
+	for (const game of ["WW", "ZZ", "GI", "SR", "EF", "NTE"]) {
+		assert.match(page2, new RegExp(`await switchGame\\(\\"${game}\\"\\)`));
+	}
+	assert.match(page2, /const result = await main\(gameCode\)/);
+	assert.match(init, /let latestBootstrapGeneration = 0/);
+	assert.match(init, /let bootstrapQueue: Promise<void> = Promise\.resolve\(\)/);
+	assert.match(init, /bootstrapQueue\.then\(\(\) => runRuntimeBootstrap\(useGame, generation\)\)/);
+	assert.match(init, /if \(generation !== latestBootstrapGeneration\) return store\.get\(BOOTSTRAP_STATE\)/);
+	assert.match(init, /await setCategories\(game, status, false, generationForCurrentBootstrap\(\)\)/);
+	assert.match(init, /void setCategories\(readyState\.game, false, true, readyState\.generation\)/);
 });
 
 test("NTE deletion commits UI state only after the managed source deletion succeeds", () => {
@@ -233,46 +281,59 @@ test("NTE batch and category mutations serialize native mod-leaf transactions", 
 	assert.match(deleteCategory, /for \(const modPath of modPaths\) await deleteMod\(modPath\)/);
 });
 
-test("NTE config writes use native revision CAS and rename does not rewrite stale snapshots", () => {
-	const revision = readSource("src/utils/nteConfigRevision.ts");
+test("managed config writes use scoped AppStateRepository CAS and NTE mutations share its lock", () => {
+	const repository = readSource("src/utils/appConfigRepository.ts");
 	const filesys = readSource("src/utils/filesys.ts");
 	const rust = readSource("src-tauri/src/nte.rs");
-	const lib = readSource("src-tauri/src/lib.rs");
+	const appState = readSource("src-tauri/src/app_state.rs");
 	const errorCatcher = readSource("src/utils/errorCatcher.tsx");
 	const linkIntegrity = readSource("src/utils/linkIntegrity.ts");
 
-	assert.match(revision, /invoke<string>\("save_nte_config"/);
-	assert.match(revision, /expectedUpdatedAt,/);
-	assert.match(revision, /generationAtCall === nativeMutationGeneration \? currentRevision : expectedAtCall/);
-	assert.match(
-		revision,
-		/await invoke<string>\("save_nte_config"[\s\S]*shouldAcceptNteConfigSaveResponse\(generationAtCall, nativeMutationGeneration\)/
-	);
-	assert.match(filesys, /path\.replaceAll\("\/", "\\\\"\) === "configNTE\.json"/);
+	assert.match(repository, /invoke<AppConfigSnapshot>\("save_app_config"/);
+	assert.match(repository, /expectedGlobalRevision:/);
+	assert.match(repository, /expectedGameRevision:/);
+	assert.match(repository, /let saveQueue: Promise<void> = Promise\.resolve\(\)/);
+	assert.match(filesys, /getManagedConfigTarget\(path\)/);
+	assert.match(filesys, /persistRuntimeConfigs\(/);
 	assert.match(rust, /NTE_CONFIG_LOCK_FILE/);
 	assert.match(rust, /persist_nte_config_cas/);
-	assert.match(rust, /changed while this update was pending/);
-	assert.match(lib, /configNTE\.json must be written through save_nte_config/);
-	assert.match(errorCatcher, /content\.game === "NTE"\) await persistNteConfig/);
-	assert.match(linkIntegrity, /gameReport\.game === "NTE"\) await persistNteConfig/);
+	assert.match(rust, /coordinate_runtime_game_mutation\("NTE"/);
+	assert.match(
+		appState,
+		/pub\(crate\) fn save_app_config\([\s\S]*expected_global_revision:[\s\S]*expected_game_revision:/
+	);
+	assert.match(appState, /with_global_lock\(&self\.paths\.control_root,[\s\S]*save_config_for_mod_mutation/);
+	assert.doesNotMatch(errorCatcher, /writeManagedConfigText|getManagedConfigTarget/);
+	assert.match(errorCatcher, /resetWithBackup/);
+	assert.match(linkIntegrity, /writeManagedConfigText\(managedConfig/);
 });
 
-test("NTE config reads use the same no-follow identity-checked native entrypoint", () => {
-	const revision = readSource("src/utils/nteConfigRevision.ts");
+test("managed config reads use AppStateRepository while native NTE internals retain identity checks", () => {
+	const repository = readSource("src/utils/appConfigRepository.ts");
 	const init = readSource("src/utils/init.ts");
 	const filesys = readSource("src/utils/filesys.ts");
 	const linkIntegrity = readSource("src/utils/linkIntegrity.ts");
 	const rust = readSource("src-tauri/src/nte.rs");
 	const lib = readSource("src-tauri/src/lib.rs");
+	const managedFs = readSource("src-tauri/src/managed_fs.rs");
 
-	assert.match(revision, /invoke<string>\("load_nte_config"\)/);
-	assert.match(init, /configNTE\.json"\) return loadNteConfigText\(\)/);
-	assert.match(filesys, /configNTE\.json"\) return loadNteConfigText\(\)/);
-	assert.match(linkIntegrity, /game === "NTE" \? loadNteConfigText\(\) : readTextFile\(configPath\)/);
-	assert.match(rust, /pub fn load_nte_config\(\)[\s\S]*read_nte_config_value\(&config_dir, "for renderer load"\)/);
+	assert.match(repository, /invoke<AppConfigSnapshot>\("load_app_config"/);
+	assert.match(init, /getManagedConfigTarget\(pathLike\)/);
+	assert.match(filesys, /readManagedConfigText\(managedConfig\)/);
+	assert.match(linkIntegrity, /readManagedConfigText\(managedConfig\)/);
+	assert.match(rust, /pub fn load_nte_config\([\s\S]*repository\.load_game_value\("NTE"\)/);
 	assert.match(rust, /pub\(crate\) fn persisted_nte_game_directories\([\s\S]*load_persisted_nte_config/);
 	assert.match(lib, /if game == "NTE" \{[\s\S]*nte::persisted_nte_game_directories\(config_dir\)/);
-	assert.match(lib, /configNTE\.json must be read through load_nte_config/);
+	assert.match(managedFs, /ManagedGamePaths::load\(&repository, &game\)\?/);
+	assert.doesNotMatch(lib, /fn read_text_file_native\(|read_text_file_native,/);
+});
+
+test("legacy relative backups cannot restore or overwrite AppStateRepository configs", () => {
+	const init = readSource("src/utils/init.ts");
+	const maintainBackups = sourceBetween(init, "export function maintainBackups()", 'let cwd = ""');
+
+	assert.match(maintainBackups, /integrity and recovery are managed by AppStateRepository/);
+	assert.doesNotMatch(maintainBackups, /backups|AUTO_|safeWriteTextFile|safeReadTextFile|remove\(/);
 });
 
 test("an older NTE save response cannot overwrite a newer native mutation revision", () => {
@@ -304,7 +365,7 @@ test("NTE deletion is committed by the native quarantine transaction", () => {
 	assert.match(lib, /nte::delete_nte_mod/);
 });
 
-test("NTE download validation redeploys an update when the Mod was already enabled", () => {
+test("NTE download completion is committed by the native transaction", () => {
 	const filesys = readSource("src/utils/filesys.ts");
 	const validateDownload = sourceBetween(
 		filesys,
@@ -320,13 +381,12 @@ test("NTE download validation redeploys an update when the Mod was already enabl
 	assert.match(validateDownload, /catch \(err\) \{[\s\S]*return false;/);
 
 	const downloads = readSource("src/_LeftSidebar/components/Downloads.tsx");
-	assert.match(
-		downloads,
-		/if \(!\(await validateModDownload\(finished\.dlPath \|\| ""\)\)\) \{[\s\S]*handleDownloadFailure\(key,[\s\S]*"validation"\);[\s\S]*return;/
-	);
+	assert.match(downloads, /installState: \{[\s\S]*completedDownload: runtimeItem/);
+	assert.match(downloads, /acceptCommittedAppConfigSnapshot\(snapshot, game\)/);
+	assert.match(downloads, /if \(type === "auto"\) \{[\s\S]*native command publishes[\s\S]*return;\s*\} else \{/);
 });
 
-test("NTE downloads, manual installs, and previews never write directly into a visible Mod leaf", () => {
+test("downloads, manual installs, and managed previews never write directly into a visible Mod leaf", () => {
 	const filesys = readSource("src/utils/filesys.ts");
 	const downloads = readSource("src/_LeftSidebar/components/Downloads.tsx");
 	const rust = readSource("src-tauri/src/lib.rs");
@@ -340,18 +400,23 @@ test("NTE downloads, manual installs, and previews never write directly into a v
 	const manualInstall = filesys.slice(manualInstallStart);
 
 	assert.match(createTarget, /const isNte = store\.get\(GAME\) === "NTE"/);
-	assert.match(createTarget, /if \(!isNte\) await mkdir\(path, \{ recursive: true \}\)/);
+	assert.match(createTarget, /if \(!isNte\) await mkdir\(categoryRoot, \{ recursive: true \}\)/);
+	assert.doesNotMatch(createTarget, /if \(!isNte\) await mkdir\(path, \{ recursive: true \}\)/);
 	assert.match(manualInstall, /if \(!isNte\) await mkdir\(dest, \{ recursive: true \}\)/);
 	assert.match(downloads, /createdDlPath && game !== "NTE"/);
-	assert.match(rust, /nte_download_staging_directory\(&app_handle, &key, &requested_save_path\)/);
+	assert.match(rust, /nte_download_staging_directory\(\s*&app_handle,\s*&key,\s*&requested_save_path,?\s*\)\?/);
+	assert.match(rust, /ensure_nte_library_destination_parent/);
 	assert.match(rust, /deploy_downloaded_nte_preview/);
 	assert.match(rust, /stage_and_deploy_nte_preview/);
 	assert.match(rust, /deploy_staged_directory\([\s\S]*Some\(journal\)/);
-	assert.match(filesys, /store\.get\(GAME\) === "NTE"[\s\S]*invoke\("save_nte_preview_data"/);
-	assert.match(filesys, /store\.get\(GAME\) === "NTE"[\s\S]*invoke\("import_nte_preview_file"/);
-	assert.match(rust, /fn deploy_local_nte_preview<[\s\S]*deploy_downloaded_nte_preview/);
-	assert.match(rust, /async fn save_nte_preview_data/);
-	assert.match(rust, /async fn import_nte_preview_file/);
+	assert.match(filesys, /invoke\("save_managed_preview_data", \{[\s\S]*game,[\s\S]*relativePath: relPath/);
+	assert.match(filesys, /invoke\("import_managed_preview_file", \{[\s\S]*game,[\s\S]*relativePath: relPath/);
+	assert.doesNotMatch(filesys, /\bwriteFile\s*\(/);
+	assert.match(rust, /async fn replace_managed_preview\(/);
+	assert.match(rust, /decode_and_reencode_preview_jpeg\(data\)/);
+	assert.match(rust, /operation: "local_preview_replacement"/);
+	assert.match(rust, /ManagedPreviewInput::File\(source\) => read_selected_preview_file\(&source\)\?/);
+	assert.doesNotMatch(rust, /save_nte_preview_data|import_nte_preview_file|deploy_local_nte_preview/);
 });
 
 test("NTE hidden download staging is reclaimed after an owner process exits", () => {
@@ -404,7 +469,7 @@ test("legacy game checklist and XXMI lifecycle branches remain present", () => {
 	for (const game of ["WW", "ZZ", "GI", "SR", "EF"]) {
 		assert.match(page2, new RegExp(`switchGame\\("${game}"\\)`));
 	}
-	assert.match(filesys, /invoke\("create_symlink"/);
+	assert.match(filesys, /invoke\("set_managed_mod_enabled"/);
 	assert.match(filesys, /syncIniStateFromD3DXIni\(/);
 	assert.match(init, /executeXXMI\(/);
 });

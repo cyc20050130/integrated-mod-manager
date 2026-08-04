@@ -500,9 +500,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											}
 										} else {
 											await Promise.all(
-												selectedPaths.map((modPath) =>
-													guardedRemove(join(source, modPath), { recursive: true, allowedRoots: [source] })
-												)
+												selectedPaths.map((modPath) => guardedRemove(join(source, modPath), { recursive: true }))
 											);
 										}
 										resetSelectionState();
@@ -634,7 +632,7 @@ function BatchOperations({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 											selected.map((modPath) => {
 												const modName = modPath.split("\\").slice(-1)[0];
 												const newPath = dest + "\\" + modName;
-												return guardedRename(join(source, modPath), newPath, { allowedRoots: [source] });
+												return guardedRename(join(source, modPath), newPath);
 											})
 										);
 									}

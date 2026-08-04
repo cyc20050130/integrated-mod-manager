@@ -11,12 +11,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { GAME_NAMES, LANG_LIST } from "@/utils/consts";
 import { saveConfigs, setConfig } from "@/utils/filesys";
 import { encodeHotkeyForStorage, formatHotkeyDisplay, processHotkeyCode } from "@/utils/hotkeyUtils";
-import { join, setHotreload } from "@/utils/hotreload";
-import { getCwd, setPrePostLaunch, setWindowType } from "@/utils/init";
+import { setHotreload } from "@/utils/hotreload";
+import { requestRuntimeConfiguration, setPrePostLaunch, setWindowType } from "@/utils/init";
 import TEXT from "@/textData.json";
 import { exportConfig, keySort } from "@/utils/utils";
 import {
-	INIT_DONE,
 	LINK_AUDIT_REPORT,
 	LINK_AUDIT_RUNNING,
 	PRESETS,
@@ -24,7 +23,6 @@ import {
 	SAVED_LANG,
 	SETTINGS,
 	SOURCE,
-	store,
 	TARGET,
 	TEXT_DATA,
 	XXMI_MODE,
@@ -32,8 +30,7 @@ import {
 import { DownloadSettings } from "@/utils/types";
 import { DEFAULT_DOWNLOAD_SETTINGS } from "@/utils/downloads";
 import { Separator } from "@radix-ui/react-separator";
-import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 import { useAtom, useAtomValue } from "jotai";
 import { exportLinkAuditReport, runLinkIntegrityScan, runPreviewBackfill } from "@/utils/linkIntegrity";
 import {
@@ -53,13 +50,59 @@ import {
 	MousePointerClickIcon,
 	PauseIcon,
 	PlayIcon,
+	RefreshCwIcon,
 	SettingsIcon,
+	ShieldCheckIcon,
+	ShieldOffIcon,
 	SquareIcon,
 	UploadIcon,
+	WrenchIcon,
 	XIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
+
+type WerLocalDumpsState =
+	| "unsupported_build"
+	| "disabled"
+	| "enabled"
+	| "unmanaged"
+	| "drifted"
+	| "managed_by_other_install"
+	| "recovery_required";
+
+type WerLocalDumpsStatus = {
+	available: boolean;
+	state: WerLocalDumpsState;
+	currentInstallRegistered: boolean;
+	ownerCount: number;
+	dumpFolderTemplate: string;
+};
+
+const WER_STATE_TEXT_KEYS = {
+	unsupported_build: "UnsupportedBuild",
+	disabled: "Disabled",
+	enabled: "Enabled",
+	unmanaged: "Unmanaged",
+	drifted: "Drifted",
+	managed_by_other_install: "ManagedByOtherInstall",
+	recovery_required: "RecoveryRequired",
+} as const;
+
+const WER_STATE_STYLES: Record<WerLocalDumpsState, string> = {
+	unsupported_build: "text-muted-foreground",
+	disabled: "text-muted-foreground",
+	enabled: "text-success",
+	unmanaged: "text-warn",
+	drifted: "text-destructive",
+	managed_by_other_install: "text-accent",
+	recovery_required: "text-destructive",
+};
+
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 let bg: HTMLBodyElement | null = null;
 let keys: string[] = [];
 let keysdown: string[] = [];
@@ -71,17 +114,57 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	const [savedLang, setSavedLang] = useAtom(SAVED_LANG);
 	const [alertType, setAlertType] = useState<"lang" | "xxmi">("lang");
 	const [_, setSource] = useAtom(SOURCE);
-	const [target, setTarget] = useAtom(TARGET);
+	const [, setTarget] = useAtom(TARGET);
 	const [settings, setSettings] = useAtom(SETTINGS);
 	const linkAuditReport = useAtomValue(LINK_AUDIT_REPORT);
 	const linkAuditRunning = useAtomValue(LINK_AUDIT_RUNNING);
 	const previewBackfillState = useAtomValue(PREVIEW_BACKFILL_STATE);
 	const [alertOpen, setAlertOpen] = useState(false);
 	const [globalPage, setGlobalPage] = useState(true);
+	const [werStatus, setWerStatus] = useState<WerLocalDumpsStatus | null>(null);
+	const [werLoading, setWerLoading] = useState(false);
+	const [werBusy, setWerBusy] = useState(false);
 	const [langAlertData, setLangAlertData] = useState({ prev: "en", new: "en" } as {
 		prev: keyof typeof TEXT;
 		new: keyof typeof TEXT;
 	});
+	const werText = textData._LeftSideBar._components._Settings._Diagnostics;
+	const refreshWerStatus = useCallback(
+		async (notifyOnError = true): Promise<WerLocalDumpsStatus | null> => {
+			setWerLoading(true);
+			try {
+				const nextStatus = await invoke<WerLocalDumpsStatus>("get_wer_local_dumps_status");
+				setWerStatus(nextStatus);
+				return nextStatus;
+			} catch (error) {
+				setWerStatus(null);
+				if (notifyOnError) {
+					addToast({ type: "error", message: `${werText.OperationFailed}: ${getErrorMessage(error)}` });
+				}
+				return null;
+			} finally {
+				setWerLoading(false);
+			}
+		},
+		[werText.OperationFailed]
+	);
+	const runWerAction = async (command: "configure_wer_local_dumps" | "remove_wer_local_dumps") => {
+		setWerBusy(true);
+		try {
+			await invoke<void>(command);
+			await refreshWerStatus(false);
+			addToast({ type: "success", message: werText.Updated });
+		} catch (error) {
+			await refreshWerStatus(false);
+			addToast({ type: "error", message: `${werText.OperationFailed}: ${getErrorMessage(error)}` });
+		} finally {
+			setWerBusy(false);
+		}
+	};
+	const handleSettingsOpenChange = (open: boolean) => {
+		setSettingsOpen(open);
+		if (open) void refreshWerStatus();
+	};
 	const setDownloadNumber = (field: keyof DownloadSettings, min: number, max: number, raw: string) => {
 		const parsed = Number.parseInt(raw, 10);
 		if (!Number.isFinite(parsed)) return;
@@ -98,34 +181,11 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	};
 	const importConfig = async () => {
 		try {
-			const dialogOptions: {
-				title: string;
-				filters: { name: string; extensions: string[] }[];
-				defaultPath?: string;
-			} = {
-				title: textData._LeftSideBar._components._Settings._ImportExport.ImportPop || "Import Config",
-				filters: [
-					{
-						name: "JSON files",
-						extensions: ["json", "json.bak", "json.bak.bak"],
-					},
-				],
-			};
-
-			dialogOptions.defaultPath = join(getCwd(), "backups");
-
-			const filePath = await open(dialogOptions);
-
-			if (filePath) {
-				const content = await readTextFile(filePath as string);
-				try {
-					setConfig(JSON.parse(content));
-					setSettingsOpen(false);
-					addToast({ type: "success", message: textData._Toasts.ConfigImported });
-				} catch {
-					addToast({ type: "error", message: textData._Toasts.InvalidConfig });
-				}
-			}
+			const content = await invoke<string | null>("pick_json_import_document");
+			if (!content) return;
+			await setConfig(JSON.parse(content));
+			setSettingsOpen(false);
+			addToast({ type: "success", message: textData._Toasts.ConfigImported });
 		} catch {
 			addToast({ type: "error", message: textData._Toasts.ErrorImporting });
 		}
@@ -145,7 +205,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 	};
 
 	return (
-		<Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+		<Dialog open={settingsOpen} onOpenChange={handleSettingsOpenChange}>
 			<DialogTrigger asChild>
 				<Button
 					onClick={() => {}}
@@ -156,7 +216,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 					{leftSidebarOpen && textData.Settings}
 				</Button>
 			</DialogTrigger>
-			<DialogContent className="min-h-fit">
+			<DialogContent className="max-h-[90vh] min-h-fit overflow-y-auto">
 				<AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
 					<AlertDialogContent
 						className="game-font bg-background/50 backdrop-blur-xs border-border flex flex-col items-center gap-4 p-4 overflow-hidden border-2 rounded-lg"
@@ -473,6 +533,85 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 												))}
 											</div>
 										</div>
+										<div className="flex flex-col w-full gap-2">
+											<div className="flex items-center justify-between gap-2">
+												<div className="flex items-center gap-1">
+													<ShieldCheckIcon className="size-4" />
+													{textData._LeftSideBar._components._Settings.Diagnostics}
+												</div>
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<Button
+															variant="ghost"
+															size="icon"
+															className="size-8"
+															disabled={werLoading || werBusy}
+															onClick={() => void refreshWerStatus()}
+															aria-label={werText.Refresh}
+														>
+															<RefreshCwIcon className={werLoading ? "animate-spin" : ""} />
+														</Button>
+													</TooltipTrigger>
+													<TooltipContent>{werText.Refresh}</TooltipContent>
+												</Tooltip>
+											</div>
+											<div className="flex items-start justify-between gap-3 text-xs">
+												<span className="text-muted-foreground">{werText.Status}</span>
+												<span
+													role="status"
+													className={`min-w-0 text-right break-words ${
+														werStatus ? WER_STATE_STYLES[werStatus.state] : "text-muted-foreground"
+													}`}
+												>
+													{werLoading
+														? werText.Working
+														: werStatus
+															? werText._States[WER_STATE_TEXT_KEYS[werStatus.state]]
+															: "-"}
+												</span>
+											</div>
+											{werStatus && werStatus.ownerCount > 0 && (
+												<div className="flex justify-between gap-3 text-[11px] text-muted-foreground">
+													<span>{werText.Owners}</span>
+													<span>{werStatus.ownerCount}</span>
+												</div>
+											)}
+											{werStatus && ["enabled", "managed_by_other_install"].includes(werStatus.state) && (
+												<div className="flex flex-col gap-1 text-[11px] text-muted-foreground">
+													<span>{werText.DumpFolder}</span>
+													<span className="font-mono break-all">{werStatus.dumpFolderTemplate}</span>
+												</div>
+											)}
+											{werStatus &&
+												(werStatus.state === "disabled" ||
+													werStatus.state === "managed_by_other_install" ||
+													werStatus.state === "recovery_required") && (
+													<Button
+														size="sm"
+														variant={werStatus.state === "recovery_required" ? "warn" : "success"}
+														disabled={werBusy || werLoading}
+														onClick={() => void runWerAction("configure_wer_local_dumps")}
+													>
+														{werStatus.state === "recovery_required" ? <WrenchIcon /> : <ShieldCheckIcon />}
+														{werBusy
+															? werText.Working
+															: werStatus.state === "recovery_required"
+																? werText.Recover
+																: werText.Enable}
+													</Button>
+												)}
+											{werStatus?.state === "enabled" && (
+												<Button
+													size="sm"
+													variant="destructive"
+													disabled={werBusy || werLoading}
+													onClick={() => void runWerAction("remove_wer_local_dumps")}
+												>
+													<ShieldOffIcon />
+													{werBusy ? werText.Working : werText.Remove}
+												</Button>
+											)}
+										</div>
 									</div>
 								</>
 							) : (
@@ -515,7 +654,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 														prev.game.hotReload = nextValue;
 														return { ...prev };
 													});
-													setHotreload(nextValue, settings.global.game, target);
+													setHotreload(nextValue, settings.global.game);
 													saveConfigs();
 												}}
 											>
@@ -615,7 +754,7 @@ function Settings({ leftSidebarOpen }: { leftSidebarOpen: boolean }) {
 														setTarget("");
 														setSettingsOpen(false);
 														skipPage();
-														store.set(INIT_DONE, false);
+														requestRuntimeConfiguration("change-mod-directory");
 													}}
 												>
 													{textData._LeftSideBar._components._Settings.Change}

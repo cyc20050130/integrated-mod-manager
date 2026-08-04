@@ -91,6 +91,24 @@ function normalizeItem(item: Record<string, unknown> | null | undefined): Downlo
 	if (Number.isFinite(item.updatedAt)) normalized.updatedAt = Number(item.updatedAt);
 	if (item.lastError) normalized.lastError = String(item.lastError);
 	if (Number.isFinite(item.lastTriedAt)) normalized.lastTriedAt = Number(item.lastTriedAt);
+	if (Number.isSafeInteger(item.gameBananaModId) && Number(item.gameBananaModId) > 0) {
+		normalized.gameBananaModId = Number(item.gameBananaModId);
+	}
+	if (item.gameBananaFileId) normalized.gameBananaFileId = String(item.gameBananaFileId);
+	if (Number.isFinite(item.expectedSize) && Number(item.expectedSize) >= 0) {
+		normalized.expectedSize = Number(item.expectedSize);
+	}
+	if (
+		item.expectedHash &&
+		typeof item.expectedHash === "object" &&
+		(item.expectedHash as Record<string, unknown>).algorithm === "md5" &&
+		/^[a-f0-9]{32}$/i.test(String((item.expectedHash as Record<string, unknown>).value || ""))
+	) {
+		normalized.expectedHash = {
+			algorithm: "md5",
+			value: String((item.expectedHash as Record<string, unknown>).value),
+		};
+	}
 
 	return normalized;
 }

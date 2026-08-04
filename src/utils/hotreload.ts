@@ -8,39 +8,18 @@ export function join(...parts: string[]) {
 	result = result.startsWith("\\") ? result.slice(1) : result;
 	return result;
 }
-export function updateIni(tgt: string, foreground = 0) {
-	tgt = tgt.split("\\").slice(0, -1).join("\\");
-	const target = join(tgt, "d3dx.ini");
-	invoke<boolean>("path_exists_native", { path: target })
-		.then((res) => {
-			if (!res) return;
-			return invoke<string>("read_text_file_native", { path: target });
-		})
-		.then((data) => {
-			if (!data) return;
-			let modified = false;
-			const lines = data.split("\n").map((line) => {
-				const trimmed = line.trim();
-				if (trimmed.startsWith("check_foreground_window") && !trimmed.endsWith(foreground.toString())) {
-					modified = true;
-					return `check_foreground_window = ${foreground}`;
-				}
-				return line;
-			});
-			if (modified) {
-				return invoke<void>("write_text_file_native", { path: target, contents: lines.join("\n") });
-			}
-			return undefined;
-		})
-		.catch((error) => {
-			warn("[IMM] Failed to update d3dx.ini hotreload setting:", error);
-		});
+
+export function updateIni(game: string, foreground = 0) {
+	if (!game) return;
+	invoke<void>("set_d3dx_foreground_mode", { game, foreground }).catch((error) => {
+		warn("[IMM] Failed to update d3dx.ini hotreload setting:", error);
+	});
 }
-export async function setHotreload(enabled: 0 | 1 | 2, game: string, target: string): Promise<void> {
+export async function setHotreload(enabled: 0 | 1 | 2, game: string): Promise<void> {
 	if (enabled == 1) {
-		updateIni(target, 0);
+		updateIni(game, 0);
 	} else {
-		updateIni(target, 1);
+		updateIni(game, 1);
 	}
 	await invoke("set_hotreload", { enabled: enabled ? true : false });
 	if (enabled) {

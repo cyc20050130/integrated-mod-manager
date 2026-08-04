@@ -1,23 +1,23 @@
 import { GAME_NAMES } from "@/utils/consts";
-import { getPrevGame, initGame, main } from "@/utils/init";
+import { getPrevGame, main } from "@/utils/init";
 import { Games } from "@/utils/types";
-import { GAME, SETTINGS, TEXT_DATA } from "@/utils/vars";
-import { useAtom, useAtomValue } from "jotai";
+import { GAME, TEXT_DATA } from "@/utils/vars";
+import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 
 function Page2({ setPage }: { setPage: (page: number) => void }) {
 	const text = useAtomValue(TEXT_DATA);
 	const game = useAtomValue(GAME);
 	const [selected, setSelected] = useState("");
-	const [settings] = useAtom(SETTINGS);
 	const switchGame = useCallback(
 		async (gameCode: Games) => {
 			setSelected(gameCode);
-			await main(gameCode);
-			setTimeout(() => {
+			try {
+				const result = await main(gameCode);
+				if (result.phase !== "failed") setPage(2);
+			} finally {
 				setSelected("");
-			}, 10);
-			setPage(2);
+			}
 		},
 		[setPage]
 	);
@@ -54,10 +54,7 @@ function Page2({ setPage }: { setPage: (page: number) => void }) {
 			<div className="flex flex-wrap w-5xl items-center justify-center gap-16 select-none">
 				<div
 					onClick={async () => {
-						if (!settings.global.game) initGame("WW", false);
-						else {
-							switchGame("WW");
-						}
+						await switchGame("WW");
 					}}
 					style={{
 						pointerEvents: selected === "" ? "auto" : "none",
@@ -76,10 +73,7 @@ function Page2({ setPage }: { setPage: (page: number) => void }) {
 				</div>
 				<div
 					onClick={async () => {
-						if (!settings.global.game) initGame("ZZ", false);
-						else {
-							switchGame("ZZ");
-						}
+						await switchGame("ZZ");
 					}}
 					style={{
 						pointerEvents: selected === "" ? "auto" : "none",
@@ -99,10 +93,7 @@ function Page2({ setPage }: { setPage: (page: number) => void }) {
 				</div>
 				<div
 					onClick={async () => {
-						if (!settings.global.game) initGame("GI", false);
-						else {
-							switchGame("GI");
-						}
+						await switchGame("GI");
 					}}
 					style={{
 						pointerEvents: selected === "" ? "auto" : "none",
@@ -123,10 +114,7 @@ function Page2({ setPage }: { setPage: (page: number) => void }) {
 			<div className="flex h-72 opacity- 0 duration-300 w-5xl items-center justify-center gap-16 select-none">
 				<div
 					onClick={async () => {
-						if (!settings.global.game) initGame("SR", false);
-						else {
-							switchGame("SR");
-						}
+						await switchGame("SR");
 					}}
 					style={{
 						pointerEvents: selected === "" ? "auto" : "none",
@@ -145,10 +133,7 @@ function Page2({ setPage }: { setPage: (page: number) => void }) {
 				</div>
 				<div
 					onClick={async () => {
-						if (!settings.global.game) initGame("EF", false);
-						else {
-							switchGame("EF");
-						}
+						await switchGame("EF");
 					}}
 					style={{
 						pointerEvents: selected === "" ? "auto" : "none",
@@ -168,10 +153,7 @@ function Page2({ setPage }: { setPage: (page: number) => void }) {
 				<button
 					type="button"
 					onClick={async () => {
-						if (!settings.global.game) initGame("NTE", false);
-						else {
-							switchGame("NTE");
-						}
+						await switchGame("NTE");
 					}}
 					style={{
 						pointerEvents: selected === "" ? "auto" : "none",

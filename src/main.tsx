@@ -5,35 +5,14 @@ import { Provider } from "jotai";
 import App from "./App";
 import ErrorBoundary from "./utils/errorCatcher";
 import Decorations from "./utils/decorations";
-import { interceptConsole } from "@fltsci/tauri-plugin-tracing";
 import { invoke } from "@tauri-apps/api/core";
 
-/*export async function downloadLogs() {
-	const filePath = await save({
-		title: "Save logs as:",
-		defaultPath: `IMM_${Date.now()}.log`,
-		filters: [
-			{
-				name: "Log files",
-				extensions: ["log"],
-			},
-		],
-	});
-	if (filePath) {
-		await writeTextFile(filePath, capturedLogs.join("\n"));
-		addToast({ type: "success", message: "Logs exported successfully." });
-	}
-}
-*/
 window.addEventListener("keydown", (e) => {
 	if (e.key === "F8") {
 		e.preventDefault();
 		invoke("open_logs_folder");
 	}
 });
-
-// Intercept console logs and send them to Rust for file saving, etc.
-interceptConsole({ preserveOriginal: true });
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 	<Provider store={store}>

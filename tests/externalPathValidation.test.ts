@@ -6,9 +6,11 @@ function readInitSource() {
 	return readFileSync(new URL("../src/utils/init.ts", import.meta.url), "utf8");
 }
 
-test("source and target directory validation use native path checks for external XXMI locations", () => {
+test("source and target directory validation uses persisted managed roots", () => {
 	const source = readInitSource();
 
-	assert.match(source, /configXX\.sourceDir && !\(await pathExistsNative\(join\(configXX\.sourceDir\)\)\)/);
-	assert.match(source, /configXX\.targetDir && !\(await pathExistsNative\(configXX\.targetDir\)\)\)/);
+	assert.match(source, /invoke<boolean>\("managed_path_exists", \{ game, rootKind, relativePath: "" \}\)/);
+	assert.match(source, /configXX\.sourceDir && !\(await managedGameRootExists\(game, "source"\)\)/);
+	assert.match(source, /configXX\.targetDir && !\(await managedGameRootExists\(game, "target"\)\)/);
+	assert.doesNotMatch(source, /pathExistsNative|path_exists_native/);
 });

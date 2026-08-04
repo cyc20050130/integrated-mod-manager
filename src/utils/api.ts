@@ -1,594 +1,258 @@
-// API client for communicating with Flask backend
+import { invoke } from "@tauri-apps/api/core";
 
+import GAME_DATA from "@/gameData.json";
 import { VERSION } from "./consts";
 import { saveConfigs } from "./filesys";
-import { Category } from "./types";
-import { SETTINGS, store } from "./vars";
-import GAME_DATA from "@/gameData.json";
-import { invoke } from "@tauri-apps/api/core";
 import { buildNteCategoryUrl, buildNteHomeUrl, buildNteSearchUrl, normalizeNteCategories } from "./gameBananaNte";
+import type { RegisteredGame } from "./gameRegistry";
+import type { Category } from "./types";
+import { SETTINGS, store } from "./vars";
+
+const API_BASE_URL = "https://gamebanana.com/apiv11/";
+const CATEGORY_TIMEOUTS_MS = [2_000, 5_000] as const;
 
 type HealthCheckResponse = {
 	client?: string;
 };
 
-const GI_CHAR_MAP: Record<string, string> = {
-	Aether: "PlayerBoy",
-	Alhaitham: "Alhatham",
-	Amber: "Ambor",
-	Arataki_Itto: "Itto",
-	Baizhu: "Baizhuer",
-	Hu_Tao: "Hutao",
-	Jean: "Qin",
-	Kaedehara_Kazuha: "Kazuha",
-	Kamisato_Ayaka: "Ayaka",
-	Kamisato_Ayato: "Ayato",
-	Kirara: "Momoka",
-	Kuki_Shinobu: "Shinobu",
-	Kujou_Sara: "Sara",
-	Lan_Yan: "Lanyan",
-	Lumine: "PlayerGirl",
-	Lynette: "Linette",
-	Lyney: "Liney",
-	Manekin: "MannequinBoy",
-	Manekina: "MannequinGirl",
-	Noelle: "Noel",
-	Ororon: "Olorun",
-	Raiden_Shogun: "Shougun",
-	Sangonomiya_Kokomi: "Kokomi",
-	Shikanoin_Heizou: "Heizo",
-	Skirk: "SkirkNew",
-	Thoma: "Tohma",
-	Xianyun: "Liuyun",
-	Yae_Miko: "Yae",
-	Yanfei: "Feiyan",
-	Yumemizuki_Mizuki: "Mizuki",
-	Yun_Jin: "Yunjin",
+type GameDataEntry = {
+	id: { categories: string; game: string };
+	categoryList: Category[];
+	generic: { categories: Category[]; types: Category[] };
 };
-function getCharIconURL(name: string) {
-	return `https://api.hakush.in/gi/UI/UI_AvatarIcon_${GI_CHAR_MAP[name] || name}.webp`;
+
+export interface GameBananaCategoryResult {
+	categories: Category[];
+	types: Category[];
 }
-const API_BASE_URL = "https://gamebanana.com/apiv11/";
-class ApiClient {
-	private GAME = "WW";
-	private CLIENT = "";
-	setClient(client: string) {
-		this.CLIENT = client;
+
+function cloneCategory(category: Category): Category {
+	return Object.freeze({ ...category });
+}
+
+function cloneCategories(categories: readonly Category[]): readonly Category[] {
+	return Object.freeze(categories.map(cloneCategory));
+}
+
+function createAbortError(): DOMException {
+	return new DOMException("The request was aborted", "AbortError");
+}
+
+export function isGameBananaAbortError(error: unknown): boolean {
+	return (
+		(error instanceof DOMException && error.name === "AbortError") ||
+		(error instanceof Error && error.name === "AbortError") ||
+		/gamebanana request cancelled/i.test(String(error || ""))
+	);
+}
+
+let requestSequence = 0;
+
+function createRequestId(): string {
+	if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+		return crypto.randomUUID();
+	}
+	requestSequence = (requestSequence + 1) % Number.MAX_SAFE_INTEGER;
+	return `renderer-${Date.now().toString(36)}-${requestSequence.toString(36)}`;
+}
+
+export async function fetchGameBananaJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+	if (signal?.aborted) throw createAbortError();
+
+	const requestId = createRequestId();
+	const cancelNativeRequest = () => {
+		void invoke("cancel_gamebanana_request", { requestId }).catch(() => undefined);
+	};
+	signal?.addEventListener("abort", cancelNativeRequest, { once: true });
+
+	try {
+		const payload = await invoke<T>("fetch_gamebanana_json", { url, requestId });
+		if (signal?.aborted) throw createAbortError();
+		return payload;
+	} catch (error) {
+		if (signal?.aborted || isGameBananaAbortError(error)) throw createAbortError();
+		throw error;
+	} finally {
+		signal?.removeEventListener("abort", cancelNativeRequest);
+	}
+}
+
+function requestSignalWithTimeout(timeoutMs: number, parent?: AbortSignal) {
+	const controller = new AbortController();
+	const abortFromParent = () => controller.abort();
+	parent?.addEventListener("abort", abortFromParent, { once: true });
+	const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+	return {
+		signal: controller.signal,
+		dispose() {
+			window.clearTimeout(timeoutId);
+			parent?.removeEventListener("abort", abortFromParent);
+		},
+	};
+}
+
+export class GameBananaProvider {
+	readonly game: RegisteredGame;
+	readonly gameId: string;
+	readonly categoryRootId: string;
+	readonly categoryList: readonly Category[];
+	readonly genericCategories: readonly Category[];
+	readonly types: readonly Category[];
+
+	constructor(game: RegisteredGame) {
+		const config = GAME_DATA[game] as GameDataEntry;
+		this.game = game;
+		this.gameId = config.id.game;
+		this.categoryRootId = config.id.categories;
+		this.categoryList = cloneCategories(config.categoryList);
+		this.genericCategories = cloneCategories(config.generic.categories);
+		this.types = cloneCategories(config.generic.types);
+		Object.freeze(this);
 	}
 
-	setGame(game: keyof typeof GAME_DATA) {
-		if (GAME_DATA[game]) {
-			this.GAME = game;
-			this.id = GAME_DATA[game].id;
-			this.categoryList = GAME_DATA[game].categoryList as Category[];
-			this.generic = GAME_DATA[game].generic;
-			return;
+	get fallbackCategories(): Category[] {
+		return [...this.categoryList, ...this.genericCategories].map((category) => ({ ...category }));
+	}
+
+	get fallbackTypes(): Category[] {
+		return this.types.map((category) => ({ ...category }));
+	}
+
+	async makeRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+		return fetchGameBananaJson<T>(`${API_BASE_URL}${endpoint}`, options.signal ?? undefined);
+	}
+
+	async categories(signal?: AbortSignal): Promise<GameBananaCategoryResult> {
+		if (this.game === "NTE") {
+			const profile = await this.makeRequest<{ _aModRootCategories?: unknown }>(
+				`Game/${this.gameId}/ProfilePage`,
+				signal ? { signal } : {}
+			);
+			const rootCategories = normalizeNteCategories(profile._aModRootCategories);
+			return { categories: rootCategories, types: rootCategories.map((category) => ({ ...category })) };
 		}
-		this.GAME = game;
-	}
-	private id: Record<string, string> = {
-		categories: "29524",
-		game: "20357",
-	};
-	categoryList: Category[] = [
-		{
-			_idRow: 30257,
-			_sName: "Aalto",
-			_nItemCount: 8,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30257",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c4ff33f3b.png",
-		},
-		{
-			_idRow: 39143,
-			_sName: "Augusta",
-			_nItemCount: 44,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/39143",
-			_sIconUrl: "",
-		},
-		{
-			_idRow: 30251,
-			_sName: "Baizhi",
-			_nItemCount: 43,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30251",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c39f41dda.png",
-		},
-		{
-			_idRow: 35523,
-			_sName: "Brant",
-			_nItemCount: 14,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/35523",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/67c981a895579.png",
-		},
-		{
-			_idRow: 30262,
-			_sName: "Calcharo",
-			_nItemCount: 17,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30262",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c5f44ca4e.png",
-		},
-		{
-			_idRow: 33179,
-			_sName: "Camellya",
-			_nItemCount: 103,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/33179",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/675b7f303af84.png",
-		},
-		{
-			_idRow: 36003,
-			_sName: "Cantarella",
-			_nItemCount: 65,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/36003",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6812a36c23457.png",
-		},
-		{
-			_idRow: 34264,
-			_sName: "Carlotta",
-			_nItemCount: 93,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/34264",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6812a3cf60524.png",
-		},
-		{
-			_idRow: 37392,
-			_sName: "Cartethyia",
-			_nItemCount: 67,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/37392",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/686f2a0b0506c.png",
-		},
-		{
-			_idRow: 30265,
-			_sName: "Changli",
-			_nItemCount: 130,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30265",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c68095b05.png",
-		},
-		{
-			_idRow: 30247,
-			_sName: "Chixia",
-			_nItemCount: 30,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30247",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c25a55aad.png",
-		},
-		{
-			_idRow: 36990,
-			_sName: "Ciaccona",
-			_nItemCount: 41,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/36990",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/686f2a130c551.png",
-		},
-		{
-			_idRow: 30255,
-			_sName: "Danjin",
-			_nItemCount: 29,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30255",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c49eef2b5.png",
-		},
-		{
-			_idRow: 30253,
-			_sName: "Encore",
-			_nItemCount: 25,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30253",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c41aafe7c.png",
-		},
-		{
-			_idRow: 39624,
-			_sName: "Iuno",
-			_nItemCount: 35,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/39624",
-			_sIconUrl: "",
-		},
-		{
-			_idRow: 30263,
-			_sName: "Jianxin",
-			_nItemCount: 34,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30263",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c6300cb95.png",
-		},
-		{
-			_idRow: 30264,
-			_sName: "Jinhsi",
-			_nItemCount: 95,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30264",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c65ae3201.png",
-		},
-		{
-			_idRow: 30256,
-			_sName: "Jiyan",
-			_nItemCount: 21,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30256",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c4cec9dfe.png",
-		},
-		{
-			_idRow: 30259,
-			_sName: "Lingyang",
-			_nItemCount: 10,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30259",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c56786bfb.png",
-		},
-		{
-			_idRow: 33764,
-			_sName: "Lumi",
-			_nItemCount: 16,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/33764",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/675b1120b010b.png",
-		},
-		{
-			_idRow: 37891,
-			_sName: "Lupa",
-			_nItemCount: 42,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/37891",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/686f2a1a391f8.png",
-		},
-		{
-			_idRow: 30258,
-			_sName: "Mortefi",
-			_nItemCount: 14,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30258",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c52684f89.png",
-		},
-		{
-			_idRow: 35119,
-			_sName: "Phoebe",
-			_nItemCount: 71,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/35119",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6812a40cb85a4.png",
-		},
-		{
-			_idRow: 38371,
-			_sName: "Phrolova",
-			_nItemCount: 44,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/38371",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/68ab24ab15f8f.png",
-		},
-		{
-			_idRow: 34733,
-			_sName: "Roccia",
-			_nItemCount: 20,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/34733",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6812a44645b98.png",
-		},
-		{
-			_idRow: 30250,
-			_sName: "Rover Female",
-			_nItemCount: 106,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30250",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c35cd412e.png",
-		},
-		{
-			_idRow: 30249,
-			_sName: "Rover Male",
-			_nItemCount: 75,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30249",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c30d33704.png",
-		},
-		{
-			_idRow: 30252,
-			_sName: "Sanhua",
-			_nItemCount: 50,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30252",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c3d32a078.png",
-		},
-		{
-			_idRow: 32220,
-			_sName: "Shorekeeper",
-			_nItemCount: 102,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/32220",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/66f8c47b49ee8.png",
-		},
-		{
-			_idRow: 30254,
-			_sName: "Taoqi",
-			_nItemCount: 26,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30254",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c451a74aa.png",
-		},
-		{
-			_idRow: 30248,
-			_sName: "Verina",
-			_nItemCount: 32,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30248",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c2db4c218.png",
-		},
-		{
-			_idRow: 30471,
-			_sName: "Xiangli Yao",
-			_nItemCount: 23,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30471",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/66bddde6d44ed.png",
-		},
-		{
-			_idRow: 30246,
-			_sName: "Yangyang",
-			_nItemCount: 36,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30246",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c230d99e1.png",
-		},
-		{
-			_idRow: 30261,
-			_sName: "Yinlin",
-			_nItemCount: 115,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30261",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c5b7aea39.png",
-		},
-		{
-			_idRow: 33791,
-			_sName: "Youhu",
-			_nItemCount: 6,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/33791",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6812a47de960d.png",
-		},
-		{
-			_idRow: 30260,
-			_sName: "Yuanwu",
-			_nItemCount: 11,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30260",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6683c591329e5.png",
-		},
-		{
-			_idRow: 36665,
-			_sName: "Zani",
-			_nItemCount: 45,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/36665",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6812a2f8ddacc.png",
-		},
-		{
-			_idRow: 30472,
-			_sName: "Zhezhi",
-			_nItemCount: 48,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/30472",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/66bdde0a65151.png",
-		},
-		{
-			_idRow: 31838,
-			_sName: "NPCs & Entities",
-			_nItemCount: 12,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/31838",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/66e0d90771ac5.png",
-		},
-		{
-			_idRow: 29493,
-			_sName: "Other",
-			_nItemCount: 75,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/29493",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6692c90cba314.png",
-			_special: true,
-		},
-		{
-			_idRow: 29496,
-			_sName: "UI",
-			_nItemCount: 55,
-			_nCategoryCount: 0,
-			_sUrl: "https://gamebanana.com/mods/cats/29496",
-			_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6692c913ddf00.png",
-			_special: true,
-		},
-	];
-	generic: Record<string, Category[]> = {
-		categories: [
-			{
-				_idRow: 31838,
-				_sName: "NPCs & Entities",
-				_nItemCount: 12,
-				_nCategoryCount: 0,
-				_sUrl: "https://gamebanana.com/mods/cats/31838",
-				_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/66e0d90771ac5.png",
-			},
-			{
-				_idRow: 29493,
-				_sName: "Other",
-				_nItemCount: 75,
-				_nCategoryCount: 0,
-				_sUrl: "https://gamebanana.com/mods/cats/29493",
-				_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6692c90cba314.png",
-				_special: true,
-			},
-			{
-				_idRow: 29496,
-				_sName: "UI",
-				_nItemCount: 55,
-				_nCategoryCount: 0,
-				_sUrl: "https://gamebanana.com/mods/cats/29496",
-				_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6692c913ddf00.png",
-				_special: true,
-			},
-		],
-		types: [
-			{
-				_idRow: 29524,
-				_sName: "Skins",
-				_nItemCount: 1483,
-				_nCategoryCount: 34,
-				_sUrl: "https://gamebanana.com/mods/cats/29524",
-				_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6654b6596ba11.png",
-			},
-			{
-				_idRow: 29496,
-				_sName: "UI",
-				_nItemCount: 57,
-				_nCategoryCount: 0,
-				_sUrl: "https://gamebanana.com/mods/cats/29496",
-				_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6692c913ddf00.png",
-			},
-			{
-				_idRow: 29493,
-				_sName: "Other",
-				_nItemCount: 75,
-				_nCategoryCount: 0,
-				_sUrl: "https://gamebanana.com/mods/cats/29493",
-				_sIconUrl: "https://images.gamebanana.com/img/ico/ModCategory/6692c90cba314.png",
-			},
-		],
-	};
-	constructor() {
-		return this;
-	}
 
-	async makeRequest<T = any>(endpoint: string, _options: RequestInit = {}): Promise<T> {
-		return await invoke<T>("fetch_gamebanana_json", { url: `${API_BASE_URL}${endpoint}` });
-	}
-
-	async categories() {
-		//info("Fetching categories...", await this.healthCheck());
-		this.healthCheck();
-		try {
-			if (this.GAME === "NTE") {
-				const profile = (await this.makeRequest(`Game/${this.id.game}/ProfilePage`)) as {
-					_aModRootCategories?: unknown;
+		let lastError: unknown = new Error("Category fetch exhausted retries");
+		for (const timeoutMs of CATEGORY_TIMEOUTS_MS) {
+			const attempt = requestSignalWithTimeout(timeoutMs, signal);
+			try {
+				const response = await this.makeRequest<Category[]>(
+					`Mod/Categories?_idCategoryRow=${this.categoryRootId}&_sSort=a_to_z&_bShowEmpty=true`,
+					{ signal: attempt.signal }
+				);
+				if (!response) throw new Error("Empty category response");
+				const categories = [...response.filter((category) => category._idRow !== 31838), ...this.genericCategories];
+				return {
+					categories: categories.map((category) => ({ ...category })),
+					types: this.fallbackTypes,
 				};
-				const rootCategories = normalizeNteCategories(profile._aModRootCategories);
-				this.categoryList = rootCategories;
-				this.generic = { categories: rootCategories, types: rootCategories };
-				return rootCategories;
+			} catch (error) {
+				lastError = error;
+				if (signal?.aborted) throw createAbortError();
+			} finally {
+				attempt.dispose();
 			}
-			const fetchWithRetry = async (timeouts: number[] = [2000, 5000]): Promise<Category[]> => {
-				for (let i = 0; i < timeouts.length; i++) {
-					try {
-						const controller = new AbortController();
-						const timeoutId = setTimeout(() => controller.abort(), timeouts[i]);
-						//info(`Fetching categories (attempt ${i + 1})...`, timeouts[i]);
-						const response = (await this.makeRequest(
-							`Mod/Categories?_idCategoryRow=${this.id.categories}&_sSort=a_to_z&_bShowEmpty=true`,
-							{ signal: controller.signal }
-						)) as Category[];
-						clearTimeout(timeoutId);
-						if (!response) {
-							throw new Error("Empty category response");
-						}
-						return response;
-					} catch (error) {
-						if (i === timeouts.length - 1) {
-							throw error;
-						}
-					}
-				}
-				throw new Error("Category fetch exhausted retries");
-			};
-			const response = await fetchWithRetry();
-			this.categoryList = [
-				...response
-					.filter((x: Category) => x._idRow !== 31838)
-					.map((cat: Category) =>
-						this.GAME === "GI"
-							? {
-									...cat,
-									_sIconUrl: cat._sIconUrl || getCharIconURL(cat._sName.replaceAll(/ /g, "_") || ""),
-								}
-							: cat
-					),
-				...this.generic.categories,
-			];
-			return this.categoryList;
-		} catch (error) {
-			// info(this.categoryList,this.GAME)
-			return [];
-			//console.error("Failed to fetch categories:", error);
-			throw error;
 		}
+		throw lastError;
 	}
 
 	home({ sort = "default", page = 1, type = "" }: { sort?: string; page?: number; type?: string }) {
-		if (this.GAME === "NTE") return buildNteHomeUrl({ sort, page, type });
-		return `${API_BASE_URL}Game/${this.id.game}/Subfeed?${
-			type ? `_csvModelInclusions=${type}&` : ""
-		}_sSort=${sort}&_nPage=${page}`;
+		if (this.game === "NTE") return buildNteHomeUrl({ sort, page, type });
+		return `${API_BASE_URL}Game/${this.gameId}/Subfeed?${
+			type ? `_csvModelInclusions=${encodeURIComponent(type)}&` : ""
+		}_sSort=${encodeURIComponent(sort)}&_nPage=${Math.max(1, page)}`;
 	}
 
-	category({ cat = "", sort = "default", page = 1 }) {
-		if (this.GAME === "NTE") {
-			const categoryName = cat.split("/").pop() || cat;
-			const category = this.generic.types.find((entry) => entry._sName === categoryName);
-			return buildNteCategoryUrl(category?._idRow || 0, page, sort);
-		}
-		return `${API_BASE_URL}Mod/Index?_nPerpage=15&_aFilters%5BGeneric_Category%5D=${(
-			(cat.split("/").length > 1
-				? this.categoryList.find((x) => x._sName == cat.split("/")[1])?._idRow
-				: this.generic.types.find((x) => x._sName == cat.split("/")[0])?._idRow) || 0
-		).toString()}&_sSort=${sort}&_nPage=${page}`;
+	category({
+		cat = "",
+		sort = "default",
+		page = 1,
+		runtimeCategories = [],
+	}: {
+		cat?: string;
+		sort?: string;
+		page?: number;
+		runtimeCategories?: readonly Category[];
+	}) {
+		const parts = cat.split("/").filter(Boolean);
+		const categoryName = parts.length > 1 ? parts[1] : parts[0] || "";
+		const configuredPool = parts.length > 1 ? this.categoryList : this.types;
+		const category =
+			configuredPool.find((entry) => entry._sName === categoryName) ||
+			runtimeCategories.find((entry) => entry._sName === categoryName);
+		const categoryId = category?._idRow || 0;
+		if (this.game === "NTE") return buildNteCategoryUrl(categoryId, page, sort);
+		return `${API_BASE_URL}Mod/Index?_nPerpage=15&_aFilters%5BGeneric_Category%5D=${categoryId}&_sSort=${encodeURIComponent(
+			sort
+		)}&_nPage=${Math.max(1, page)}`;
 	}
 
 	banner() {
-		return `${API_BASE_URL}Game/${this.id.game}/TopSubs`;
+		return `${API_BASE_URL}Game/${this.gameId}/TopSubs`;
 	}
 
-	async mod(mod = "Mod/0", signal?: AbortSignal) {
-		return this.makeRequest(`${mod}/ProfilePage`, signal ? { signal } : undefined);
+	mod<T = unknown>(mod = "Mod/0", signal?: AbortSignal): Promise<T> {
+		return this.makeRequest<T>(`${mod}/ProfilePage`, signal ? { signal } : {});
 	}
 
-	async updates(mod = "Mod/0", signal?: AbortSignal) {
-		return this.makeRequest(`${mod}/Updates?_nPage=1&_nPerpage=5`, signal ? { signal } : undefined);
+	updates<T = unknown>(mod = "Mod/0", signal?: AbortSignal): Promise<T> {
+		return this.makeRequest<T>(`${mod}/Updates?_nPage=1&_nPerpage=5`, signal ? { signal } : {});
 	}
-	async comments(mod = "Mod/0", page = 1, signal?: AbortSignal) {
-		// https://gamebanana.com/apiv11/Mod/651401/Posts?_nPage=1&_nPerpage=15&_sSort=popular
-		return this.makeRequest(`${mod}/Posts?_nPage=${page}&_nPerpage=15&_sSort=popular`, signal ? { signal } : undefined);
+
+	comments<T = unknown>(mod = "Mod/0", page = 1, signal?: AbortSignal): Promise<T> {
+		return this.makeRequest<T>(`${mod}/Posts?_nPage=${page}&_nPerpage=15&_sSort=popular`, signal ? { signal } : {});
 	}
-	async nestedcomments(postId = "0", signal?: AbortSignal) {
-		//https://gamebanana.com/apiv11/Post/13272284/Posts?_nPage=1&_nPerpage=20
-		return this.makeRequest(`Post/${postId}/Posts?_nPage=1&_nPerpage=15`, signal ? { signal } : undefined);
+
+	nestedComments<T = unknown>(postId = "0", signal?: AbortSignal): Promise<T> {
+		return this.makeRequest<T>(`Post/${postId}/Posts?_nPage=1&_nPerpage=15`, signal ? { signal } : {});
 	}
+
 	search({ term = "", page = 1, type = "" }) {
-		if (this.GAME === "NTE") return buildNteSearchUrl(term, page, type || "Mod");
-		return `${API_BASE_URL}Util/Search/Results?_sModelName=${type}&_sOrder=best_match&_idGameRow=${
-			this.id.game
-		}&_sSearchString=${encodeURIComponent(term)}&_nPage=${page}`;
+		if (this.game === "NTE") return buildNteSearchUrl(term, page, type || "Mod");
+		return `${API_BASE_URL}Util/Search/Results?_sModelName=${encodeURIComponent(
+			type
+		)}&_sOrder=best_match&_idGameRow=${this.gameId}&_sSearchString=${encodeURIComponent(term)}&_nPage=${Math.max(
+			1,
+			page
+		)}`;
 	}
+}
 
-	async healthCheck() {
+const providers = new Map<RegisteredGame, GameBananaProvider>();
+
+export function getGameBananaProvider(game: RegisteredGame): GameBananaProvider {
+	let provider = providers.get(game);
+	if (!provider) {
+		provider = new GameBananaProvider(game);
+		providers.set(game, provider);
+	}
+	return provider;
+}
+
+let healthCheckPromise: Promise<void> | null = null;
+
+export function runServiceHealthCheckOnce(game: RegisteredGame, client: string): Promise<void> {
+	if (healthCheckPromise) return healthCheckPromise;
+	healthCheckPromise = (async () => {
 		try {
 			const data = await invoke<HealthCheckResponse>("service_health_check", {
 				version: VERSION || "2.0.1",
-				game: this.GAME || "WW",
-				client: this.CLIENT || null,
+				game,
+				client: client || null,
 			});
-			if (!this.CLIENT && data.client) {
-				this.CLIENT = data.client;
-				store.set(SETTINGS, (prev) => ({
-					...prev,
-					global: { ...prev.global, clientDate: data.client || prev.global.clientDate || "" },
+			if (!client && data.client) {
+				store.set(SETTINGS, (previous) => ({
+					...previous,
+					global: {
+						...previous.global,
+						clientDate: data.client || previous.global.clientDate || "",
+					},
 				}));
 				await saveConfigs();
 			}
 		} catch {
-			// Health reporting is best-effort and must never block startup.
+			// Best-effort telemetry must not affect startup or catalog availability.
 		}
-	}
+	})();
+	return healthCheckPromise;
 }
-export const apiClient = new ApiClient();

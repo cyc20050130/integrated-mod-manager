@@ -18,6 +18,7 @@ import {
 	Preset,
 	PreviewBackfillState,
 	ProgressData,
+	RuntimeBootstrapState,
 	Settings,
 } from "./types";
 
@@ -55,7 +56,8 @@ interface NoticeInfo {
 	ver: string;
 	id: number;
 }
-const INIT_DONE = atom(false);
+const BOOTSTRAP_STATE = atom<RuntimeBootstrapState>(DEFAULTS.BOOTSTRAP_STATE);
+const INIT_DONE = atom((get) => get(BOOTSTRAP_STATE).phase === "ready");
 const MAIN_FUNC_STATUS = atom<string>("");
 const FIRST_LOAD = atom(false);
 const GAME = atom<Games>("");
@@ -127,7 +129,6 @@ const CATEGORY = atom(DEFAULTS.CATEGORY);
 const SEARCH = atom(DEFAULTS.SEARCH);
 const INSTALLED_ITEMS = atom<InstalledItem[]>(DEFAULTS.INSTALLED_ITEMS);
 const ONLINE_DATA = atom<OnlineData>(DEFAULTS.ONLINE_DATA);
-const ONLINE_SOURCE = atom(DEFAULTS.ONLINE_SOURCE);
 const ONLINE_TYPE = atom(DEFAULTS.ONLINE_TYPE);
 const ONLINE_SORT = atom(DEFAULTS.ONLINE_SORT);
 const ONLINE_PATH = atom(DEFAULTS.ONLINE_PATH);
@@ -186,7 +187,6 @@ const resetIfChanged = <T>(targetAtom: Parameters<typeof store.get>[0], value: T
 };
 export function resetAtoms() {
 	resetIfChanged(FILE_TO_DL, "");
-	resetIfChanged(INIT_DONE, DEFAULTS.INIT_DONE);
 	resetIfChanged(LANG, DEFAULTS.LANG);
 	resetIfChanged(GAME, DEFAULTS.GAME);
 	resetIfChanged(SETTINGS, DEFAULTS.SETTINGS);
@@ -208,7 +208,6 @@ export function resetAtoms() {
 	resetIfChanged(SORT, DEFAULTS.SORT);
 	resetIfChanged(INSTALLED_ITEMS, DEFAULTS.INSTALLED_ITEMS);
 	resetIfChanged(ONLINE_DATA, DEFAULTS.ONLINE_DATA);
-	resetIfChanged(ONLINE_SOURCE, DEFAULTS.ONLINE_SOURCE);
 	resetIfChanged(ONLINE_TYPE, DEFAULTS.ONLINE_TYPE);
 	resetIfChanged(ONLINE_PATH, DEFAULTS.ONLINE_PATH);
 	resetIfChanged(ONLINE_SORT, DEFAULTS.ONLINE_SORT);
@@ -249,7 +248,6 @@ export {
 	DOWNLOAD_LIST,
 	TYPES,
 	ONLINE_DATA,
-	ONLINE_SOURCE,
 	ONLINE_TYPE,
 	ONLINE_PATH,
 	ONLINE_SORT,
@@ -258,6 +256,7 @@ export {
 	SEARCH,
 	FILTER,
 	GAME,
+	BOOTSTRAP_STATE,
 	INIT_DONE,
 	MAIN_FUNC_STATUS,
 	LANG,

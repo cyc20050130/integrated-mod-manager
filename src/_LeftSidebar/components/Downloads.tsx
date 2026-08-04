@@ -6,17 +6,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import {
-	CATEGORIES,
-	DATA,
-	DOWNLOAD_LIST,
-	GAME,
-	LAST_UPDATED,
-	LEFT_SIDEBAR_OPEN,
-	MOD_LIST,
-	SETTINGS,
-	TEXT_DATA,
-} from "@/utils/vars";
+import { CATEGORIES, DATA, DOWNLOAD_LIST, GAME, LEFT_SIDEBAR_OPEN, MOD_LIST, SETTINGS, TEXT_DATA } from "@/utils/vars";
 import { deriveNameFromFileName, formatBytes, sanitizeFileName } from "@/utils/utils";
 import {
 	cleanCancelledDownload,
@@ -26,10 +16,12 @@ import {
 	saveConfigs,
 	validateModDownload,
 } from "@/utils/filesys";
+import { acceptCommittedAppConfigSnapshot, type AppConfigSnapshot } from "@/utils/appConfigRepository";
 import { DownloadItem } from "@/utils/types";
 import { UNCATEGORIZED } from "@/utils/consts";
 import { info } from "@/lib/logger";
-import { normalizeDownloadSettings } from "@/utils/downloads";
+import { normalizeDownloadList, normalizeDownloadSettings } from "@/utils/downloads";
+import { validateGameBananaDownloadIdentity } from "@/utils/modBinding";
 
 type DownloadRow = DownloadItem & {
 	status: "pending" | "downloading" | "completed" | "failed" | "extracting";
@@ -189,6 +181,9 @@ function isPermanentPathError(message: string) {
 
 function inferFailureStageFromMessage(message: string) {
 	const text = String(message || "").toLowerCase();
+	if (text.includes("stage: validation")) {
+		return "validation";
+	}
 	if (text.includes("extraction failed") || text.includes("7z") || text.includes("stage: extract")) {
 		return "extract";
 	}
@@ -207,7 +202,6 @@ function Downloads() {
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const leftSidebarOpen = useAtomValue(LEFT_SIDEBAR_OPEN);
 	const modList = useSetAtom(MOD_LIST);
-	const setLastUpdated = useSetAtom(LAST_UPDATED);
 	const game = useAtomValue(GAME);
 	const downloadRef = useRef<HTMLDivElement>(null);
 	const downloadRef2 = useRef<HTMLDivElement>(null);
@@ -385,6 +379,8 @@ function Downloads() {
 			const key = item.key || createRuntimeKey(item, runtimeName);
 			let createdDlPath: string | null = null;
 			try {
+				const identityError = validateGameBananaDownloadIdentity(item);
+				if (identityError) throw new Error(`Stage: validation. ${identityError}`);
 				const target = await createModDownloadTarget(item.category, runtimeName);
 				if (!target?.path) throw new Error("Failed to create download directory");
 				const dlPath = target.path;
@@ -407,30 +403,11 @@ function Downloads() {
 					};
 					return persistedDownloads;
 				});
-
-				let persistedData: Record<string, DownloadDataEntry> = {};
-				setData((prevData) => {
-					if (runtimeItem.path) {
-						persistedData = {
-							...prevData,
-							[runtimeItem.path]: {
-								source: runtimeItem.source,
-								updatedAt: prevData[runtimeItem.path]?.updatedAt || -1,
-								...prevData[runtimeItem.path],
-							},
-						};
-					} else {
-						persistedData = { ...prevData };
-					}
-					return persistedData;
-				});
-				await flushRuntimeState("download-started", {
-					data: persistedData,
-					downloads: persistedDownloads,
-				});
+				const expectedDataEntry = runtimeItem.path ? (data[runtimeItem.path] ?? null) : null;
+				await flushRuntimeState("download-started", { downloads: persistedDownloads });
 				scheduleSave();
 
-				await invoke("download_and_unzip", {
+				const snapshot = await invoke<AppConfigSnapshot>("download_and_unzip", {
 					fileName: runtimeName,
 					downloadUrl: item.file,
 					savePath: dlPath,
@@ -438,28 +415,31 @@ function Downloads() {
 					emit: true,
 					downloadOptions,
 					game,
+					previewUrl: item.preview || null,
 					expectedSize: item.expectedSize,
 					expectedHash: item.expectedHash,
+					installState: {
+						relativePath: runtimeItem.path,
+						source: runtimeItem.source,
+						updatedAt: runtimeItem.updatedAt || Date.now(),
+						viewedAt: Date.now(),
+						configUpdatedAt: new Date().toISOString(),
+						completedDownload: runtimeItem,
+						expectedDataEntry,
+					},
 				});
-
-				if (item.preview) {
-					void invoke("download_and_unzip", {
-						fileName: "preview",
-						downloadUrl: item.preview,
-						savePath: dlPath,
-						key: "link_preview_" + key,
-						emit: false,
-						game,
-						downloadOptions: {
-							...downloadOptions,
-							requestRetries: 1,
-							waitForPrimaryIdle: false,
-						},
-					})
-						.then(() => {
-							setLastUpdated(Date.now());
-						})
-						.catch(() => {});
+				acceptCommittedAppConfigSnapshot(snapshot, game);
+				const committedGame = snapshot.game as { data?: Record<string, unknown>; downloads?: unknown } | null;
+				if (committedGame?.data && typeof committedGame.data === "object") {
+					setData(committedGame.data as typeof data);
+				}
+				if (committedGame?.downloads) {
+					setDownloads(normalizeDownloadList(committedGame.downloads));
+				}
+				try {
+					modList(await refreshModList());
+				} catch (refreshError) {
+					info("[IMM] Mod list refresh after committed download failed:", refreshError);
 				}
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -469,7 +449,7 @@ function Downloads() {
 				startedKeysRef.current.delete(key);
 			}
 		},
-		[downloadOptions, game, handleDownloadFailure, scheduleSave, setData, setDownloads, setLastUpdated]
+		[downloadOptions, data, game, handleDownloadFailure, modList, scheduleSave, setData, setDownloads]
 	);
 
 	useEffect(() => {
@@ -606,41 +586,9 @@ function Downloads() {
 				}
 
 				if (type === "auto") {
-					if (!(await validateModDownload(finished.dlPath || ""))) {
-						handleDownloadFailure(key, textData._Toasts.ErrDownload, "validation");
-						return;
-					}
-					let persistedData: Record<string, DownloadDataEntry> = {};
-					setData((prev) => {
-						if (finished.path) {
-							persistedData = {
-								...prev,
-								[finished.path]: {
-									...prev[finished.path],
-									source: finished.source,
-									updatedAt: finished.updatedAt || Date.now(),
-									viewedAt: Date.now(),
-								},
-							};
-						} else {
-							persistedData = { ...prev };
-						}
-						return persistedData;
-					});
-					let persistedDownloads = downloadsRef.current;
-					setDownloads((prev) => {
-						persistedDownloads = {
-							...prev,
-							completed: [...prev.completed, { ...finished, status: "completed" }],
-							extracting: prev.extracting.filter((item) => item.key !== key),
-						};
-						return persistedDownloads;
-					});
-					await flushRuntimeState("download-finished", {
-						data: persistedData,
-						downloads: persistedDownloads,
-					});
-					modList(await refreshModList());
+					// The native command publishes the directory, preview, metadata, and completed
+					// history in one outer transaction. Its return value updates the atoms.
+					return;
 				} else {
 					if (!(await validateModDownload(finished.dlPath || "", true))) {
 						handleDownloadFailure(key, textData._Toasts.ErrDownload, "validation");

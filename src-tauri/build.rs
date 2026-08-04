@@ -1,11 +1,6 @@
 fn main() {
-    let execution_level = if std::env::var("PROFILE").as_deref() == Ok("release") {
-        "requireAdministrator"
-    } else {
-        "asInvoker"
-    };
     let mut windows = tauri_build::WindowsAttributes::new();
-    windows = windows.app_manifest(format!(
+    windows = windows.app_manifest(
         r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <dependency>
@@ -23,13 +18,13 @@ fn main() {
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="{execution_level}" uiAccess="false" />
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
 </assembly>
-"#
-    ));
+"#,
+    );
 
     let attrs = tauri_build::Attributes::new().windows_attributes(windows);
     tauri_build::try_build(attrs).expect("failed to run build script");

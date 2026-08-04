@@ -25,13 +25,15 @@ function LeftSidebar() {
 	const setGame = useSetAtom(GAME);
 	const game = useAtomValue(SETTINGS).global.game;
 	const [settings, setSettings] = useAtom(SETTINGS);
+	const gameTitle = GAME_NAMES[game] || "Integrated";
+	const compactGameTitle = gameTitle.length > 12;
 
 	useInstalledItemsManager();
 	return (
 		<Sidebar collapsible="icon" className="pointer-events-auto pt-8">
 			<SidebarContent className="bg-sidebar bgpattern h-full gap-0 overflow-hidden border border-t-0">
 				<div className="flex flex-col w-full max-h-full min-h-full">
-					<div className="min-h-16 min-w-16 flex items-center justify-center h-16 gap-5 p-0 border-b">
+					<div className="min-h-16 min-w-16 flex h-16 items-center justify-center gap-3 border-b px-3">
 						<div
 							id="IMMLogo"
 							className="aspect-square logo h-10"
@@ -40,14 +42,18 @@ function LeftSidebar() {
 							}}
 						></div>
 						<div
-							className="max-w-28 font-en min-w-29 flex flex-col text-center duration-200 ease-linear"
+							className="font-en flex w-36 min-w-0 flex-col text-center duration-200 ease-linear"
 							style={{
-								marginRight: leftSidebarOpen ? "" : "-8.125rem",
+								marginRight: leftSidebarOpen ? "" : "-9rem",
 								opacity: leftSidebarOpen ? "" : "0",
 							}}
 						>
-							<label className="text-2xl text-[#eaeaea] min-w-fit">{GAME_NAMES[game] || "Integrated"}</label>
-							<label className="min-w-fit text-accent textaccent text-sm opacity-75">Mod Manager</label>
+							<span
+								className={`w-full text-[#eaeaea] ${compactGameTitle ? "text-sm leading-4 text-balance" : "text-2xl leading-none"}`}
+							>
+								{gameTitle}
+							</span>
+							<span className="text-accent textaccent w-full text-sm leading-4 opacity-75">Mod Manager</span>
 						</div>
 					</div>
 

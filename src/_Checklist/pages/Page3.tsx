@@ -1,6 +1,7 @@
 import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { verifyDirStruct } from "@/utils/filesys";
+import { completeRuntimeBootstrap } from "@/utils/init";
 import { NteRegion } from "@/utils/types";
 import { CHANGES, GAME, NTE_REGION, SOURCE, TARGET, TEXT_DATA, XXMI_DIR, XXMI_MODE } from "@/utils/vars";
 import { invoke } from "@tauri-apps/api/core";
@@ -43,7 +44,8 @@ function Page3({ setPage }: { setPage: (page: number) => void }) {
 				})
 					.then((validation) => {
 						if (cancelled) return;
-						setPage(validation.valid ? 4 : 3);
+						if (validation.valid) completeRuntimeBootstrap("NTE");
+						else setPage(3);
 					})
 					.catch(() => {
 						if (!cancelled) setPage(3);

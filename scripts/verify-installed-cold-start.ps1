@@ -11,26 +11,18 @@ $resolvedExe = (Resolve-Path -LiteralPath $ExePath).Path
 $startedAt = Get-Date
 $results = @()
 
-function Stop-ElevatedProcessTree {
+function Stop-ProcessTree {
 	param([int]$ProcessId)
 
 	$taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
-	$startArgs = @{
-		FilePath = $taskkill
-		ArgumentList = @("/PID", "$ProcessId", "/T", "/F")
-		Verb = "RunAs"
-		Wait = $true
-		PassThru = $true
-		WindowStyle = "Hidden"
-	}
-	$killer = Start-Process @startArgs
+	$killer = Start-Process -FilePath $taskkill -ArgumentList @("/PID", "$ProcessId", "/T", "/F") -Wait -PassThru -WindowStyle Hidden
 	if ($killer.ExitCode -ne 0 -and (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
-		throw "Elevated taskkill failed for PID $ProcessId with exit code $($killer.ExitCode)"
+		throw "taskkill failed for PID $ProcessId with exit code $($killer.ExitCode)"
 	}
 }
 
 foreach ($existing in @(Get-Process -Name "integrated-mod-manager" -ErrorAction SilentlyContinue)) {
-	Stop-ElevatedProcessTree -ProcessId $existing.Id
+	Stop-ProcessTree -ProcessId $existing.Id
 }
 
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
@@ -63,7 +55,7 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
 	$result | Format-Table -AutoSize
 
 	if (-not $app.HasExited) {
-		Stop-ElevatedProcessTree -ProcessId $app.Id
+		Stop-ProcessTree -ProcessId $app.Id
 	}
 	Start-Sleep -Milliseconds 500
 }

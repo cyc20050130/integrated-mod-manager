@@ -3,14 +3,8 @@ import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React from "react";
 import { resetWithBackup } from "./filesys";
-import { addToast } from "@/_Toaster/ToastProvider";
-import { getCwd } from "./init";
-import { join } from "./utils";
-import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
-import { open } from "@tauri-apps/plugin-dialog";
 import { error } from "@/lib/logger";
 import { invoke } from "@tauri-apps/api/core";
-import { persistNteConfig } from "./nteConfigRevision";
 
 const DISCORD_LINK = "https://discord.gg/QGkKzNapXZ";
 const BANANA_LINK = "https://gamebanana.com/mods/593490";
@@ -84,36 +78,6 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, S
 			// ignore
 		}
 	};
-	importer = async (error: string) => {
-		try {
-			const dialogOptions: NonNullable<Parameters<typeof open>[0]> = {
-				title: "Import Config",
-				filters: [
-					{
-						name: "JSON files",
-						extensions: ["json", "json.bak"],
-					},
-				],
-			};
-
-			dialogOptions.defaultPath = join(getCwd(), "backups");
-
-			const filePath = await open(dialogOptions);
-
-			if (filePath) {
-				const content = JSON.parse(await readTextFile(filePath as string));
-				if (content && content.game && error.includes(content.game)) {
-					const serialized = JSON.stringify(content, null, 2);
-					if (content.game === "NTE") await persistNteConfig(serialized);
-					else await writeTextFile(`config${content.game}.json`, serialized);
-					window.location.reload();
-				}
-			}
-		} catch {
-			addToast({ type: "error", message: "Error importing config" });
-		}
-	};
-
 	override render() {
 		if (!this.state.hasError) return this.props.children as React.ReactElement;
 
@@ -152,11 +116,6 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, S
 						>
 							Open Discord (report)
 						</button> */}
-						{error?.message.startsWith("Corrupted config file detected") && (
-							<Button className="w-36" onClick={() => this.importer(error.message)} aria-label="Copy error details">
-								Import Config
-							</Button>
-						)}
 						<Button className="w-36" onClick={() => resetWithBackup()} aria-label="Copy error details">
 							Backup & Reset
 						</Button>

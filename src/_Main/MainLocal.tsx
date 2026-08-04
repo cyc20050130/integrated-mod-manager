@@ -3,9 +3,9 @@ import {
 	CONFLICTS,
 	CONFLICTS_OPEN,
 	FILTER,
+	GAME,
 	INIT_DONE,
 	INSTALLED_ITEMS,
-	LAST_UPDATED,
 	MOD_LIST,
 	openConflict,
 	SEARCH,
@@ -16,7 +16,7 @@ import {
 	TEXT_DATA,
 } from "@/utils/vars";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import CardLocal from "./components/CardLocal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isModBlacklisted, preventContextMenu } from "@/utils/utils";
@@ -27,21 +27,22 @@ import { managedSRC } from "@/utils/consts";
 import { Mod } from "@/utils/types";
 import { addToast } from "@/_Toaster/ToastProvider";
 import { info } from "@/lib/logger";
-// import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-// import { RefreshCwIcon } from "lucide-react";
-// import { addToast } from "@/_Toaster/ToastProvider";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { requestVisiblePreviewAssets } from "@/utils/imagePreview";
 
-let searchDB: MiniSearch<Mod> | null = null;
-let prev = "prev";
+const CARD_COLUMN_WIDTH = 256;
+const CARD_HEIGHT = 272;
+const CARD_ROW_SIZE = 304;
+const VIRTUAL_OVERSCAN_ROWS = 2;
+
 let prevEnabled = "noData";
 let timeout: ReturnType<typeof setTimeout> | null = null;
+
 function MainLocal() {
 	const initDone = useAtomValue(INIT_DONE);
 	const textData = useAtomValue(TEXT_DATA);
 	const [conflicts, setConflicts] = useAtom(CONFLICTS);
 	const setConflictsOpen = useSetAtom(CONFLICTS_OPEN);
-	const [initial, setInitial] = useState(true);
-	const lastUpdated = useAtomValue(LAST_UPDATED);
 	const [modList, setModList] = useAtom(MOD_LIST);
 	const installedItems = useAtomValue(INSTALLED_ITEMS);
 	const updateObj = useMemo(() => {
@@ -54,103 +55,90 @@ function MainLocal() {
 	const category = useAtomValue(CATEGORY);
 	const filter = useAtomValue(FILTER);
 	const search = useAtomValue(SEARCH);
+	const game = useAtomValue(GAME);
 	const source = useAtomValue(SOURCE);
-	const [visibleRange, setVisibleRange] = useState({ start: -1, end: -1 });
 	const [selected, setSelected] = useAtom(SELECTED);
 	const containerRef = useRef<HTMLDivElement | null>(null);
+	const resizeObserverRef = useRef<ResizeObserver | null>(null);
+	const [containerWidth, setContainerWidth] = useState(0);
 	const toggleOn = useAtomValue(SETTINGS).global.toggleClick;
 	const sort = useAtomValue(SORT);
-	const scrollTimeoutRef = useRef<number | null>(null);
-	// const scrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-	useEffect(() => {
-		if (!searchDB && modList.length > 0) {
-			searchDB = new MiniSearch({
-				idField: "path",
-				fields: ["name", "parent", "path"],
-				storeFields: Object.keys(modList[0]),
-				searchOptions: { prefix: true, fuzzy: 0.2 },
-			});
-		}
-		if (searchDB) {
-			searchDB.removeAll();
-			searchDB.addAll(modList);
-		}
+	const searchDB = useMemo(() => {
+		if (modList.length === 0) return null;
+		const index = new MiniSearch<Mod>({
+			idField: "path",
+			fields: ["name", "parent", "path"],
+			storeFields: Object.keys(modList[0]),
+			searchOptions: { prefix: true, fuzzy: 0.2 },
+		});
+		index.addAll(modList);
+		return index;
+	}, [modList]);
 
+	useEffect(() => {
 		if (!initDone) {
 			prevEnabled = "noData";
 		} else {
 			const enabled = modList
-				.filter((m) => m.enabled)
-				.map((m) => m.path)
+				.filter((mod) => mod.enabled)
+				.map((mod) => mod.path)
 				.join(",");
 			if (prevEnabled !== enabled) {
-				if (timeout) {
-					clearTimeout(timeout);
-				}
+				if (timeout) clearTimeout(timeout);
 				timeout = setTimeout(() => {
 					setChange();
 				}, 250);
 			}
-
 			prevEnabled = enabled;
 		}
-		function checkForHashCollisions() {
-			const allHashes: { [key: string]: Set<string> } = {};
-			const hashes: { [key: string]: string[] } = {};
-			[...modList]
-				.sort((a, b) => a.path.localeCompare(b.path))
-				.forEach((mod) => {
-					if (mod.hashes) {
-						mod.hashes.forEach((hash) => {
-							if (mod.enabled) {
-								if (!hashes[hash]) {
-									hashes[hash] = [];
-								}
-								hashes[hash].push(mod.path);
-							}
-							if (!allHashes[hash]) {
-								allHashes[hash] = new Set();
-							}
-							allHashes[hash].add(mod.parent);
-						});
-					}
-				});
-			const validHashes = Object.entries(allHashes).filter(([_, parents]) => parents.size == 1);
-			const collisions = Object.entries(hashes).filter(
-				([hash, paths]) => paths.length > 1 && validHashes.some(([vHash]) => vHash === hash)
-			);
-			const collisionMap: Record<string, Set<string>> = {};
-			collisions.forEach(([_, paths]) => {
-				const key = paths[0];
-				collisionMap[key] = collisionMap[key] || new Set();
-				paths.slice(1).forEach((p) => {
-					collisionMap[key].add(p);
-				});
-			});
-			const modsInvolved = {} as Record<string, number>;
-			const newCols = Object.keys(collisionMap).map((key, i) => {
-				const paths = [key, ...[...collisionMap[key]]];
-				paths.forEach((p) => {
-					modsInvolved[p] = modsInvolved[p] || i;
-				});
-				return paths;
-			});
 
-			const conflictsChanged = JSON.stringify(conflicts.conflicts) !== JSON.stringify(newCols);
-			if (collisions.length > 0 && conflictsChanged) {
-				addToast({
-					type: "error",
-					message: textData._Toasts.CollisionsDetected,
-					onClick: openConflict,
+		const allHashes: { [key: string]: Set<string> } = {};
+		const hashes: { [key: string]: string[] } = {};
+		[...modList]
+			.sort((a, b) => a.path.localeCompare(b.path))
+			.forEach((mod) => {
+				mod.hashes?.forEach((hash) => {
+					if (mod.enabled) {
+						if (!hashes[hash]) hashes[hash] = [];
+						hashes[hash].push(mod.path);
+					}
+					if (!allHashes[hash]) allHashes[hash] = new Set();
+					allHashes[hash].add(mod.parent);
 				});
-				setConflicts({ conflicts: newCols, mods: modsInvolved });
-			} else if (collisions.length == 0 && conflicts.conflicts.length > 0) {
-				setConflicts({ conflicts: [], mods: {} });
-				setConflictsOpen(false);
-			}
+			});
+		const validHashes = Object.entries(allHashes).filter(([_, parents]) => parents.size == 1);
+		const collisions = Object.entries(hashes).filter(
+			([hash, paths]) => paths.length > 1 && validHashes.some(([validHash]) => validHash === hash)
+		);
+		const collisionMap: Record<string, Set<string>> = {};
+		collisions.forEach(([_, paths]) => {
+			const key = paths[0];
+			collisionMap[key] = collisionMap[key] || new Set();
+			paths.slice(1).forEach((path) => collisionMap[key].add(path));
+		});
+		const modsInvolved: Record<string, number> = {};
+		const newConflicts = Object.keys(collisionMap).map((key, index) => {
+			const paths = [key, ...collisionMap[key]];
+			paths.forEach((path) => {
+				modsInvolved[path] = modsInvolved[path] || index;
+			});
+			return paths;
+		});
+
+		const conflictsChanged = JSON.stringify(conflicts.conflicts) !== JSON.stringify(newConflicts);
+		if (collisions.length > 0 && conflictsChanged) {
+			addToast({
+				type: "error",
+				message: textData._Toasts.CollisionsDetected,
+				onClick: openConflict,
+			});
+			setConflicts({ conflicts: newConflicts, mods: modsInvolved });
+		} else if (collisions.length == 0 && conflicts.conflicts.length > 0) {
+			setConflicts({ conflicts: [], mods: {} });
+			setConflictsOpen(false);
 		}
-		checkForHashCollisions();
 	}, [conflicts.conflicts, initDone, modList, setConflicts, setConflictsOpen, textData._Toasts.CollisionsDetected]);
+
 	const filteredList = useMemo(() => {
 		let newList: Mod[] =
 			searchDB && search
@@ -171,8 +159,8 @@ function MainLocal() {
 					break;
 				case "tag": {
 					const valObj = value as Record<string, string>;
-					modifier = (mod) => {
-						return Object.entries(valObj).every(([tag, val]) => {
+					modifier = (mod) =>
+						Object.entries(valObj).every(([tag, val]) => {
 							switch (val) {
 								case "has":
 									return (mod.tags || []).includes(tag);
@@ -182,7 +170,6 @@ function MainLocal() {
 									return true;
 							}
 						});
-					};
 					break;
 				}
 				case "upd":
@@ -191,12 +178,10 @@ function MainLocal() {
 				default:
 					return;
 			}
-			newList = newList.filter((mod) => modifier(mod));
+			newList = newList.filter(modifier);
 		});
 
-		if (category.size > 0) {
-			newList = newList.filter((mod) => category.has(mod.parent));
-		}
+		if (category.size > 0) newList = newList.filter((mod) => category.has(mod.parent));
 		switch (sort) {
 			case "fav-asc":
 				newList.sort((a, b) => {
@@ -216,184 +201,140 @@ function MainLocal() {
 		const regularMods = newList.filter((mod) => !isModBlacklisted(mod.tags));
 		const blacklistedMods = newList.filter((mod) => isModBlacklisted(mod.tags));
 		return [...regularMods, ...blacklistedMods];
-	}, [category, filter, modList, search, sort, updateObj]);
+	}, [category, filter, modList, search, searchDB, sort, updateObj]);
+
 	const currentKey = useMemo(
-		() => `${JSON.stringify(filter)}-${Array.from(category).join(",")}-${search}-${modList.length}-${sort}`,
-		[category, filter, modList.length, search, sort]
+		() => `${source}-${JSON.stringify(filter)}-${Array.from(category).join(",")}-${search}-${modList.length}-${sort}`,
+		[category, filter, modList.length, search, sort, source]
 	);
-	const keyChanged = prev !== currentKey;
-	const animationInitialState = initial || keyChanged;
-	const currentVisibleRange = useMemo(
-		() => (keyChanged ? { start: -1, end: -1 } : visibleRange),
-		[keyChanged, visibleRange]
+	const columnCount = Math.max(1, Math.floor(Math.max(containerWidth, CARD_COLUMN_WIDTH) / CARD_COLUMN_WIDTH));
+	const rowCount = Math.ceil(filteredList.length / columnCount);
+	// TanStack Virtual intentionally owns mutable scroll measurements outside React memoization.
+	// eslint-disable-next-line react-hooks/incompatible-library
+	const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+		count: rowCount,
+		getScrollElement: () => containerRef.current,
+		estimateSize: () => CARD_ROW_SIZE,
+		getItemKey: (index) => `${currentKey}:${index}`,
+		overscan: VIRTUAL_OVERSCAN_ROWS,
+	});
+	const virtualRows = rowVirtualizer.getVirtualItems();
+	const visiblePreviewPaths = useMemo(
+		() =>
+			virtualRows.flatMap((row) =>
+				filteredList.slice(row.index * columnCount, (row.index + 1) * columnCount).map((mod) => mod.path)
+			),
+		[columnCount, filteredList, virtualRows]
 	);
+
 	useEffect(() => {
-		if (prev !== currentKey) {
-			if (containerRef.current) {
-				containerRef.current.scrollTo({ top: 0 });
-			}
-		}
-		prev = currentKey;
+		containerRef.current?.scrollTo({ top: 0 });
 	}, [currentKey]);
 
-	const handleClick = async (e: MouseEvent, mod: Mod) => {
-		const click = e.button;
-		const tag = (e.target as HTMLElement).tagName.toLowerCase();
-		if (tag == "button") {
-			return;
-		}
-		if (click == toggleOn) {
-			const ct = (e.currentTarget as HTMLDivElement)?.firstElementChild?.firstElementChild
-				?.nextElementSibling as HTMLImageElement;
-			if (ct) ct.style.filter = mod.enabled ? "brightness(0.5) saturate(0.5)" : "brightness(1) ";
+	useEffect(() => {
+		requestVisiblePreviewAssets(game, visiblePreviewPaths);
+	}, [game, visiblePreviewPaths]);
+
+	const setContainerElement = useCallback((element: HTMLDivElement | null) => {
+		resizeObserverRef.current?.disconnect();
+		resizeObserverRef.current = null;
+		containerRef.current = element;
+		if (!element) return;
+
+		setContainerWidth(element.clientWidth);
+		if (typeof ResizeObserver === "undefined") return;
+		resizeObserverRef.current = new ResizeObserver(([entry]) => {
+			const width = Math.floor(entry.contentRect.width);
+			setContainerWidth((current) => (current === width ? current : width));
+		});
+		resizeObserverRef.current.observe(element);
+	}, []);
+
+	const handleClick = async (event: MouseEvent, mod: Mod) => {
+		const tag = (event.target as HTMLElement).tagName.toLowerCase();
+		if (tag == "button") return;
+		if (event.button == toggleOn) {
 			const success = await toggleMod(mod.path, !mod.enabled);
 			info("[IMM] Toggled mod:", mod.path, !mod.enabled, success);
-			if (success)
-				setModList((prev) => {
-					return prev.map((m) => {
-						if (m.path == mod.path) {
-							return { ...m, enabled: !m.enabled };
-						}
-						return m;
-					});
-				});
-		} else setSelected(mod.path == selected ? "" : mod.path);
-	};
-	const handleScroll = useCallback(() => {
-		if (initial) {
-			setInitial(false);
-		}
-		if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-		scrollTimeoutRef.current = setTimeout(() => {
-			if (containerRef.current) {
-				const box = containerRef.current.getBoundingClientRect();
-				const scrollTop = containerRef.current.scrollTop;
-				const itemHeight = 304;
-				const itemWidth = 256;
-				const itemsPerRow = Math.floor((box.width - 10) / itemWidth);
-				info(itemsPerRow, itemWidth, box.width - 10);
-				setVisibleRange({
-					start: Math.floor(scrollTop / itemHeight) * itemsPerRow,
-					end: Math.ceil((scrollTop + box.height) / itemHeight) * itemsPerRow - 1,
-				});
+			if (success) {
+				setModList((current) =>
+					current.map((item) => (item.path == mod.path ? { ...item, enabled: !item.enabled } : item))
+				);
 			}
-		}, 50);
-	}, [initial]);
+		} else {
+			setSelected(mod.path == selected ? "" : mod.path);
+		}
+	};
 
-	// Memoize animation variants to prevent recreation on every render
-	const animationVariants = useCallback(
-		() => ({
-			hidden: { opacity: animationInitialState ? 0 : 1, y: 20 },
-			visible: { opacity: 1, y: 0 },
-			exit: { opacity: animationInitialState ? 0 : 1, y: -20 },
-			invisible: { opacity: 0 },
-		}),
-		[animationInitialState]
-	);
-
-	// Memoize transition config
-	const transitionConfig = useCallback(
-		(index: number) => ({
-			duration: 0.3,
-			ease: "easeOut" as const,
-			delay: animationInitialState ? 0.05 * index : 0,
-		}),
-		[animationInitialState]
-	);
-
-	// Determine if item should be visible
-	const isItemVisible = useCallback(
-		(index: number) => {
-			const { start, end } = currentVisibleRange;
-			return start === -1 || (index >= start && index <= end) ? 0 : index < start ? 2 : 1;
-		},
-		[currentVisibleRange]
-	);
-	const noItems = useMemo(() => {
-		return (
-			<div
-				className="text-muted flex flex-col items-center justify-center w-full h-0 duration-200"
-				style={{
-					height: modList.length == 0 ? "100%" : "0px",
-					opacity: modList.length == 0 ? 1 : 0,
-				}}
-			>
-				<label>{textData._Main._MainLocal.NoMods}</label>
-			</div>
-		);
-	}, [modList.length, textData._Main._MainLocal.NoMods]);
-	// info(conflicts);
 	return (
-		<>
-			<div
-				ref={containerRef}
-				onScroll={handleScroll}
-				className="flex flex-col items-center w-full h-screen overflow-x-hidden overflow-y-auto duration-300"
-			>
-				{" "}
-				<label className="text-muted z-200 flex flex-col items-center gap-1">
-					<label className="flex items-center">
-						{filteredList.length} {textData.Items}{" "}
-					</label>
-					<label className="text-xs">
-						in{" "}
-						<label
-							onClick={() => {
-								void openManagedFolder("source", managedSRC);
-							}}
-							className="hover:opacity-75 text-blue-300 duration-200 opacity-50 pointer-events-auto"
-						>
-							{source.split("\\").slice(-2).join("\\")}\{managedSRC}
-						</label>
+		<div className="flex h-screen w-full flex-col items-center overflow-hidden duration-300">
+			<label className="text-muted z-200 flex shrink-0 flex-col items-center gap-1">
+				<label className="flex items-center">
+					{filteredList.length} {textData.Items}
+				</label>
+				<label className="text-xs">
+					in{" "}
+					<label
+						onClick={() => void openManagedFolder("source", managedSRC)}
+						className="pointer-events-auto text-blue-300 opacity-50 duration-200 hover:opacity-75"
+					>
+						{source.split("\\").slice(-2).join("\\")}\{managedSRC}
 					</label>
 				</label>
-				{noItems}
-				<AnimatePresence mode="popLayout">
-					<motion.div
-						layout
-						className="min-h-fit card-grid grid justify-center w-full py-4"
-						key={currentKey}
-						initial={{ opacity: 0, pointerEvents: "none" }}
-						animate={{ opacity: 1, pointerEvents: "auto" }}
-						exit={{ opacity: 0, pointerEvents: "none" }}
-						transition={{ ...transitionConfig(0) }}
-					>
-						{filteredList.map((mod, index) => {
-							const isVisible = isItemVisible(index);
-
+			</label>
+			{filteredList.length === 0 ? (
+				<div className="text-muted flex min-h-0 flex-1 items-center justify-center">
+					<label>{textData._Main._MainLocal.NoMods}</label>
+				</div>
+			) : (
+				<div ref={setContainerElement} className="min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto">
+					<div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+						{virtualRows.map((virtualRow) => {
+							const rowStart = virtualRow.index * columnCount;
+							const rowMods = filteredList.slice(rowStart, rowStart + columnCount);
 							return (
-								<motion.div
-									key={mod.path + currentKey}
-									layout
-									variants={animationVariants()}
-									initial="hidden"
-									animate="visible"
-									exit="exit"
-									transition={transitionConfig(index)}
-									onMouseUp={(e) => void handleClick(e.nativeEvent, mod)}
-									onContextMenu={preventContextMenu}
+								<div
+									key={virtualRow.key}
+									className="absolute left-0 top-0 grid w-full justify-center"
+									style={{
+										height: `${CARD_HEIGHT}px`,
+										gridTemplateColumns: `repeat(${columnCount}, ${CARD_COLUMN_WIDTH}px)`,
+										transform: `translateY(${virtualRow.start + 16}px)`,
+									}}
 								>
-									{isVisible ? (
-										<div className="card-generic"></div>
-									) : (
-										<CardLocal
-											item={mod}
-											selected={selected === mod.path}
-											lastUpdated={lastUpdated}
-											hasUpdate={updateObj[mod.path]}
-											updateAvl={textData.UpdateAvl}
-											inConflict={conflicts.mods[mod.path] ?? -1}
-											isBlacklisted={isModBlacklisted(mod.tags)}
-											blacklistedLabel={(textData as { Blacklisted?: string }).Blacklisted || "Blacklisted"}
-										/>
-									)}
-								</motion.div>
+									{rowMods.map((mod, columnIndex) => (
+										<motion.div
+											key={mod.path}
+											className="flex h-full w-64 justify-center"
+											initial={{ opacity: 0, y: 12 }}
+											animate={{ opacity: 1, y: 0 }}
+											transition={{
+												duration: 0.2,
+												ease: "easeOut",
+												delay: Math.min(columnIndex * 0.025, 0.1),
+											}}
+											onMouseUp={(event) => void handleClick(event.nativeEvent, mod)}
+											onContextMenu={preventContextMenu}
+										>
+											<CardLocal
+												item={mod}
+												game={game}
+												selected={selected === mod.path}
+												hasUpdate={updateObj[mod.path]}
+												updateAvl={textData.UpdateAvl}
+												inConflict={conflicts.mods[mod.path] ?? -1}
+												isBlacklisted={isModBlacklisted(mod.tags)}
+												blacklistedLabel={(textData as { Blacklisted?: string }).Blacklisted || "Blacklisted"}
+											/>
+										</motion.div>
+									))}
+								</div>
 							);
 						})}
-					</motion.div>
-				</AnimatePresence>
-			</div>
-		</>
+					</div>
+				</div>
+			)}
+		</div>
 	);
 }
 

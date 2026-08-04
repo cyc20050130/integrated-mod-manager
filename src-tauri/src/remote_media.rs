@@ -1,5 +1,6 @@
 use atomic_write_file::AtomicWriteFile;
 use futures_util::StreamExt;
+use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
@@ -89,7 +90,6 @@ pub(crate) fn validate_remote_media_url(raw_url: &str) -> Result<Url, String> {
         "images.gamebanana.com" => {
             url.path().starts_with("/img/") || url.path().starts_with("/static/")
         }
-        "api.hakush.in" => url.path().starts_with("/gi/UI/"),
         "flagsapi.com" => {
             let parts = url
                 .path()
@@ -104,10 +104,6 @@ pub(crate) fn validate_remote_media_url(raw_url: &str) -> Result<Url, String> {
                     !size.is_empty() && size.chars().all(|ch| ch.is_ascii_digit())
                 })
         }
-        "huihui.top" | "www.huihui.top" | "www.kekehxl.com" => {
-            url.path().starts_with('/') && !url.path().contains("..")
-        }
-        "pic1.afdiancdn.com" => url.path().starts_with("/user/"),
         _ => false,
     };
     if !allowed {
@@ -241,6 +237,44 @@ pub(crate) fn decode_and_reencode_remote_media(
         .write_to(&mut output, ImageFormat::Png)
         .map_err(|err| format!("Unable to encode normalized remote image: {err}"))?;
     Ok(output.into_inner())
+}
+
+pub(crate) fn decode_and_reencode_preview_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let format = image::guess_format(bytes)
+        .map_err(|err| format!("Unable to identify preview image bytes: {err}"))?;
+    if !matches!(
+        format,
+        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP
+    ) {
+        return Err("Preview images must be PNG, JPEG, or WebP.".to_string());
+    }
+    if format == ImageFormat::WebP && webp_is_animated(bytes) {
+        return Err("Animated WebP preview images are not supported.".to_string());
+    }
+
+    let mut dimension_reader = ImageReader::with_format(Cursor::new(bytes), format);
+    dimension_reader.limits(image_limits());
+    let (width, height) = dimension_reader
+        .into_dimensions()
+        .map_err(|err| format!("Unable to inspect preview image dimensions: {err}"))?;
+    validate_remote_media_dimensions(width, height)?;
+
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(image_limits());
+    let decoded = reader
+        .decode()
+        .map_err(|err| format!("Unable to decode preview image safely: {err}"))?;
+    let normalized: DynamicImage = if width > MAX_OUTPUT_DIMENSION || height > MAX_OUTPUT_DIMENSION
+    {
+        decoded.thumbnail(MAX_OUTPUT_DIMENSION, MAX_OUTPUT_DIMENSION)
+    } else {
+        decoded
+    };
+    let mut output = Vec::new();
+    JpegEncoder::new_with_quality(&mut output, 88)
+        .encode_image(&normalized)
+        .map_err(|err| format!("Unable to encode normalized JPEG preview: {err}"))?;
+    Ok(output)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -768,25 +802,19 @@ async fn wait_for_remote_media_flight(
         .unwrap_or_else(|| Err("Remote media single-flight returned no result.".to_string()))
 }
 
-#[tauri::command]
-pub async fn resolve_remote_media(
-    app_handle: tauri::AppHandle,
-    url: String,
-) -> Result<String, String> {
-    let validated = validate_remote_media_url(&url)?;
+pub(crate) async fn resolve_remote_media_in_app_data(
+    app_local_data: &Path,
+    url: &str,
+) -> Result<PathBuf, String> {
+    let validated = validate_remote_media_url(url)?;
     let normalized_url = validated.to_string();
     if normalized_url.len() > MAX_REMOTE_MEDIA_URL_BYTES {
         return Err("Remote image URL exceeds the 4096-byte limit.".to_string());
     }
-    let cache_dir = app_handle
-        .path()
-        .app_local_data_dir()
-        .map_err(|err| format!("Unable to resolve remote media cache: {err}"))?
-        .join("preview-cache")
-        .join("remote-media");
+    let cache_dir = app_local_data.join("preview-cache").join("remote-media");
 
     if let Some(path) = lookup_remote_media_path(&cache_dir, &normalized_url)? {
-        return Ok(path);
+        return Ok(PathBuf::from(path));
     }
 
     let _request_slot = REMOTE_MEDIA_REQUEST_SLOTS
@@ -804,7 +832,9 @@ pub async fn resolve_remote_media(
         }
     };
     if let Some(receiver) = follower {
-        return wait_for_remote_media_flight(receiver).await;
+        return wait_for_remote_media_flight(receiver)
+            .await
+            .map(PathBuf::from);
     }
 
     let result = resolve_remote_media_leader(&cache_dir, &normalized_url, validated).await;
@@ -812,7 +842,21 @@ pub async fn resolve_remote_media(
         let _ = sender.send(Some(result.clone()));
     }
     REMOTE_MEDIA_FLIGHTS.lock().await.remove(&normalized_url);
-    result
+    result.map(PathBuf::from)
+}
+
+#[tauri::command]
+pub async fn resolve_remote_media(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> Result<String, String> {
+    let app_local_data = app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|err| format!("Unable to resolve remote media cache: {err}"))?;
+    resolve_remote_media_in_app_data(&app_local_data, &url)
+        .await
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 fn validate_health_segment(value: &str, label: &str, max_len: usize) -> Result<(), String> {
@@ -906,12 +950,7 @@ mod tests {
         for url in [
             "https://images.gamebanana.com/img/ss/mods/demo.png",
             "https://images.gamebanana.com/static/img/demo.webp",
-            "https://api.hakush.in/gi/UI/demo.webp",
             "https://flagsapi.com/CN/flat/64.png",
-            "https://www.huihui.top/images/demo.jpg",
-            "https://huihui.top/images/demo.jpg",
-            "https://www.kekehxl.com/images/demo.jpg",
-            "https://pic1.afdiancdn.com/user/demo/cover.png",
         ] {
             assert!(validate_remote_media_url(url).is_ok(), "{url}");
         }
@@ -923,6 +962,10 @@ mod tests {
             "https://images.gamebanana.com:444/img/demo.png",
             "https://127.0.0.1/demo.png",
             "https://example.com/demo.png",
+            "https://api.hakush.in/gi/UI/demo.webp",
+            "https://www.huihui.top/images/demo.jpg",
+            "https://www.kekehxl.com/images/demo.jpg",
+            "https://pic1.afdiancdn.com/user/demo/cover.png",
         ] {
             assert!(validate_remote_media_url(url).is_err(), "{url}");
         }
@@ -982,6 +1025,18 @@ mod tests {
         let output = decode_and_reencode_remote_media(source.get_ref(), "image/png").unwrap();
         assert!(output.starts_with(&[0x89, b'P', b'N', b'G']));
         let decoded = image::load_from_memory_with_format(&output, ImageFormat::Png).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (2, 2));
+    }
+
+    #[test]
+    fn install_previews_are_reencoded_as_jpeg() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 2, Rgba([1, 2, 3, 128])));
+        let mut source = Cursor::new(Vec::new());
+        image.write_to(&mut source, ImageFormat::Png).unwrap();
+
+        let output = decode_and_reencode_preview_jpeg(source.get_ref()).unwrap();
+        assert!(output.starts_with(&[0xff, 0xd8, 0xff]));
+        let decoded = image::load_from_memory_with_format(&output, ImageFormat::Jpeg).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (2, 2));
     }
 

@@ -1,9 +1,16 @@
-import type { UnifiedOnlineListCard } from "./unifiedOnline";
 import type { RegisteredGame } from "./gameRegistry";
 
 export type Games = RegisteredGame | "";
 export type NteRegion = "auto" | "global" | "cn" | "tw";
 export type Language = "en" | "cn" | "ru" | "jp" | "kr" | "";
+export type RuntimeBootstrapPhase = "cold" | "preparing" | "prepared" | "needsConfiguration" | "ready" | "failed";
+export interface RuntimeBootstrapState {
+	phase: RuntimeBootstrapPhase;
+	generation: number;
+	game: Games;
+	stage: string;
+	error: string | null;
+}
 export interface WuwaModFixerState {
 	version: string;
 	exePath: string;
@@ -83,6 +90,7 @@ export interface Category {
 }
 export interface ModData {
 	source?: string;
+	gameBanana?: GameBananaBinding;
 	updatedAt?: number;
 	viewedAt?: number;
 	tags?: string[];
@@ -96,6 +104,20 @@ export interface ModData {
 		y?: number;
 		vertical?: boolean;
 	};
+}
+export interface GameBananaSelectedFile {
+	id: string;
+	name: string;
+	size: number;
+	updatedAt: number;
+}
+export interface GameBananaBinding {
+	provider: "gamebanana";
+	modId: number;
+	profileUrl: string;
+	variant: "primary" | "independent";
+	boundAt: number;
+	selectedFile?: GameBananaSelectedFile;
 }
 export interface ModDataObj {
 	[key: string]: ModData;
@@ -144,6 +166,8 @@ export interface DownloadItem {
 		algorithm: "md5";
 		value: string;
 	};
+	gameBananaModId?: number;
+	gameBananaFileId?: string;
 }
 export interface DownloadList {
 	queue: DownloadItem[];
@@ -178,6 +202,7 @@ export interface Mod {
 	depth: number;
 	icon?: string;
 	source?: string;
+	gameBanana?: GameBananaBinding;
 	updatedAt?: number;
 	viewedAt?: number;
 	note?: string;
@@ -253,20 +278,29 @@ export interface OnlineMod {
 	_aPreviewMedia?: OnlineModPreviewMedia;
 	_aSubmitter: OnlineModSubmitter;
 	_aRootCategory: OnlineModCategory;
+	_aCategory?: OnlineModCategory;
+	_aGame?: { _idRow: number; _sName: string };
+	_aUpdates?: unknown[];
 	_sVersion?: string;
+	_sText?: string;
+	_eUpdate?: boolean;
 	_bIsObsolete?: boolean;
+	_bIsPrivate?: boolean;
+	_bIsTrashed?: boolean;
+	_bIsWithheld?: boolean;
 	_sInitialVisibility: string;
 	_bHasContentRatings?: boolean;
 	_nLikeCount: number;
+	_nDownloadCount?: number;
 	_nPostCount: number;
 	_bWasFeatured?: boolean;
 	_nViewCount?: number;
 	_bIsOwnedByAccessor?: boolean;
 	_sImageUrl?: string;
-	_aComments?: unknown[];
+	_aComments?: unknown;
 	_sPeriod?: "today" | "yesterday" | "week" | "month" | "3month" | "6month" | "year" | "alltime";
 }
-export type OnlineListItem = OnlineMod | UnifiedOnlineListCard;
+export type OnlineListItem = OnlineMod;
 export interface OnlineData {
 	[key: string]: OnlineListItem[] | OnlineListItem;
 }

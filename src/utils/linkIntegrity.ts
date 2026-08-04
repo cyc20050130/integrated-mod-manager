@@ -1,9 +1,7 @@
 import { addToast } from "@/_Toaster/ToastProvider";
-import { save } from "@tauri-apps/plugin-dialog";
-import { exists, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { managedSRC, exts, GAMES } from "./consts";
-import { apiClient } from "./api";
+import { getGameBananaProvider } from "./api";
 import {
 	DATA,
 	GAME,
@@ -28,11 +26,10 @@ import {
 	PreviewBackfillState,
 } from "./types";
 import { join } from "./hotreload";
-import { loadNteConfigText, persistNteConfig } from "./nteConfigRevision";
+import { getManagedConfigTarget, readManagedConfigText, writeManagedConfigText } from "./appConfigRepository";
 
 const LINK_SCAN_SCOPE: Games[] = [...GAMES];
 const PREVIEW_COOLDOWN_MS = 30 * 60 * 1000;
-const PREVIEW_DELAY_MS = 900;
 const SUGGESTION_THRESHOLD = 0.48;
 
 let previewBackfillRunning = false;
@@ -46,8 +43,38 @@ type ConfigGame = {
 	data: Record<string, ModData>;
 };
 
-function readGameConfigText(game: Games, configPath: string) {
-	return game === "NTE" ? loadNteConfigText() : readTextFile(configPath);
+type ManagedDirEntry = {
+	name: string;
+	isDirectory: boolean;
+};
+
+function managedSourcePath(...segments: string[]) {
+	return segments
+		.map((segment) => normalizePathKey(segment).replace(/^\\+|\\+$/g, ""))
+		.filter(Boolean)
+		.join("\\");
+}
+
+function managedPathExists(game: Games, relativePath: string) {
+	return invoke<boolean>("managed_path_exists", {
+		game,
+		rootKind: "source",
+		relativePath,
+	});
+}
+
+function readManagedDir(game: Games, relativePath: string) {
+	return invoke<ManagedDirEntry[]>("read_managed_dir", {
+		game,
+		rootKind: "source",
+		relativePath,
+	});
+}
+
+function readGameConfigText(_game: Games, configPath: string) {
+	const managedConfig = getManagedConfigTarget(configPath);
+	if (!managedConfig) throw new Error(`Unsupported managed game configuration: ${configPath}`);
+	return readManagedConfigText(managedConfig);
 }
 
 function normalizePathKey(path: string) {
@@ -144,7 +171,6 @@ function buildSuggestion(
 
 async function readGameConfig(game: Games): Promise<ConfigGame | null> {
 	const configPath = `config${game}.json`;
-	if (!(await exists(configPath))) return null;
 	try {
 		const parsed = JSON.parse(await readGameConfigText(game, configPath));
 		const sourceDir = String(parsed?.sourceDir || "").trim();
@@ -160,16 +186,15 @@ async function readGameConfig(game: Games): Promise<ConfigGame | null> {
 	}
 }
 
-async function listManagedMods(modRoot: string) {
-	if (!modRoot || !(await exists(modRoot))) return [] as string[];
+async function listManagedMods(game: Games) {
 	const paths: string[] = [];
-	const categories = await readDir(modRoot);
+	const categories = await readManagedDir(game, managedSRC);
 	for (const category of categories) {
 		if (!category.isDirectory || !category.name) continue;
-		const categoryPath = join(modRoot, category.name);
-		let mods: Awaited<ReturnType<typeof readDir>> = [];
+		const categoryPath = managedSourcePath(managedSRC, category.name);
+		let mods: ManagedDirEntry[] = [];
 		try {
-			mods = await readDir(categoryPath);
+			mods = await readManagedDir(game, categoryPath);
 		} catch {
 			continue;
 		}
@@ -321,7 +346,21 @@ export async function scanLinkIntegrity(scope: Games[] = LINK_SCAN_SCOPE): Promi
 			.filter((entry) => entry.path && entry.source);
 		const linkedPathSet = new Set(linkedEntries.map((entry) => entry.path));
 
-		const localPaths = await listManagedMods(cfg.modRoot);
+		const warnings: string[] = [];
+		let localPaths: string[] = [];
+		if (!cfg.sourceDir) {
+			warnings.push("sourceDir not set");
+		} else {
+			try {
+				if (await managedPathExists(game, managedSRC)) {
+					localPaths = await listManagedMods(game);
+				} else {
+					warnings.push("managed mod root does not exist");
+				}
+			} catch (error) {
+				warnings.push(`managed mod root is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 		const localPathSet = new Set(localPaths.map((path) => normalizePathKey(path)));
 
 		const matched = [...localPathSet]
@@ -336,10 +375,6 @@ export async function scanLinkIntegrity(scope: Games[] = LINK_SCAN_SCOPE): Promi
 			.map((path) => toOrphanEntry(path, orphanMap.get(path) || ""))
 			.filter((entry) => entry.source);
 		const suggestedMappings = buildSuggestions(game, unlinked, orphans);
-
-		const warnings: string[] = [];
-		if (!cfg.sourceDir) warnings.push("sourceDir not set");
-		else if (!(await exists(cfg.modRoot))) warnings.push("managed mod root does not exist");
 
 		gameReports.push({
 			game,
@@ -387,7 +422,6 @@ export async function applyLinkAuditSuggestions(
 
 	for (const gameReport of effectiveReport.games) {
 		if (!scope.includes(gameReport.game)) continue;
-		if (!(await exists(gameReport.configPath))) continue;
 
 		let parsed: { data?: Record<string, ModData>; presets?: Preset[] } | null = null;
 		try {
@@ -442,9 +476,9 @@ export async function applyLinkAuditSuggestions(
 
 		parsed.data = nextData;
 		parsed.presets = nextPresets;
-		const serialized = JSON.stringify(parsed, null, 2);
-		if (gameReport.game === "NTE") await persistNteConfig(serialized);
-		else await writeTextFile(gameReport.configPath, serialized);
+		const managedConfig = getManagedConfigTarget(gameReport.configPath);
+		if (!managedConfig) throw new Error(`Unsupported managed game configuration: ${gameReport.configPath}`);
+		await writeManagedConfigText(managedConfig, JSON.stringify(parsed, null, 2));
 
 		if (currentGame === gameReport.game) {
 			store.set(DATA, nextData);
@@ -457,13 +491,11 @@ export async function applyLinkAuditSuggestions(
 
 export async function exportLinkAuditReport(report: LinkAuditReport | null) {
 	if (!report) return false;
-	const target = await save({
-		defaultPath: `IMM-link-audit-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.json`,
-		filters: [{ name: "JSON files", extensions: ["json"] }],
+	return invoke<boolean>("export_json_document", {
+		kind: "linkAudit",
+		game: null,
+		contents: JSON.stringify(report, null, 2),
 	});
-	if (!target) return false;
-	await writeTextFile(target, JSON.stringify(report, null, 2));
-	return true;
 }
 
 function sourceToModRoute(source: string) {
@@ -472,10 +504,10 @@ function sourceToModRoute(source: string) {
 	return tail ? `Mod/${tail}` : "";
 }
 
-async function hasPreviewImage(modDir: string) {
+async function hasPreviewImage(game: Games, modRelativePath: string) {
 	try {
-		if (!(await exists(modDir))) return false;
-		const entries = await readDir(modDir);
+		if (!(await managedPathExists(game, modRelativePath))) return false;
+		const entries = await readManagedDir(game, modRelativePath);
 		return entries.some((entry) => {
 			if (entry.isDirectory || !entry.name) return false;
 			if (!entry.name.toLowerCase().startsWith("preview.")) return false;
@@ -487,21 +519,18 @@ async function hasPreviewImage(modDir: string) {
 	}
 }
 
-async function fetchPreviewUrl(source: string) {
+async function fetchPreviewUrl(game: Games, source: string) {
+	if (!game) return "";
 	const route = sourceToModRoute(source);
 	if (!route) return "";
 	try {
-		const mod = (await apiClient.mod(route)) as Pick<OnlineMod, "_aPreviewMedia">;
+		const mod = (await getGameBananaProvider(game).mod(route)) as Pick<OnlineMod, "_aPreviewMedia">;
 		const image = mod?._aPreviewMedia?._aImages?.[0];
 		if (!image?._sBaseUrl || !image?._sFile) return "";
 		return `${image._sBaseUrl}/${image._sFile}`;
 	} catch {
 		return "";
 	}
-}
-
-async function sleep(ms: number) {
-	await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function runPreviewBackfill(report: LinkAuditReport | null = store.get(LINK_AUDIT_REPORT)) {
@@ -517,14 +546,18 @@ export async function runPreviewBackfill(report: LinkAuditReport | null = store.
 	};
 	store.set(PREVIEW_BACKFILL_STATE, initial);
 	try {
-		const tasks = [] as Array<{ game: Games; modPath: string; modDir: string; source: string }>;
+		const tasks = [] as Array<{ game: Games; modPath: string; source: string }>;
 		for (const gameReport of report.games) {
 			for (const mod of gameReport.matched) {
 				if (!mod.source) continue;
-				const modDir = join(gameReport.modRoot, mod.path);
-				if (!(await exists(modDir))) continue;
-				if (await hasPreviewImage(modDir)) continue;
-				tasks.push({ game: gameReport.game, modPath: mod.path, modDir, source: mod.source });
+				const modRelativePath = managedSourcePath(managedSRC, mod.path);
+				try {
+					if (!(await managedPathExists(gameReport.game, modRelativePath))) continue;
+				} catch {
+					continue;
+				}
+				if (await hasPreviewImage(gameReport.game, modRelativePath)) continue;
+				tasks.push({ game: gameReport.game, modPath: mod.path, source: mod.source });
 			}
 		}
 		store.set(PREVIEW_BACKFILL_STATE, (prev) => ({
@@ -533,7 +566,8 @@ export async function runPreviewBackfill(report: LinkAuditReport | null = store.
 			lastRunAt: Date.now(),
 		}));
 		for (const task of tasks) {
-			const cooldownUntil = previewFailureCooldown.get(task.source) || 0;
+			const cooldownKey = `${task.game}:${task.source}`;
+			const cooldownUntil = previewFailureCooldown.get(cooldownKey) || 0;
 			if (cooldownUntil > Date.now()) {
 				store.set(PREVIEW_BACKFILL_STATE, (prev) => ({
 					...prev,
@@ -541,9 +575,9 @@ export async function runPreviewBackfill(report: LinkAuditReport | null = store.
 				}));
 				continue;
 			}
-			const previewUrl = await fetchPreviewUrl(task.source);
+			const previewUrl = await fetchPreviewUrl(task.game, task.source);
 			if (!previewUrl) {
-				previewFailureCooldown.set(task.source, Date.now() + PREVIEW_COOLDOWN_MS);
+				previewFailureCooldown.set(cooldownKey, Date.now() + PREVIEW_COOLDOWN_MS);
 				store.set(PREVIEW_BACKFILL_STATE, (prev) => ({
 					...prev,
 					failed: prev.failed + 1,
@@ -552,35 +586,24 @@ export async function runPreviewBackfill(report: LinkAuditReport | null = store.
 				continue;
 			}
 			try {
-				await invoke("download_and_unzip", {
-					fileName: "preview",
-					downloadUrl: previewUrl,
-					savePath: task.modDir,
-					key: `preview_backfill_${task.game}_${task.modPath}_${Date.now()}`,
-					emit: false,
-					downloadOptions: {
-						connectTimeoutSec: 8,
-						stallTimeoutSec: 20,
-						requestRetries: 2,
-						progressIntervalMs: 1000,
-						progressBytesThreshold: 262144,
-						backoffBaseMs: 1500,
-						maxConcurrentExtracts: 1,
-					},
+				await invoke("backfill_mod_preview", {
+					game: task.game,
+					relativePath: task.modPath,
+					previewUrl,
 				});
 				store.set(PREVIEW_BACKFILL_STATE, (prev) => ({
 					...prev,
 					completed: prev.completed + 1,
 				}));
-			} catch {
-				previewFailureCooldown.set(task.source, Date.now() + PREVIEW_COOLDOWN_MS);
+			} catch (error) {
+				previewFailureCooldown.set(cooldownKey, Date.now() + PREVIEW_COOLDOWN_MS);
+				const message = error instanceof Error ? error.message : String(error || "preview backfill failed");
 				store.set(PREVIEW_BACKFILL_STATE, (prev) => ({
 					...prev,
 					failed: prev.failed + 1,
-					lastError: `[${task.game}] ${task.modPath}: preview download failed`,
+					lastError: `[${task.game}] ${task.modPath}: ${message}`,
 				}));
 			}
-			await sleep(PREVIEW_DELAY_MS);
 		}
 		if (tasks.length > 0) {
 			store.set(LAST_UPDATED, Date.now());

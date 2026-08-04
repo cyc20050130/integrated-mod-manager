@@ -1,11 +1,11 @@
 {
-	"version": "3.2.20",
-	"notes": "{\"major\":[],\"minor\":[\"Added full Neverness to Everness Mod discovery and search through the scoped GameBanana provider.\",\"Added verified ZIP downloads, previews, updates, enable/disable, rename, delete, and crash-safe WAL recovery for NTE libraries.\"],\"patch\":[\"Fixed the Windows startup crash caused by an uninitialized rustls crypto provider.\",\"Replaced broad renderer file watching with a native persisted-config d3dx_user.ini watcher.\",\"Hardened archive extraction, remote media, filesystem capabilities, staging cleanup, and path identity checks.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.20 adds complete NTE Mod support and fixes the Windows startup crash.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.20\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
-	"pub_date": "2026-07-29T23:25:00Z",
+	"version": "3.2.21",
+	"notes": "{\"major\":[],\"minor\":[\"Hardened GameBanana-only Mod downloads with verified Mod/File identity, size, and MD5 metadata.\",\"Moved local preview resolution behind trusted persisted game roots and kept Rocket-compatible preview.jpg publication.\"],\"patch\":[\"Fixed legacy queue items reaching the network without integrity metadata.\",\"Removed Hakush Mod media fallbacks and arbitrary HTTPS download redirects.\",\"Fixed preview cache isolation across game switches and preserved bounded visible-item batching.\"],\"notice\":{\"heading\":\"Notice\",\"subheading\":\"IMM 3.2.21 hardens GameBanana downloads and local Mod previews.\",\"ignoreable\":2,\"timer\":10,\"ver\":\"3.2.21\",\"id\":0},\"cn\":{},\"ru\":{},\"jp\":{},\"kr\":{}}",
+	"pub_date": "2026-08-04T12:44:35Z",
 	"platforms": {
 		"windows-x86_64": {
-			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHJ0WTk5K1JpNEYzelJKTnhmZW14WG5xTFpQVGE0eExQN2o0TE5PWStEbFNDZWtyS0RuN080MFFaTER2OWdiUTdxQ1pidVFtQVYwdXd1emlNZFJIbEFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1MzY3NDczCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMjBfeDY0LXNldHVwLmV4ZQpvMmhWZnRzaWRoQ3RxVDVjSEN3U2N3aHBTOVZKTUdScFVmSlFueGI1SlQvTGpTMURlN2pzSWxFcHoxam83ZzRBa2ZMcG5KZ0FHbW1KL2dHdk82bS9CUT09Cg==",
-			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.20/Integrated.Mod.Manager.IMM._3.2.20_x64-setup.exe"
+			"signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTY1lHOWNjaTFQOHRZWm9RUHdJUjNna1EvQUE3Y3NWWENyS0tFajFGRFVKeitJSERORzJYbjd6NHpQSlFqWGlIOVYxYVE3aDljTGRIdEYyQkVSS01qYXVtTm5oV1ZxMWd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1ODQ3NDczCWZpbGU6SW50ZWdyYXRlZCBNb2QgTWFuYWdlciAoSU1NKV8zLjIuMjFfeDY0LXNldHVwLmV4ZQpqVCtwNzdNTXpEeDAxNGtwRjVoM3I4MXpoa0dGaDZDODBwRjV2ajJPOGs4cjlCL283VDRlVWVlbXA5Wm9QZXE3N3F1alBCaVkzNkhWZGt2bk5wa0RDdz09Cg==",
+			"url": "https://github.com/cyc20050130/integrated-mod-manager/releases/download/v3.2.21/Integrated.Mod.Manager.IMM._3.2.21_x64-setup.exe"
 		}
 	}
 }

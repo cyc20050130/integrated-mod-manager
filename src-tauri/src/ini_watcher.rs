@@ -1,10 +1,10 @@
+use log as tracing;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_tracing::tracing;
 
 const INI_STATE_EVENT: &str = "ini-state-changed";
 const SUPPORTED_GAMES: &[&str] = &["WW", "ZZ", "GI", "SR", "EF"];

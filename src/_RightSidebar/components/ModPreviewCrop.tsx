@@ -8,17 +8,22 @@ import { getImageUrl, handleImageError } from "@/utils/utils";
 import { DATA, LAST_UPDATED, MOD_LIST } from "@/utils/vars";
 import { useAtom, useSetAtom } from "jotai";
 import { RefreshCcwIcon, SaveIcon, Undo2Icon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-function ModPreviewCrop({ item, setDialogType }: { item: Mod; setDialogType: (type: string) => void }) {
+import { useState } from "react";
+
+type ModPreviewCropProps = { item: Mod; setDialogType: (type: string) => void };
+
+function ModPreviewCrop({ item, setDialogType }: ModPreviewCropProps) {
+	const cropKey = `${item.path}:${item.crop?.scale || 1}:${item.crop?.x || 0}:${item.crop?.y || 0}:${item.crop?.vertical ? 1 : 0}`;
+	return <ModPreviewCropEditor key={cropKey} item={item} setDialogType={setDialogType} />;
+}
+
+function ModPreviewCropEditor({ item, setDialogType }: ModPreviewCropProps) {
 	const setData = useSetAtom(DATA);
 	const setModList = useSetAtom(MOD_LIST);
 	const [lastUpdated, setLastUpdated] = useAtom(LAST_UPDATED);
 	const previewUrl = `${getImageUrl(item?.path)}?${lastUpdated}`;
 	const initialScale = item?.crop?.scale || 1;
-	const initialOffset = useMemo(
-		() => ({ x: (item?.crop?.x || 0) * 1.5, y: (item?.crop?.y || 0) * 1.5 }),
-		[item?.crop?.x, item?.crop?.y]
-	);
+	const initialOffset = { x: (item?.crop?.x || 0) * 1.5, y: (item?.crop?.y || 0) * 1.5 };
 	const initialAspect = item?.crop?.vertical ? 0.99 : 1;
 	const [scale, setScale] = useState(initialScale);
 	const [mouseDown, setMouseDown] = useState(false);
@@ -27,14 +32,6 @@ function ModPreviewCrop({ item, setDialogType }: { item: Mod; setDialogType: (ty
 	const [aspect, setAspect] = useState(initialAspect);
 	const [disabled, setDisabled] = useState(false);
 	const hasChanges = scale !== initialScale || offset.x !== initialOffset.x || offset.y !== initialOffset.y;
-
-	useEffect(() => {
-		setScale(initialScale);
-		setOffset(initialOffset);
-		setAspect(initialAspect);
-		setMouseDown(false);
-		setDisabled(false);
-	}, [initialAspect, initialOffset, initialScale, item?.path]);
 
 	function newMouseEvent(e: React.MouseEvent<HTMLDivElement, MouseEvent>, scale: number) {
 		if (disabled) return;

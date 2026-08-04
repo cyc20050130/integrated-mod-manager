@@ -8,22 +8,20 @@ import {
 	INSTALLED_ITEMS,
 	MOD_LIST,
 	ONLINE,
-	ONLINE_DATA,
 	ONLINE_SELECTED,
 	RIGHT_SLIDEOVER_OPEN,
 	SETTINGS,
 	store,
 } from "./vars";
 import { useAtom, useAtomValue } from "jotai";
-import { apiClient } from "./api";
+import { getGameBananaProvider } from "./api";
 import { join } from "./hotreload";
 import { addToast } from "@/_Toaster/ToastProvider";
 import TEXT from "@/textData.json";
 import { error, info } from "@/lib/logger";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 import { getConfig } from "./filesys";
 import { computeModUpdateStatus } from "./modUpdateStatus";
-import { save } from "@tauri-apps/plugin-dialog";
 import type { Games, GlobalSettings, InstalledItem, ModDataObj, OnlineBlacklistEntry, Settings } from "./types";
 export { getImageUrl } from "./imagePreview";
 
@@ -39,13 +37,8 @@ interface SanitizeFileNameOptions {
 	defaultName?: string;
 	maxLength?: number;
 }
-interface BananaUpdateRecord {
-	_sText?: string;
-	_sVersion?: string;
-	_tsDateModified?: number;
-	_tsDateAdded?: number;
-	_aChangeLog?: unknown[];
-	_sName?: string;
+interface BananaModDetail extends Record<string, unknown> {
+	_idRow?: number | string;
 }
 interface BananaFileRecord {
 	_tsDateModified?: number;
@@ -139,7 +132,14 @@ export function handleImageError(event: React.SyntheticEvent<HTMLImageElement, E
 		target.style.opacity = "0";
 		target.classList.remove("fadein");
 	}
-	target.src = `/${store.get(GAME) || "WW"}mm.png`;
+	const game = store.get(GAME) || "WW";
+	const fallback = game === "NTE" ? "/NTELogo.png" : `/${game}mm.png`;
+	if (target.src.endsWith(fallback)) {
+		target.onerror = null;
+		target.src = "/who.jpg";
+		return;
+	}
+	target.src = fallback;
 }
 export function preventContextMenu(event: React.MouseEvent): void {
 	event.preventDefault();
@@ -195,64 +195,26 @@ export function getTimeDifference(startTimestamp: number, endTimestamp: number) 
 }
 export async function fetchModNoUpdates(selected: string, signal?: AbortSignal) {
 	let modData = {};
+	const game = store.get(GAME);
+	if (!game) throw new Error("GameBanana provider is unavailable");
+	const provider = getGameBananaProvider(game);
 	// console.log("Fetching mod data for", selected);
-	await apiClient.mod(selected, signal).then((data) => {
+	await provider.mod<BananaModDetail>(selected, signal).then((data) => {
 		// console.log("Fetched mod data for", selected, data);
 		if (data._idRow != selected.split("/").slice(-1)[0]) return;
 		modData = data;
 	});
 	return modData;
 }
-export async function fetchMod(selected: string, controller?: AbortController) {
-	let allData = {};
-	//info(selected);
-	await apiClient.updates(selected, controller?.signal).then(async (data) => {
-		await apiClient.mod(selected, controller?.signal).then((data2) => {
-			const updates =
-				data._aRecords?.map((record: BananaUpdateRecord) => ({
-					_sText: record._sText,
-					_sVersion: record._sVersion,
-					_sDate: record._tsDateModified || record._tsDateAdded,
-					_aChangeLog: record._aChangeLog,
-					_sName: record._sName,
-				})) || [];
-			// console.log(data);
-			data2._aUpdates = updates;
-			if (data._aRecords && data._aRecords.length > 0) {
-				data2._eUpdate = true;
-				data2._sUpdateText = data._aRecords[0]._sText;
-				data2._sUpdateVersion = data._aRecords[0]._sVersion;
-				data2._sUpdateDate = data._aRecords[0]._tsDateModified || data._aRecords[0]._tsDateAdded;
-				data2._aUpdateChangeLog = data._aRecords[0]._aChangeLog;
-				data2._sUpdateName = data._aRecords[0]._sName;
-			}
-			if (data2._idRow != selected.split("/").slice(-1)[0]) return;
-			allData = data2;
-			store.set(ONLINE_DATA, (prev) => {
-				return {
-					...prev,
-					[selected]: data2,
-				};
-			});
-		});
-	});
-	return allData;
-}
 export async function exportConfig(settings: Settings, textData: TextData) {
 	try {
 		const { gameConfig } = getConfig(settings);
-		const filePath = await save({
-			title: textData._LeftSideBar._components._Settings._ImportExport.ExportPop,
-			defaultPath: `config${settings.global.game}.json`,
-			filters: [
-				{
-					name: "JSON files",
-					extensions: ["json"],
-				},
-			],
+		const exported = await invoke<boolean>("export_json_document", {
+			kind: "gameConfig",
+			game: settings.global.game,
+			contents: JSON.stringify(gameConfig, null, 2),
 		});
-		if (filePath) {
-			await writeTextFile(filePath, JSON.stringify(gameConfig, null, 2));
+		if (exported) {
 			addToast({ type: "success", message: textData._Toasts.ConfigExported });
 		}
 	} catch {

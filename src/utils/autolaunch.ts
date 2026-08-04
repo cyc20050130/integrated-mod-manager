@@ -2,24 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { GAME, store } from "./vars";
 import { GAME_ID_MAP } from "./consts";
 
-export async function executeWithArgs(exePath: string, args: string[]): Promise<string> {
-	return await invoke<string>("execute_with_args", {
-		exePath: exePath,
-		args: args,
-	});
-}
-export async function executeXXMI(exePath: string, useNoGui: boolean = true, useXxmi: boolean = true): Promise<string> {
-	const args: string[] = [];
-
-	if (useNoGui) {
-		args.push("--nogui");
-	}
-
-	if (useXxmi) {
-		args.push("--xxmi", store.get(GAME) + "MI");
-	}
-
-	return executeWithArgs(exePath, args);
+export async function executeXXMI(): Promise<string> {
+	return invoke<string>("launch_configured_xxmi", { game: store.get(GAME) });
 }
 
 export async function isGameProcessRunning(game = "WW"): Promise<boolean> {
